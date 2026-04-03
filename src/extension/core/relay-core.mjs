@@ -23,19 +23,37 @@ export function buildRelayEnvelope({
   sourceRole,
   round,
   message,
-  continueMarker = DEFAULT_SETTINGS.continueMarker
+  continueMarker = DEFAULT_SETTINGS.continueMarker,
+  bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
 }) {
   return [
-    continueMarker,
+    "[BRIDGE_CONTEXT]",
     `source: ${sourceRole}`,
     `round: ${round}`,
     "",
-    normalizeAssistantText(message)
+    normalizeAssistantText(message),
+    "",
+    "[BRIDGE_INSTRUCTION]",
+    "Continue the discussion from the bridged content above.",
+    "End your reply with exactly one final line:",
+    `${bridgeStatePrefix} ${continueMarker}`,
+    "or",
+    `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
   ].join("\n");
 }
 
-export function containsStopMarker(text, stopMarker = DEFAULT_SETTINGS.stopMarker) {
-  return normalizeAssistantText(text).includes(stopMarker);
+export function parseBridgeDirective(text, prefix = DEFAULT_SETTINGS.bridgeStatePrefix) {
+  const normalized = normalizeAssistantText(text);
+  const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = lines[index].match(/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i);
+    if (match) {
+      return match[1].toUpperCase();
+    }
+  }
+
+  return null;
 }
 
 export function evaluatePreSendGuard({
@@ -54,7 +72,7 @@ export function evaluatePreSendGuard({
     };
   }
 
-  if (containsStopMarker(normalized, stopMarker)) {
+  if (parseBridgeDirective(normalized) === stopMarker) {
     return {
       shouldStop: true,
       reason: "stop_marker",
@@ -83,7 +101,7 @@ export function evaluatePostHopGuard({
   maxRounds,
   stopMarker = DEFAULT_SETTINGS.stopMarker
 }) {
-  if (containsStopMarker(assistantText, stopMarker)) {
+  if (parseBridgeDirective(assistantText) === stopMarker) {
     return {
       shouldStop: true,
       reason: "stop_marker"

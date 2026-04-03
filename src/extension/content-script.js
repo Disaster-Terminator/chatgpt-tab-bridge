@@ -1,11 +1,20 @@
 (function main() {
   const contentHelpers = globalThis.ChatGptBridgeContent;
   const MESSAGE_TYPES = Object.freeze({
+    GET_OVERLAY_MODEL: "GET_OVERLAY_MODEL",
     GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
     SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
     SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
     SET_BINDING: "SET_BINDING",
     CLEAR_BINDING: "CLEAR_BINDING",
+    SET_STARTER: "SET_STARTER",
+    START_SESSION: "START_SESSION",
+    PAUSE_SESSION: "PAUSE_SESSION",
+    RESUME_SESSION: "RESUME_SESSION",
+    STOP_SESSION: "STOP_SESSION",
+    CLEAR_TERMINAL: "CLEAR_TERMINAL",
+    SET_OVERLAY_COLLAPSED: "SET_OVERLAY_COLLAPSED",
+    SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
     REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
   });
 
@@ -16,7 +25,15 @@
     round: 0,
     nextHop: "A -> B",
     assignedRole: null,
-    requiresTerminalClear: false
+    requiresTerminalClear: false,
+    starter: "A",
+    controls: {},
+    display: {},
+    overlaySettings: {
+      enabled: true,
+      collapsed: false,
+      position: null
+    }
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -57,6 +74,7 @@
 
   bindOverlayEvents();
   renderOverlay();
+  void refreshOverlayModel();
 
   function connectKeepAlivePort() {
     const port = chrome.runtime.connect({
@@ -86,14 +104,14 @@
 
   function bindOverlayEvents() {
     overlay.querySelector("[data-bind-role='A']").addEventListener("click", () => {
-      chrome.runtime.sendMessage({
+      void dispatchOverlayAction({
         type: MESSAGE_TYPES.SET_BINDING,
         role: "A"
       });
     });
 
     overlay.querySelector("[data-bind-role='B']").addEventListener("click", () => {
-      chrome.runtime.sendMessage({
+      void dispatchOverlayAction({
         type: MESSAGE_TYPES.SET_BINDING,
         role: "B"
       });
@@ -104,17 +122,78 @@
         return;
       }
 
-      chrome.runtime.sendMessage({
+      void dispatchOverlayAction({
         type: MESSAGE_TYPES.CLEAR_BINDING,
         role: overlaySnapshot.assignedRole
       });
     });
 
     overlay.querySelector("[data-action='open-popup']").addEventListener("click", () => {
-      chrome.runtime.sendMessage({
+      void dispatchOverlayAction({
         type: MESSAGE_TYPES.REQUEST_OPEN_POPUP
       });
     });
+
+    overlay.querySelector("[data-action='toggle-collapse']").addEventListener("click", () => {
+      void dispatchOverlayAction({
+        type: MESSAGE_TYPES.SET_OVERLAY_COLLAPSED,
+        collapsed: !overlaySnapshot.overlaySettings.collapsed
+      });
+    });
+
+    overlay.querySelector("[data-action='start']").addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.START_SESSION });
+    });
+    overlay.querySelector("[data-action='pause']").addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.PAUSE_SESSION });
+    });
+    overlay.querySelector("[data-action='resume']").addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.RESUME_SESSION });
+    });
+    overlay.querySelector("[data-action='stop']").addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.STOP_SESSION });
+    });
+    overlay.querySelector("[data-action='clear-terminal']").addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.CLEAR_TERMINAL });
+    });
+
+    overlay.querySelector("[data-role='starter']").addEventListener("change", (event) => {
+      void dispatchOverlayAction({
+        type: MESSAGE_TYPES.SET_STARTER,
+        role: event.target.value
+      });
+    });
+
+    initOverlayDrag();
+  }
+
+  async function dispatchOverlayAction(message) {
+    try {
+      await chrome.runtime.sendMessage(message);
+    } finally {
+      await refreshOverlayModel();
+    }
+  }
+
+  async function refreshOverlayModel() {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.GET_OVERLAY_MODEL
+      });
+
+      const model = response?.ok ? response.result : response;
+      if (!model) {
+        return;
+      }
+
+      overlaySnapshot = {
+        ...overlaySnapshot,
+        ...model
+      };
+      renderOverlay();
+    } catch {
+      // Keep the last visible state if background is temporarily unavailable.
+    }
   }
 
   function createOverlay() {
@@ -122,40 +201,157 @@
     node.className = "chatgpt-bridge-overlay";
     node.dataset.extensionId = chrome.runtime.id;
     node.innerHTML = `
-      <div class="chatgpt-bridge-overlay__title">Bridge</div>
-      <div class="chatgpt-bridge-overlay__meta" data-slot="role">Unbound</div>
-      <div class="chatgpt-bridge-overlay__meta" data-slot="phase">idle</div>
-      <div class="chatgpt-bridge-overlay__meta" data-slot="round">Round 0</div>
-      <div class="chatgpt-bridge-overlay__meta" data-slot="next-hop">A -> B</div>
+      <div class="chatgpt-bridge-overlay__header" data-drag-handle="true">
+        <div class="chatgpt-bridge-overlay__title">Bridge</div>
+        <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse">−</button>
+      </div>
+      <div class="chatgpt-bridge-overlay__body">
+      <div class="chatgpt-bridge-overlay__hero">
+        <div class="chatgpt-bridge-overlay__role" data-slot="role">Unbound</div>
+        <div class="chatgpt-bridge-overlay__phase" data-slot="phase">idle</div>
+      </div>
+      <div class="chatgpt-bridge-overlay__stats">
+        <div class="chatgpt-bridge-overlay__stat">
+          <span>Round</span>
+          <strong data-slot="round">0</strong>
+        </div>
+        <div class="chatgpt-bridge-overlay__stat">
+          <span>Next</span>
+          <strong data-slot="next-hop">A -> B</strong>
+        </div>
+      </div>
+      <div class="chatgpt-bridge-overlay__debug">
+        <div class="chatgpt-bridge-overlay__meta" data-slot="step">Step: idle</div>
+        <div class="chatgpt-bridge-overlay__meta" data-slot="issue">Issue: None</div>
+      </div>
+      <label class="chatgpt-bridge-overlay__label">Starter
+        <select data-role="starter">
+          <option value="A">A starts</option>
+          <option value="B">B starts</option>
+        </select>
+      </label>
       <div class="chatgpt-bridge-overlay__actions">
         <button type="button" data-bind-role="A">Bind A</button>
         <button type="button" data-bind-role="B">Bind B</button>
         <button type="button" data-action="unbind">Unbind</button>
       </div>
+      <div class="chatgpt-bridge-overlay__actions">
+        <button type="button" data-action="start">Start</button>
+        <button type="button" data-action="pause">Pause</button>
+        <button type="button" data-action="resume">Resume</button>
+      </div>
+      <div class="chatgpt-bridge-overlay__actions">
+        <button type="button" data-action="stop">Stop</button>
+        <button type="button" data-action="clear-terminal">Clear</button>
+      </div>
       <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">Open popup</button>
+      </div>
     `;
     document.documentElement.appendChild(node);
     return node;
   }
 
   function renderOverlay() {
+    const { controls, display, overlaySettings } = overlaySnapshot;
     const canChangeBindings =
       overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
 
     overlay.querySelector("[data-slot='role']").textContent = overlaySnapshot.assignedRole
       ? `Bound as ${overlaySnapshot.assignedRole}`
       : "Unbound";
-    overlay.querySelector("[data-slot='phase']").textContent = `State: ${overlaySnapshot.phase}`;
-    overlay.querySelector("[data-slot='round']").textContent = `Round ${overlaySnapshot.round}`;
+    overlay.querySelector("[data-slot='phase']").textContent = overlaySnapshot.phase;
+    overlay.querySelector("[data-slot='round']").textContent = String(overlaySnapshot.round);
     overlay.querySelector("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
+    overlay.querySelector("[data-slot='step']").textContent = `Step: ${display?.currentStep || "idle"}`;
+    overlay.querySelector("[data-slot='issue']").textContent = `Issue: ${display?.lastIssue || "None"}`;
+    overlay.querySelector('[data-role="starter"]').value = overlaySnapshot.starter;
     overlay.classList.toggle(
       "chatgpt-bridge-overlay--terminal",
       Boolean(overlaySnapshot.requiresTerminalClear)
     );
+    overlay.classList.toggle(
+      "chatgpt-bridge-overlay--collapsed",
+      Boolean(overlaySettings?.collapsed)
+    );
+    overlay.hidden = overlaySettings?.enabled === false;
+    applyOverlayPosition(overlaySettings?.position ?? null);
     overlay.querySelector("[data-bind-role='A']").disabled = !canChangeBindings;
     overlay.querySelector("[data-bind-role='B']").disabled = !canChangeBindings;
     overlay.querySelector("[data-action='unbind']").disabled =
       !overlaySnapshot.assignedRole || !canChangeBindings;
+    overlay.querySelector("[data-action='start']").disabled = !controls?.canStart;
+    overlay.querySelector("[data-action='pause']").disabled = !controls?.canPause;
+    overlay.querySelector("[data-action='resume']").disabled = !controls?.canResume;
+    overlay.querySelector("[data-action='stop']").disabled = !controls?.canStop;
+    overlay.querySelector("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
+    overlay.querySelector(".chatgpt-bridge-overlay__collapse").textContent =
+      overlaySettings?.collapsed ? "+" : "−";
+  }
+
+  function applyOverlayPosition(position) {
+    if (!position) {
+      overlay.style.left = "";
+      overlay.style.top = "";
+      overlay.style.right = "16px";
+      overlay.style.bottom = "16px";
+      return;
+    }
+
+    overlay.style.right = "auto";
+    overlay.style.bottom = "auto";
+    overlay.style.left = `${position.x}px`;
+    overlay.style.top = `${position.y}px`;
+  }
+
+  function initOverlayDrag() {
+    const handle = overlay.querySelector('[data-drag-handle="true"]');
+    let dragState = null;
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button")) {
+        return;
+      }
+
+      const rect = overlay.getBoundingClientRect();
+      dragState = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top
+      };
+      handle.setPointerCapture(event.pointerId);
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!dragState) {
+        return;
+      }
+
+      const x = Math.max(0, Math.min(window.innerWidth - overlay.offsetWidth, event.clientX - dragState.offsetX));
+      const y = Math.max(0, Math.min(window.innerHeight - overlay.offsetHeight, event.clientY - dragState.offsetY));
+      applyOverlayPosition({ x, y });
+    });
+
+    const finishDrag = async (event) => {
+      if (!dragState) {
+        return;
+      }
+
+      const rect = overlay.getBoundingClientRect();
+      dragState = null;
+      try {
+        handle.releasePointerCapture(event.pointerId);
+      } catch {}
+
+      chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.SET_OVERLAY_POSITION,
+        position: {
+          x: rect.left,
+          y: rect.top
+        }
+      });
+    };
+
+    handle.addEventListener("pointerup", finishDrag);
+    handle.addEventListener("pointercancel", finishDrag);
   }
 
   function readAssistantSnapshot() {

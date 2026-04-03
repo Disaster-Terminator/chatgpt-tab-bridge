@@ -12,3 +12,15 @@ export function deriveControls(state) {
     canSetOverride: canWriteOverride(state)
   };
 }
+
+export function buildDisplay(state) {
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  return {
+    nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
+    currentStep: state.runtimeActivity?.step ?? "idle",
+    lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
+    transport: state.runtimeActivity?.transport ?? null,
+    selector: state.runtimeActivity?.selector ?? null,
+    lastIssue: state.lastError || state.lastStopReason || "None"
+  };
+}

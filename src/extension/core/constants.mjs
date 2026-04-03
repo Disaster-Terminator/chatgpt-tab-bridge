@@ -1,4 +1,5 @@
 export const APP_STATE_KEY = "chatgptBridgeRuntimeState";
+export const OVERLAY_SETTINGS_KEY = "chatgptBridgeOverlaySettings";
 
 export const ROLE_A = "A";
 export const ROLE_B = "B";
@@ -33,6 +34,7 @@ export const ERROR_REASONS = Object.freeze({
 export const MESSAGE_TYPES = Object.freeze({
   GET_RUNTIME_STATE: "GET_RUNTIME_STATE",
   GET_POPUP_MODEL: "GET_POPUP_MODEL",
+  GET_OVERLAY_MODEL: "GET_OVERLAY_MODEL",
   SET_BINDING: "SET_BINDING",
   CLEAR_BINDING: "CLEAR_BINDING",
   SET_STARTER: "SET_STARTER",
@@ -42,6 +44,10 @@ export const MESSAGE_TYPES = Object.freeze({
   STOP_SESSION: "STOP_SESSION",
   CLEAR_TERMINAL: "CLEAR_TERMINAL",
   SET_NEXT_HOP_OVERRIDE: "SET_NEXT_HOP_OVERRIDE",
+  SET_OVERLAY_ENABLED: "SET_OVERLAY_ENABLED",
+  SET_OVERLAY_COLLAPSED: "SET_OVERLAY_COLLAPSED",
+  SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
+  RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
@@ -53,8 +59,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
   hopTimeoutMs: 60000,
   pollIntervalMs: 1500,
   settleSamplesRequired: 2,
-  continueMarker: "[CONTINUE]",
-  stopMarker: "[FREEZE]"
+  bridgeStatePrefix: "[BRIDGE_STATE]",
+  continueMarker: "CONTINUE",
+  stopMarker: "FREEZE"
+});
+
+export const DEFAULT_OVERLAY_SETTINGS = Object.freeze({
+  enabled: true,
+  collapsed: false,
+  position: null
 });
 
 export function otherRole(role) {

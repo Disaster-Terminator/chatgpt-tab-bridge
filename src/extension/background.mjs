@@ -6,8 +6,10 @@ import { parseChatGptThreadUrl } from "./core/chatgpt-url.mjs";
 import {
   APP_STATE_KEY,
   DEFAULT_SETTINGS,
+  DEFAULT_OVERLAY_SETTINGS,
   ERROR_REASONS,
   MESSAGE_TYPES,
+  OVERLAY_SETTINGS_KEY,
   PHASES,
   ROLE_A,
   ROLES,
@@ -27,17 +29,23 @@ import {
   hashText,
   normalizeAssistantText
 } from "./core/relay-core.mjs";
-import { deriveControls } from "./core/popup-model.mjs";
+import { buildDisplay, deriveControls } from "./core/popup-model.mjs";
+import {
+  mergeOverlaySettings,
+  normalizeOverlaySettings
+} from "./core/overlay-settings.mjs";
 
 let activeLoopToken = 0;
 const keepAlivePorts = new Set();
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeState();
+  await initializeOverlaySettings();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await initializeState();
+  await initializeOverlaySettings();
 });
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -104,6 +112,9 @@ async function handleMessage(message, sender) {
     case MESSAGE_TYPES.GET_POPUP_MODEL:
       return getPopupModel(message.activeTabId ?? null);
 
+    case MESSAGE_TYPES.GET_OVERLAY_MODEL:
+      return getOverlayModel(sender.tab?.id ?? null);
+
     case MESSAGE_TYPES.SET_BINDING:
       return bindTabToRole(message.role, message.tabId ?? sender.tab?.id);
 
@@ -115,6 +126,22 @@ async function handleMessage(message, sender) {
 
     case MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE:
       return updateState({ type: "set_next_hop_override", role: message.role });
+
+    case MESSAGE_TYPES.SET_OVERLAY_ENABLED:
+      return updateOverlaySettings({ enabled: Boolean(message.enabled) });
+
+    case MESSAGE_TYPES.SET_OVERLAY_COLLAPSED:
+      return updateOverlaySettings({ collapsed: Boolean(message.collapsed) });
+
+    case MESSAGE_TYPES.SET_OVERLAY_POSITION:
+      return updateOverlaySettings({
+        position: message.position ?? null
+      });
+
+    case MESSAGE_TYPES.RESET_OVERLAY_POSITION:
+      return updateOverlaySettings({
+        position: null
+      });
 
     case MESSAGE_TYPES.START_SESSION:
       return startSession();
@@ -151,6 +178,15 @@ async function initializeState() {
   }
 }
 
+async function initializeOverlaySettings() {
+  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
+  if (!payload[OVERLAY_SETTINGS_KEY]) {
+    await chrome.storage.local.set({
+      [OVERLAY_SETTINGS_KEY]: DEFAULT_OVERLAY_SETTINGS
+    });
+  }
+}
+
 async function getState() {
   await initializeState();
   const payload = await chrome.storage.session.get(APP_STATE_KEY);
@@ -160,6 +196,26 @@ async function getState() {
     ...state.settings
   };
   return state;
+}
+
+async function getOverlaySettings() {
+  await initializeOverlaySettings();
+  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
+  return normalizeOverlaySettings(payload[OVERLAY_SETTINGS_KEY] ?? DEFAULT_OVERLAY_SETTINGS);
+}
+
+async function updateOverlaySettings(patch) {
+  const currentSettings = await getOverlaySettings();
+  const nextSettings = mergeOverlaySettings(currentSettings, patch);
+  await chrome.storage.local.set({
+    [OVERLAY_SETTINGS_KEY]: nextSettings
+  });
+  const state = await getState();
+  await broadcastOverlayState(state, null, true, nextSettings);
+  return {
+    state,
+    overlaySettings: nextSettings
+  };
 }
 
 async function persistState(nextState, previousState = null) {
@@ -542,6 +598,7 @@ async function waitForSettledReply({ tabId, baselineHash, settings, token }) {
 
 async function getPopupModel(activeTabId) {
   const state = await getState();
+  const overlaySettings = await getOverlaySettings();
   const currentTab = activeTabId ? await safeGetTab(activeTabId) : null;
   const currentTabInfo = currentTab
     ? {
@@ -555,15 +612,28 @@ async function getPopupModel(activeTabId) {
 
   return {
     state,
+    overlaySettings,
     currentTab: currentTabInfo,
     controls: deriveControls(state),
-    display: {
-      nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
-      currentStep: state.runtimeActivity?.step ?? "idle",
-      lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
-      transport: state.runtimeActivity?.transport ?? null,
-      selector: state.runtimeActivity?.selector ?? null
-    }
+    display: buildDisplay(state)
+  };
+}
+
+async function getOverlayModel(tabId) {
+  const state = await getState();
+  const overlaySettings = await getOverlaySettings();
+  const assignedRole = findRoleByTabId(state, tabId);
+
+  return {
+    phase: state.phase,
+    round: state.round,
+    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+    requiresTerminalClear: state.requiresTerminalClear,
+    assignedRole,
+    starter: state.starter,
+    controls: deriveControls(state),
+    display: buildDisplay(state),
+    overlaySettings
   };
 }
 
@@ -575,10 +645,28 @@ async function safeGetTab(tabId) {
   }
 }
 
-async function broadcastOverlayState(state, previousState = null) {
-  const tabIds = collectOverlaySyncTabIds(previousState, state);
+async function broadcastOverlayState(
+  state,
+  previousState = null,
+  broadcastAllChatGptTabs = false,
+  overlaySettings = null
+) {
+  const nextOverlaySettings = overlaySettings ?? (await getOverlaySettings());
+  const tabIds = new Set(collectOverlaySyncTabIds(previousState, state));
+
+  if (broadcastAllChatGptTabs) {
+    const tabs = await chrome.tabs.query({
+      url: ["https://chatgpt.com/*"]
+    });
+    for (const tab of tabs) {
+      if (tab.id) {
+        tabIds.add(tab.id);
+      }
+    }
+  }
+
   await Promise.all(
-    tabIds.map(async (tabId) => {
+    Array.from(tabIds).map(async (tabId) => {
       try {
         await chrome.tabs.sendMessage(tabId, {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
@@ -587,7 +675,11 @@ async function broadcastOverlayState(state, previousState = null) {
             round: state.round,
             nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
             requiresTerminalClear: state.requiresTerminalClear,
-            assignedRole: findRoleByTabId(state, tabId)
+            assignedRole: findRoleByTabId(state, tabId),
+            starter: state.starter,
+            controls: deriveControls(state),
+            display: buildDisplay(state),
+            overlaySettings: nextOverlaySettings
           }
         });
       } catch {

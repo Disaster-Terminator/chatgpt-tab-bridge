@@ -7,20 +7,29 @@ import {
   evaluatePreSendGuard,
   formatNextHop,
   guardReasonToStopReason,
-  hashText
+  hashText,
+  parseBridgeDirective
 } from "../src/extension/core/relay-core.mjs";
 
-test("buildRelayEnvelope includes continue marker, source, round, and payload", () => {
+test("buildRelayEnvelope includes bridge context, payload, and machine-readable tail instructions", () => {
   const envelope = buildRelayEnvelope({
     sourceRole: "A",
     round: 3,
     message: "hello"
   });
 
-  assert.match(envelope, /^\[CONTINUE\]/);
+  assert.match(envelope, /^\[BRIDGE_CONTEXT\]/);
   assert.match(envelope, /source: A/);
   assert.match(envelope, /round: 3/);
   assert.match(envelope, /hello/);
+  assert.match(envelope, /\[BRIDGE_STATE\] CONTINUE/);
+  assert.match(envelope, /\[BRIDGE_STATE\] FREEZE/);
+});
+
+test("parseBridgeDirective reads the final machine-readable state line", () => {
+  assert.equal(parseBridgeDirective("hello\n[BRIDGE_STATE] CONTINUE"), "CONTINUE");
+  assert.equal(parseBridgeDirective("hello\n[BRIDGE_STATE] FREEZE"), "FREEZE");
+  assert.equal(parseBridgeDirective("hello"), null);
 });
 
 test("evaluatePreSendGuard stops on duplicate output", () => {
@@ -37,7 +46,7 @@ test("evaluatePreSendGuard stops on duplicate output", () => {
 
 test("evaluatePostHopGuard stops on stop marker and max rounds", () => {
   const stopMarker = evaluatePostHopGuard({
-    assistantText: "[FREEZE]\nDone",
+    assistantText: "Done\n[BRIDGE_STATE] FREEZE",
     round: 1,
     maxRounds: 8
   });

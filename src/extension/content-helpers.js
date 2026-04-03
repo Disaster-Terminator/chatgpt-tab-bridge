@@ -146,6 +146,31 @@
       };
     }
 
+    const form = composer?.closest?.("form");
+    if (form) {
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+        return {
+          ok: true,
+          mode: "form_submit"
+        };
+      }
+
+      const submitAccepted = form.dispatchEvent?.(
+        new Event("submit", {
+          bubbles: true,
+          cancelable: true
+        })
+      );
+
+      if (submitAccepted) {
+        return {
+          ok: true,
+          mode: "form_submit"
+        };
+      }
+    }
+
     return {
       ok: false,
       mode: "button_disabled",

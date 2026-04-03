@@ -119,7 +119,16 @@ test("findBestComposer prefers visible contenteditable over hidden textarea", ()
 });
 
 test("triggerComposerSend fails explicitly when send button is unavailable", () => {
-  const composer = {};
+  const form = {
+    requestSubmit() {
+      form.called = true;
+    }
+  };
+  const composer = {
+    closest(selector) {
+      return selector === "form" ? form : null;
+    }
+  };
   const sendButton = {
     disabled: true,
     click() {
@@ -136,7 +145,7 @@ test("triggerComposerSend fails explicitly when send button is unavailable", () 
     sendButton
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.mode, "button_disabled");
-  assert.equal(result.error, "send_button_disabled");
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "form_submit");
+  assert.equal(form.called, true);
 });

@@ -23,12 +23,12 @@
 
 ### 启动
 
-- popup 是主控制面
+- 悬浮窗现在是日常主操作面
 - 当 `A` 和 `B` 都绑定完成后，状态会进入 `ready`
 - 这时 `Start` 才应该可点击
 - 点击 `Start` 后进入 `running`
 - `running` 只表示中继循环已经启动，不代表已经成功完成了一轮发送
-- 运行时可以在 popup 里看到当前步骤，例如：
+- 运行时可以在悬浮窗或 popup 里看到当前步骤，例如：
   - `reading A`
   - `sending A -> B`
   - `waiting B reply`
@@ -63,15 +63,19 @@
 
 ## 交互形态
 
-- **Popup**：完整控制面
-- **页内悬浮控件**：便利子集
+- **页内悬浮窗**：主操作面
+- **Popup**：设置、调试、完整状态与低频控制
 
-页内悬浮控件目前只负责：
+页内悬浮窗目前支持：
 
 - 绑定当前页为 `A`
 - 绑定当前页为 `B`
 - 解绑当前页
-- 显示当前页的简要状态
+- 选择 starter
+- `Start / Pause / Resume / Stop / Clear`
+- 显示 `phase / round / next hop / current step / last issue`
+- 拖动
+- 折叠
 - 打开 popup
 
 ## 是否需要前台焦点
@@ -100,8 +104,12 @@
 - 来源侧
 - round 编号
 - 原始 assistant 输出
+- 明确的机器可读尾部协议
 
-默认继续标记为 `[CONTINUE]`。
+当前协议要求模型在回复最后一行输出：
+
+- `[BRIDGE_STATE] CONTINUE`
+- 或 `[BRIDGE_STATE] FREEZE`
 
 ## 已知限制
 

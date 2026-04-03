@@ -10,6 +10,8 @@ const elements = {
   unbindCurrentButton: document.querySelector("#unbindCurrentButton"),
   bindingA: document.querySelector("#bindingA"),
   bindingB: document.querySelector("#bindingB"),
+  overlayEnabledCheckbox: document.querySelector("#overlayEnabledCheckbox"),
+  resetOverlayPositionButton: document.querySelector("#resetOverlayPositionButton"),
   starterSelect: document.querySelector("#starterSelect"),
   overrideSelect: document.querySelector("#overrideSelect"),
   startButton: document.querySelector("#startButton"),
@@ -147,6 +149,19 @@ function wireEvents() {
   elements.copyDebugButton.addEventListener("click", () => {
     void copyDebugSnapshot();
   });
+
+  elements.overlayEnabledCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_OVERLAY_ENABLED,
+      enabled: elements.overlayEnabledCheckbox.checked
+    });
+  });
+
+  elements.resetOverlayPositionButton.addEventListener("click", () => {
+    void perform({
+      type: MESSAGE_TYPES.RESET_OVERLAY_POSITION
+    });
+  });
 }
 
 async function perform(message) {
@@ -159,7 +174,7 @@ async function perform(message) {
 }
 
 function render(model) {
-  const { state, currentTab, controls, display } = model;
+  const { state, currentTab, controls, display, overlaySettings } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = state.phase;
   elements.bindingA.textContent = summarizeBinding(state.bindings.A);
@@ -172,6 +187,7 @@ function render(model) {
   elements.issueValue.textContent = state.lastError || state.lastStopReason || "None";
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
+  elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
 
   if (!currentTab) {
     elements.currentTabStatus.textContent = "No active tab available.";
