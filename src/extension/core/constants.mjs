@@ -1,0 +1,62 @@
+export const APP_STATE_KEY = "chatgptBridgeRuntimeState";
+
+export const ROLE_A = "A";
+export const ROLE_B = "B";
+export const ROLES = Object.freeze([ROLE_A, ROLE_B]);
+
+export const PHASES = Object.freeze({
+  IDLE: "idle",
+  READY: "ready",
+  RUNNING: "running",
+  PAUSED: "paused",
+  STOPPED: "stopped",
+  ERROR: "error"
+});
+
+export const STOP_REASONS = Object.freeze({
+  USER_STOP: "user_stop",
+  STOP_MARKER: "stop_marker",
+  MAX_ROUNDS: "max_rounds_reached",
+  DUPLICATE_OUTPUT: "duplicate_output",
+  HOP_TIMEOUT: "hop_timeout",
+  BINDING_INVALID: "binding_invalid"
+});
+
+export const ERROR_REASONS = Object.freeze({
+  SELECTOR_FAILURE: "selector_failure",
+  MESSAGE_SEND_FAILED: "message_send_failed",
+  UNSUPPORTED_TAB: "unsupported_tab",
+  EMPTY_ASSISTANT_REPLY: "empty_assistant_reply",
+  INTERNAL_ERROR: "internal_error"
+});
+
+export const MESSAGE_TYPES = Object.freeze({
+  GET_RUNTIME_STATE: "GET_RUNTIME_STATE",
+  GET_POPUP_MODEL: "GET_POPUP_MODEL",
+  SET_BINDING: "SET_BINDING",
+  CLEAR_BINDING: "CLEAR_BINDING",
+  SET_STARTER: "SET_STARTER",
+  START_SESSION: "START_SESSION",
+  PAUSE_SESSION: "PAUSE_SESSION",
+  RESUME_SESSION: "RESUME_SESSION",
+  STOP_SESSION: "STOP_SESSION",
+  CLEAR_TERMINAL: "CLEAR_TERMINAL",
+  SET_NEXT_HOP_OVERRIDE: "SET_NEXT_HOP_OVERRIDE",
+  GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
+  SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
+  REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
+});
+
+export const DEFAULT_SETTINGS = Object.freeze({
+  maxRounds: 8,
+  hopTimeoutMs: 60000,
+  pollIntervalMs: 1500,
+  settleSamplesRequired: 2,
+  continueMarker: "[CONTINUE]",
+  stopMarker: "[FREEZE]"
+});
+
+export function otherRole(role) {
+  return role === ROLE_A ? ROLE_B : ROLE_A;
+}

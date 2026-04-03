@@ -1,0 +1,596 @@
+import {
+  collectOverlaySyncTabIds,
+  shouldKeepBindingForUrlChange
+} from "./core/background-helpers.mjs";
+import { parseChatGptThreadUrl } from "./core/chatgpt-url.mjs";
+import {
+  APP_STATE_KEY,
+  DEFAULT_SETTINGS,
+  ERROR_REASONS,
+  MESSAGE_TYPES,
+  PHASES,
+  ROLE_A,
+  ROLES,
+  STOP_REASONS,
+  otherRole
+} from "./core/constants.mjs";
+import {
+  canWriteOverride,
+  createInitialState,
+  hasValidBindings,
+  reduceState
+} from "./core/state-machine.mjs";
+import {
+  buildRelayEnvelope,
+  evaluatePostHopGuard,
+  evaluatePreSendGuard,
+  formatNextHop,
+  guardReasonToStopReason,
+  hashText,
+  normalizeAssistantText
+} from "./core/relay-core.mjs";
+
+let activeLoopToken = 0;
+const keepAlivePorts = new Set();
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await initializeState();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await initializeState();
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "bridge-tab-keepalive") {
+    return;
+  }
+
+  keepAlivePorts.add(port);
+  port.onMessage.addListener(() => {});
+  port.onDisconnect.addListener(() => {
+    keepAlivePorts.delete(port);
+  });
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const state = await getState();
+  const role = findRoleByTabId(state, tabId);
+  if (!role) {
+    return;
+  }
+
+  await updateState({ type: "invalidate_binding", role });
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (!changeInfo.url) {
+    return;
+  }
+
+  const state = await getState();
+  const role = findRoleByTabId(state, tabId);
+  if (!role) {
+    return;
+  }
+
+  const urlInfo = parseChatGptThreadUrl(changeInfo.url);
+  if (!shouldKeepBindingForUrlChange(state.bindings[role], urlInfo)) {
+    await updateState({ type: "invalidate_binding", role });
+    return;
+  }
+
+  const nextState = structuredCloneSafe(state);
+  nextState.bindings[role] = {
+    ...nextState.bindings[role],
+    url: changeInfo.url,
+    urlInfo
+  };
+  await persistState(nextState, state);
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  void handleMessage(message, sender)
+    .then((result) => sendResponse({ ok: true, result }))
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
+
+  return true;
+});
+
+async function handleMessage(message, sender) {
+  switch (message?.type) {
+    case MESSAGE_TYPES.GET_RUNTIME_STATE:
+      return getState();
+
+    case MESSAGE_TYPES.GET_POPUP_MODEL:
+      return getPopupModel(message.activeTabId ?? null);
+
+    case MESSAGE_TYPES.SET_BINDING:
+      return bindTabToRole(message.role, message.tabId ?? sender.tab?.id);
+
+    case MESSAGE_TYPES.CLEAR_BINDING:
+      return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id));
+
+    case MESSAGE_TYPES.SET_STARTER:
+      return updateState({ type: "set_starter", role: message.role });
+
+    case MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE:
+      return updateState({ type: "set_next_hop_override", role: message.role });
+
+    case MESSAGE_TYPES.START_SESSION:
+      return startSession();
+
+    case MESSAGE_TYPES.PAUSE_SESSION:
+      return pauseSession();
+
+    case MESSAGE_TYPES.RESUME_SESSION:
+      return resumeSession();
+
+    case MESSAGE_TYPES.STOP_SESSION:
+      return stopSession();
+
+    case MESSAGE_TYPES.CLEAR_TERMINAL:
+      return clearTerminal();
+
+    case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
+      if (typeof chrome.action.openPopup === "function") {
+        await chrome.action.openPopup();
+      }
+      return getState();
+
+    default:
+      return getState();
+  }
+}
+
+async function initializeState() {
+  const current = await chrome.storage.session.get(APP_STATE_KEY);
+  if (!current[APP_STATE_KEY]) {
+    await chrome.storage.session.set({
+      [APP_STATE_KEY]: createInitialState()
+    });
+  }
+}
+
+async function getState() {
+  await initializeState();
+  const payload = await chrome.storage.session.get(APP_STATE_KEY);
+  const state = payload[APP_STATE_KEY] ?? createInitialState();
+  state.settings = {
+    ...DEFAULT_SETTINGS,
+    ...state.settings
+  };
+  return state;
+}
+
+async function persistState(nextState, previousState = null) {
+  await chrome.storage.session.set({
+    [APP_STATE_KEY]: nextState
+  });
+  await broadcastOverlayState(nextState, previousState);
+  return nextState;
+}
+
+async function updateState(event) {
+  const current = await getState();
+  const next = reduceState(current, event);
+
+  if (next.phase !== PHASES.RUNNING) {
+    activeLoopToken = 0;
+  }
+
+  return persistState(next, current);
+}
+
+async function bindTabToRole(role, tabId) {
+  if (!ROLES.includes(role) || !tabId) {
+    throw new Error("A valid role and tab id are required.");
+  }
+
+  const state = await getState();
+  if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
+    throw new Error("Bindings cannot change during an active session.");
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
+
+  if (!urlInfo.supported) {
+    throw new Error("The selected tab is not a supported ChatGPT thread.");
+  }
+
+  const otherBinding = state.bindings[otherRole(role)];
+  if (
+    otherBinding &&
+    (otherBinding.tabId === tab.id ||
+      otherBinding.urlInfo?.normalizedUrl === urlInfo.normalizedUrl)
+  ) {
+    throw new Error("A and B must be bound to different ChatGPT threads.");
+  }
+
+  return updateState({
+    type: "set_binding",
+    role,
+    binding: {
+      role,
+      tabId: tab.id,
+      title: tab.title ?? "",
+      url: tab.url ?? "",
+      urlInfo,
+      boundAt: new Date().toISOString()
+    }
+  });
+}
+
+async function clearBinding(role) {
+  if (!ROLES.includes(role)) {
+    throw new Error("A valid role is required.");
+  }
+
+  return updateState({
+    type: "set_binding",
+    role,
+    binding: null
+  });
+}
+
+async function startSession() {
+  const next = await updateState({ type: "start" });
+  if (next.phase === PHASES.RUNNING) {
+    startRelayLoop(next);
+  }
+  return next;
+}
+
+async function pauseSession() {
+  return updateState({ type: "pause" });
+}
+
+async function resumeSession() {
+  const next = await updateState({ type: "resume" });
+  if (next.phase === PHASES.RUNNING) {
+    startRelayLoop(next);
+  }
+  return next;
+}
+
+async function stopSession() {
+  return updateState({ type: "stop", reason: STOP_REASONS.USER_STOP });
+}
+
+async function clearTerminal() {
+  return updateState({ type: "clear_terminal" });
+}
+
+function startRelayLoop(state) {
+  activeLoopToken += 1;
+  const token = activeLoopToken;
+  void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS);
+}
+
+async function runRelayLoop(token, settings) {
+  while (token === activeLoopToken) {
+    const state = await getState();
+    if (state.phase !== PHASES.RUNNING) {
+      return;
+    }
+
+    const sourceRole = state.nextHopSource;
+    const targetRole = otherRole(sourceRole);
+    const sourceBinding = state.bindings[sourceRole];
+    const targetBinding = state.bindings[targetRole];
+
+    if (!sourceBinding || !targetBinding) {
+      await updateState({
+        type: "invalidate_binding",
+        role: !sourceBinding ? sourceRole : targetRole
+      });
+      return;
+    }
+
+    const sourceTab = await ensureRunnableBinding(sourceRole, sourceBinding);
+    const targetTab = await ensureRunnableBinding(targetRole, targetBinding);
+
+    if (!sourceTab || !targetTab) {
+      return;
+    }
+
+    const sourceSnapshot = await requestAssistantSnapshot(sourceBinding.tabId);
+    if (!sourceSnapshot.ok) {
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:source:${sourceRole}`
+      });
+      return;
+    }
+
+    const sourceText = normalizeAssistantText(sourceSnapshot.result.text);
+    const sourceHash = sourceSnapshot.result.hash ?? hashText(sourceText);
+    const preSend = evaluatePreSendGuard({
+      sourceText,
+      sourceHash,
+      lastForwardedSourceHash: state.lastForwardedHashes[sourceRole],
+      stopMarker: settings.stopMarker
+    });
+
+    if (preSend.isEmpty) {
+      await updateState({
+        type: "runtime_error",
+        reason: ERROR_REASONS.EMPTY_ASSISTANT_REPLY
+      });
+      return;
+    }
+
+    if (preSend.shouldStop) {
+      await updateState({
+        type: "stop_condition",
+        reason: mapGuardReasonToStop(preSend.reason)
+      });
+      return;
+    }
+
+    const baselineTarget = await requestAssistantSnapshot(targetBinding.tabId);
+    if (!baselineTarget.ok) {
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target:${targetRole}`
+      });
+      return;
+    }
+
+    const envelope = buildRelayEnvelope({
+      sourceRole,
+      round: state.round + 1,
+      message: sourceText,
+      continueMarker: settings.continueMarker
+    });
+
+    const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
+    if (!sendResult.ok) {
+      await updateState({
+        type: "runtime_error",
+        reason: ERROR_REASONS.MESSAGE_SEND_FAILED
+      });
+      return;
+    }
+
+    const settled = await waitForSettledReply({
+      tabId: targetBinding.tabId,
+      baselineHash: baselineTarget.result.hash,
+      settings,
+      token
+    });
+
+    if (token !== activeLoopToken) {
+      return;
+    }
+
+    if (settled.reason === STOP_REASONS.HOP_TIMEOUT) {
+      await updateState({
+        type: "stop_condition",
+        reason: STOP_REASONS.HOP_TIMEOUT
+      });
+      return;
+    }
+
+    if (!settled.ok) {
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target_wait:${targetRole}`
+      });
+      return;
+    }
+
+    const nextState = await updateState({
+      type: "hop_completed",
+      sourceRole,
+      targetRole,
+      sourceHash,
+      targetHash: settled.result.hash
+    });
+
+    const postHop = evaluatePostHopGuard({
+      assistantText: settled.result.text,
+      round: nextState.round,
+      maxRounds: settings.maxRounds,
+      stopMarker: settings.stopMarker
+    });
+
+    if (postHop.shouldStop) {
+      await updateState({
+        type: "stop_condition",
+        reason: mapGuardReasonToStop(postHop.reason)
+      });
+      return;
+    }
+  }
+}
+
+async function ensureRunnableBinding(role, binding) {
+  try {
+    const tab = await chrome.tabs.get(binding.tabId);
+    const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
+    if (!urlInfo.supported) {
+      await updateState({
+        type: "invalidate_binding",
+        role
+      });
+      return null;
+    }
+
+    return tab;
+  } catch {
+    await updateState({
+      type: "invalidate_binding",
+      role
+    });
+    return null;
+  }
+}
+
+async function requestAssistantSnapshot(tabId) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message
+    };
+  }
+}
+
+async function sendRelayMessage(tabId, text) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
+      text
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message
+    };
+  }
+}
+
+async function waitForSettledReply({ tabId, baselineHash, settings, token }) {
+  const startedAt = Date.now();
+  let stableHash = null;
+  let stableCount = 0;
+
+  while (Date.now() - startedAt < settings.hopTimeoutMs) {
+    if (token !== activeLoopToken) {
+      return {
+        ok: false,
+        reason: "loop_cancelled"
+      };
+    }
+
+    await sleep(settings.pollIntervalMs);
+    const snapshot = await requestAssistantSnapshot(tabId);
+    if (!snapshot.ok) {
+      return snapshot;
+    }
+
+    const currentHash = snapshot.result.hash;
+    if (!currentHash || currentHash === baselineHash) {
+      stableHash = null;
+      stableCount = 0;
+      continue;
+    }
+
+    if (stableHash === currentHash) {
+      stableCount += 1;
+    } else {
+      stableHash = currentHash;
+      stableCount = 1;
+    }
+
+    if (stableCount >= settings.settleSamplesRequired) {
+      return snapshot;
+    }
+  }
+
+  return {
+    ok: false,
+    reason: STOP_REASONS.HOP_TIMEOUT
+  };
+}
+
+async function getPopupModel(activeTabId) {
+  const state = await getState();
+  const currentTab = activeTabId ? await safeGetTab(activeTabId) : null;
+  const currentTabInfo = currentTab
+    ? {
+        id: currentTab.id,
+        title: currentTab.title ?? "",
+        url: currentTab.url ?? "",
+        urlInfo: parseChatGptThreadUrl(currentTab.url ?? ""),
+        assignedRole: findRoleByTabId(state, currentTab.id)
+      }
+    : null;
+
+  return {
+    state,
+    currentTab: currentTabInfo,
+    controls: deriveControls(state),
+    display: {
+      nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource)
+    }
+  };
+}
+
+function deriveControls(state) {
+  return {
+    canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state),
+    canPause: state.phase === PHASES.RUNNING,
+    canResume: state.phase === PHASES.PAUSED && hasValidBindings(state),
+    canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
+    canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
+    canSetStarter: state.phase === PHASES.IDLE || state.phase === PHASES.READY,
+    canSetOverride: canWriteOverride(state)
+  };
+}
+
+async function safeGetTab(tabId) {
+  try {
+    return await chrome.tabs.get(tabId);
+  } catch {
+    return null;
+  }
+}
+
+async function broadcastOverlayState(state, previousState = null) {
+  const tabIds = collectOverlaySyncTabIds(previousState, state);
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
+          snapshot: {
+            phase: state.phase,
+            round: state.round,
+            nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+            requiresTerminalClear: state.requiresTerminalClear,
+            assignedRole: findRoleByTabId(state, tabId)
+          }
+        });
+      } catch {
+        return null;
+      }
+      return null;
+    })
+  );
+}
+
+function findRoleByTabId(state, tabId) {
+  if (!tabId) {
+    return null;
+  }
+
+  if (state.bindings.A?.tabId === tabId) {
+    return ROLE_A;
+  }
+
+  if (state.bindings.B?.tabId === tabId) {
+    return "B";
+  }
+
+  return null;
+}
+
+function mapGuardReasonToStop(reason) {
+  return guardReasonToStopReason(reason);
+}
+
+function sleep(durationMs) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
+
+function structuredCloneSafe(value) {
+  return JSON.parse(JSON.stringify(value));
+}

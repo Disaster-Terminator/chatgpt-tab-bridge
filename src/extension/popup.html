@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ChatGPT Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="popup__header">
+        <div>
+          <p class="popup__eyebrow">ChatGPT Bridge</p>
+          <h1 class="popup__title">Popup control surface</h1>
+        </div>
+        <div class="popup__badge" id="phaseBadge">idle</div>
+      </header>
+
+      <section class="popup__section">
+        <h2>Current tab</h2>
+        <p id="currentTabStatus">Checking current tab…</p>
+        <div class="popup__actions">
+          <button type="button" id="bindAButton">Bind current tab as A</button>
+          <button type="button" id="bindBButton">Bind current tab as B</button>
+          <button type="button" id="unbindCurrentButton">Unbind current tab</button>
+        </div>
+      </section>
+
+      <section class="popup__section">
+        <h2>Bindings</h2>
+        <div class="popup__binding">
+          <strong>A</strong>
+          <span id="bindingA">Unbound</span>
+        </div>
+        <div class="popup__binding">
+          <strong>B</strong>
+          <span id="bindingB">Unbound</span>
+        </div>
+      </section>
+
+      <section class="popup__section">
+        <h2>Run controls</h2>
+        <label class="popup__label" for="starterSelect">Starter side</label>
+        <select id="starterSelect">
+          <option value="A">A starts</option>
+          <option value="B">B starts</option>
+        </select>
+
+        <label class="popup__label" for="overrideSelect">Paused next hop override</label>
+        <select id="overrideSelect">
+          <option value="">No override</option>
+          <option value="A">A -> B</option>
+          <option value="B">B -> A</option>
+        </select>
+
+        <div class="popup__actions popup__actions--stack">
+          <button type="button" id="startButton">Start</button>
+          <button type="button" id="pauseButton">Pause</button>
+          <button type="button" id="resumeButton">Resume</button>
+          <button type="button" id="stopButton">Stop</button>
+          <button type="button" id="clearTerminalButton">Clear terminal</button>
+        </div>
+      </section>
+
+      <section class="popup__section">
+        <h2>Runtime</h2>
+        <div class="popup__meta">
+          <span>Round</span>
+          <strong id="roundValue">0</strong>
+        </div>
+        <div class="popup__meta">
+          <span>Next hop</span>
+          <strong id="nextHopValue">A -> B</strong>
+        </div>
+        <div class="popup__meta">
+          <span>Last issue</span>
+          <strong id="issueValue">None</strong>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="popup.mjs"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "build": "node scripts/build-extension.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:smoke": "node scripts/smoke-extension-playwright.mjs"
+  },
+  "dependencies": {
+    "@openai/codex": "^0.118.0",
+    "oh-my-codex": "^0.11.12"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.1",
+    "playwright-core": "^1.59.1"
+  }
+}
