@@ -1,4 +1,5 @@
 (function main() {
+  const contentHelpers = globalThis.ChatGptBridgeContent;
   const MESSAGE_TYPES = Object.freeze({
     GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
     SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
@@ -20,12 +21,26 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT) {
-      sendResponse(readAssistantSnapshot());
+      try {
+        sendResponse(readAssistantSnapshot());
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error?.message ?? "assistant_snapshot_failed"
+        });
+      }
       return true;
     }
 
     if (message?.type === MESSAGE_TYPES.SEND_RELAY_MESSAGE) {
-      Promise.resolve(sendRelayMessage(message.text)).then(sendResponse);
+      Promise.resolve(sendRelayMessage(message.text))
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error?.message ?? "send_relay_message_failed"
+          });
+        });
       return true;
     }
 
@@ -164,34 +179,62 @@
       ok: true,
       result: {
         text,
-        hash: hashText(text)
+        hash: contentHelpers.hashText(text)
       }
     };
   }
 
   async function sendRelayMessage(text) {
-    const composer = findComposer();
-    if (!composer) {
+    try {
+      const composer = contentHelpers.findBestComposer(document);
+      if (!composer) {
+        return {
+          ok: false,
+          error: "composer_not_found"
+        };
+      }
+
+      const submissionBaseline = captureSubmissionBaseline(text);
+      const applyMode = contentHelpers.applyComposerText(composer, text);
+      const sendButton = await waitForSendButton({
+        composer,
+        root: document
+      });
+      const sendResult = contentHelpers.triggerComposerSend({
+        root: document,
+        composer,
+        sendButton
+      });
+
+      if (!sendResult.ok) {
+        return {
+          ok: false,
+          mode: sendResult.mode,
+          applyMode,
+          acknowledgement: "none",
+          error: sendResult.error ?? "send_trigger_failed"
+        };
+      }
+
+      const acknowledgement = await waitForSubmissionAcknowledgement({
+        baseline: submissionBaseline,
+        composer,
+        expectedText: text
+      });
+
+      return {
+        ok: sendResult.ok && acknowledgement.ok,
+        mode: sendResult.mode,
+        applyMode,
+        acknowledgement: acknowledgement.signal,
+        error: acknowledgement.ok ? null : acknowledgement.error
+      };
+    } catch (error) {
       return {
         ok: false,
-        error: "composer_not_found"
+        error: error?.message ?? "send_relay_message_failed"
       };
     }
-
-    fillComposer(composer, text);
-
-    const sendButton = findSendButton(composer);
-    if (sendButton) {
-      sendButton.click();
-      return {
-        ok: true
-      };
-    }
-
-    const dispatched = dispatchSendKey(composer);
-    return {
-      ok: dispatched
-    };
   }
 
   function findLatestAssistantElement() {
@@ -214,67 +257,113 @@
     return null;
   }
 
-  function findComposer() {
-    return (
-      document.querySelector("textarea") ||
-      document.querySelector('[contenteditable="true"][role="textbox"]') ||
-      document.querySelector('[contenteditable="true"][data-testid*="composer"]')
-    );
+  function captureSubmissionBaseline(expectedText) {
+    return {
+      composerText: contentHelpers.readComposerText(contentHelpers.findBestComposer(document)),
+      generating: isGenerationInProgress(),
+      userHash: readLatestUserHash(),
+      expectedHash: contentHelpers.hashText(expectedText)
+    };
   }
 
-  function fillComposer(composer, text) {
-    const normalized = normalizeText(text);
-    composer.focus();
+  async function waitForSendButton({ root, composer }) {
+    const startedAt = Date.now();
 
-    if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
-      composer.value = normalized;
-      composer.dispatchEvent(new InputEvent("input", { bubbles: true, data: normalized }));
-      return;
+    while (Date.now() - startedAt < 5000) {
+      const button = contentHelpers.findSendButton(root, composer);
+      if (button) {
+        return button;
+      }
+
+      await sleep(200);
     }
 
-    composer.textContent = normalized;
-    composer.dispatchEvent(new InputEvent("input", { bubbles: true, data: normalized }));
+    return null;
   }
 
-  function findSendButton(composer) {
-    return (
-      composer.closest("form")?.querySelector('button[type="submit"]') ||
-      document.querySelector('button[data-testid="send-button"]') ||
-      document.querySelector('button[aria-label*="Send"]')
+  async function waitForSubmissionAcknowledgement({ baseline, composer, expectedText }) {
+    const startedAt = Date.now();
+    const expectedHash = contentHelpers.hashText(expectedText);
+
+    while (Date.now() - startedAt < 5000) {
+      const composerText = contentHelpers.readComposerText(composer);
+      const latestUserHash = readLatestUserHash();
+
+      if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
+        return {
+          ok: true,
+          signal: "user_message_added"
+        };
+      }
+
+      if (isGenerationInProgress() && composerText !== expectedText) {
+        return {
+          ok: true,
+          signal: "generation_started"
+        };
+      }
+
+      if (!composerText || composerText !== expectedText) {
+        return {
+          ok: true,
+          signal: "composer_cleared"
+        };
+      }
+
+      await sleep(250);
+    }
+
+    return {
+      ok: false,
+      error: "send_not_acknowledged",
+      signal: "none"
+    };
+  }
+
+  function readLatestUserHash() {
+    const latest = findLatestMessageElement("user");
+    if (!latest) {
+      return null;
+    }
+
+    const text = normalizeText(latest.innerText || latest.textContent || "");
+    return text ? contentHelpers.hashText(text) : null;
+  }
+
+  function isGenerationInProgress() {
+    return Boolean(
+      document.querySelector('button[aria-label*="停止"]') ||
+        document.querySelector('button[aria-label*="Stop"]')
     );
   }
 
-  function dispatchSendKey(composer) {
-    const keydownEvent = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "Enter",
-      code: "Enter"
+  function findLatestMessageElement(role) {
+    const selectors = [
+      `[data-message-author-role="${role}"]`,
+      `article [data-message-author-role="${role}"]`,
+      `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
+      `main [data-message-author-role='${role}']`
+    ];
+
+    for (const selector of selectors) {
+      const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
+        normalizeText(element.innerText || element.textContent || "")
+      );
+      if (candidates.length > 0) {
+        return candidates[candidates.length - 1];
+      }
+    }
+
+    return null;
+  }
+
+  function sleep(durationMs) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, durationMs);
     });
-    const keyupEvent = new KeyboardEvent("keyup", {
-      bubbles: true,
-      cancelable: true,
-      key: "Enter",
-      code: "Enter"
-    });
-    const keydownAccepted = composer.dispatchEvent(keydownEvent);
-    const keyupAccepted = composer.dispatchEvent(keyupEvent);
-    return keydownAccepted || keyupAccepted;
   }
 
   function normalizeText(value) {
-    return String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
-  }
-
-  function hashText(value) {
-    const text = normalizeText(value);
-    let hash = 2166136261;
-
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-
-    return `h${(hash >>> 0).toString(16)}`;
+    return contentHelpers.normalizeText(value);
   }
 })();

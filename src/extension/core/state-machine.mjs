@@ -35,6 +35,15 @@ export function createInitialState() {
       A: null,
       B: null
     },
+    runtimeActivity: {
+      step: "idle",
+      sourceRole: null,
+      targetRole: null,
+      pendingRound: null,
+      lastActionAt: null,
+      transport: null,
+      selector: null
+    },
     updatedAt: new Date().toISOString()
   };
 }
@@ -70,6 +79,8 @@ export function reduceState(currentState, event) {
       return toError(state, event.reason ?? ERROR_REASONS.SELECTOR_FAILURE);
     case "runtime_error":
       return toError(state, event.reason ?? ERROR_REASONS.INTERNAL_ERROR);
+    case "set_runtime_activity":
+      return reduceSetRuntimeActivity(state, event);
     default:
       return state;
   }
@@ -166,6 +177,15 @@ function reduceStart(state) {
   state.nextHopOverride = null;
   state.lastError = null;
   state.lastStopReason = null;
+  state.runtimeActivity = {
+    step: "starting",
+    sourceRole: state.starter,
+    targetRole: otherRole(state.starter),
+    pendingRound: state.round + 1,
+    lastActionAt: new Date().toISOString(),
+    transport: null,
+    selector: null
+  };
 
   if (state.pendingFreshSession) {
     state.round = 0;
@@ -191,6 +211,11 @@ function reducePause(state) {
   }
 
   state.phase = PHASES.PAUSED;
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    step: "paused",
+    lastActionAt: new Date().toISOString()
+  };
   return state;
 }
 
@@ -204,6 +229,14 @@ function reduceResume(state) {
     state.nextHopSource = state.nextHopOverride;
     state.nextHopOverride = null;
   }
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    step: "resuming",
+    sourceRole: state.nextHopSource,
+    targetRole: otherRole(state.nextHopSource),
+    pendingRound: state.round + 1,
+    lastActionAt: new Date().toISOString()
+  };
 
   return state;
 }
@@ -246,6 +279,25 @@ function reduceHopCompleted(state, event) {
     state.lastAssistantHashes[event.targetRole] = event.targetHash;
   }
 
+  state.runtimeActivity = {
+    step: "hop_completed",
+    sourceRole: event.sourceRole ?? null,
+    targetRole: event.targetRole ?? null,
+    pendingRound: state.round,
+    lastActionAt: new Date().toISOString(),
+    transport: "ok",
+    selector: "ok"
+  };
+
+  return state;
+}
+
+function reduceSetRuntimeActivity(state, event) {
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    ...event.activity,
+    lastActionAt: new Date().toISOString()
+  };
   return state;
 }
 
@@ -259,6 +311,11 @@ function toStopped(state, reason) {
   state.lastError = null;
   state.nextHopOverride = null;
   state.requiresTerminalClear = true;
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    step: "stopped",
+    lastActionAt: new Date().toISOString()
+  };
   return state;
 }
 
@@ -276,6 +333,12 @@ function toError(state, reason) {
   state.lastStopReason = null;
   state.nextHopOverride = null;
   state.requiresTerminalClear = true;
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    step: "error",
+    selector: reason,
+    lastActionAt: new Date().toISOString()
+  };
   return state;
 }
 

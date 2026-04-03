@@ -159,3 +159,29 @@ test("clearTerminal then start is the only round reset gate", () => {
   assert.equal(state.phase, PHASES.RUNNING);
   assert.equal(state.round, 0);
 });
+
+test("runtime activity is updated while running and on pause", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+
+  assert.equal(state.runtimeActivity.step, "starting");
+  assert.equal(state.runtimeActivity.pendingRound, 1);
+
+  state = reduceState(state, {
+    type: "set_runtime_activity",
+    activity: {
+      step: "waiting B reply",
+      sourceRole: "A",
+      targetRole: "B",
+      transport: "sent",
+      selector: "waiting_reply"
+    }
+  });
+  assert.equal(state.runtimeActivity.step, "waiting B reply");
+  assert.equal(state.runtimeActivity.transport, "sent");
+
+  state = reduceState(state, { type: "pause" });
+  assert.equal(state.runtimeActivity.step, "paused");
+});

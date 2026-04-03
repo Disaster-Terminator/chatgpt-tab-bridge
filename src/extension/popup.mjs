@@ -1,5 +1,7 @@
 import { MESSAGE_TYPES } from "./core/constants.mjs";
 
+const REFRESH_INTERVAL_MS = 1000;
+
 const elements = {
   phaseBadge: document.querySelector("#phaseBadge"),
   currentTabStatus: document.querySelector("#currentTabStatus"),
@@ -15,18 +17,38 @@ const elements = {
   resumeButton: document.querySelector("#resumeButton"),
   stopButton: document.querySelector("#stopButton"),
   clearTerminalButton: document.querySelector("#clearTerminalButton"),
+  copyDebugButton: document.querySelector("#copyDebugButton"),
   roundValue: document.querySelector("#roundValue"),
   nextHopValue: document.querySelector("#nextHopValue"),
+  currentStepValue: document.querySelector("#currentStepValue"),
+  transportValue: document.querySelector("#transportValue"),
+  selectorValue: document.querySelector("#selectorValue"),
   issueValue: document.querySelector("#issueValue")
 };
 
 let currentTabId = null;
 let currentModel = null;
+let refreshTimerId = null;
+let refreshInFlight = null;
 
 wireEvents();
 void refresh();
+startAutoRefresh();
 
 async function refresh() {
+  if (refreshInFlight) {
+    return refreshInFlight;
+  }
+
+  refreshInFlight = refreshLatestModel();
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
+async function refreshLatestModel() {
   try {
     const [activeTab] = await chrome.tabs.query({
       active: true,
@@ -41,9 +63,11 @@ async function refresh() {
 
     currentModel = response;
     render(response);
+    return response;
   } catch (error) {
     elements.currentTabStatus.textContent = error.message;
     elements.issueValue.textContent = error.message;
+    return null;
   }
 }
 
@@ -119,6 +143,10 @@ function wireEvents() {
       type: MESSAGE_TYPES.CLEAR_TERMINAL
     });
   });
+
+  elements.copyDebugButton.addEventListener("click", () => {
+    void copyDebugSnapshot();
+  });
 }
 
 async function perform(message) {
@@ -138,6 +166,9 @@ function render(model) {
   elements.bindingB.textContent = summarizeBinding(state.bindings.B);
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
+  elements.currentStepValue.textContent = display.currentStep || "idle";
+  elements.transportValue.textContent = display.transport || "None";
+  elements.selectorValue.textContent = display.selector || "None";
   elements.issueValue.textContent = state.lastError || state.lastStopReason || "None";
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
@@ -165,6 +196,51 @@ function render(model) {
   elements.overrideSelect.disabled = !controls.canSetOverride;
 }
 
+async function copyDebugSnapshot() {
+  const latestModel = (await refresh()) ?? currentModel;
+  if (!latestModel) {
+    return;
+  }
+
+  const payload = buildDebugSnapshot(latestModel);
+
+  try {
+    await navigator.clipboard.writeText(payload);
+    elements.issueValue.textContent = "Debug snapshot copied";
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = payload;
+    fallback.setAttribute("readonly", "true");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    fallback.remove();
+    elements.issueValue.textContent = "Debug snapshot copied";
+  }
+}
+
+function buildDebugSnapshot(model) {
+  const { state, currentTab, display } = model;
+
+  return [
+    "ChatGPT Bridge",
+    "",
+    `Phase: ${state.phase}`,
+    `Current tab: ${currentTab?.assignedRole ? `bound as ${currentTab.assignedRole}` : currentTab?.urlInfo?.supported ? "eligible" : "unsupported"}`,
+    `Binding A: ${summarizeBinding(state.bindings.A)}`,
+    `Binding B: ${summarizeBinding(state.bindings.B)}`,
+    `Starter: ${state.starter}`,
+    `Round: ${state.round}`,
+    `Next hop: ${display.nextHop}`,
+    `Current step: ${display.currentStep || "idle"}`,
+    `Transport: ${display.transport || "None"}`,
+    `Selector: ${display.selector || "None"}`,
+    `Last issue: ${state.lastError || state.lastStopReason || "None"}`
+  ].join("\n");
+}
+
 function summarizeBinding(binding) {
   if (!binding) {
     return "Unbound";
@@ -180,4 +256,21 @@ async function sendMessage(message) {
     throw new Error(response.error);
   }
   return response.result;
+}
+
+function startAutoRefresh() {
+  if (refreshTimerId !== null) {
+    return;
+  }
+
+  refreshTimerId = window.setInterval(() => {
+    void refresh();
+  }, REFRESH_INTERVAL_MS);
+
+  window.addEventListener("beforeunload", () => {
+    if (refreshTimerId !== null) {
+      window.clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+  }, { once: true });
 }

@@ -15,9 +15,7 @@ import {
   otherRole
 } from "./core/constants.mjs";
 import {
-  canWriteOverride,
   createInitialState,
-  hasValidBindings,
   reduceState
 } from "./core/state-machine.mjs";
 import {
@@ -29,6 +27,7 @@ import {
   hashText,
   normalizeAssistantText
 } from "./core/relay-core.mjs";
+import { deriveControls } from "./core/popup-model.mjs";
 
 let activeLoopToken = 0;
 const keepAlivePorts = new Set();
@@ -280,6 +279,18 @@ async function runRelayLoop(token, settings) {
     const sourceBinding = state.bindings[sourceRole];
     const targetBinding = state.bindings[targetRole];
 
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `reading ${sourceRole}`,
+        sourceRole,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: null,
+        selector: null
+      }
+    });
+
     if (!sourceBinding || !targetBinding) {
       await updateState({
         type: "invalidate_binding",
@@ -345,14 +356,38 @@ async function runRelayLoop(token, settings) {
       continueMarker: settings.continueMarker
     });
 
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `sending ${sourceRole} -> ${targetRole}`,
+        sourceRole,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: "sending",
+        selector: "ok"
+      }
+    });
+
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
     if (!sendResult.ok) {
       await updateState({
         type: "runtime_error",
-        reason: ERROR_REASONS.MESSAGE_SEND_FAILED
+        reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${sendResult.error ?? "unknown"}`
       });
       return;
     }
+
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${targetRole} reply`,
+        sourceRole,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
+        selector: "waiting_reply"
+      }
+    });
 
     const settled = await waitForSettledReply({
       tabId: targetBinding.tabId,
@@ -443,10 +478,16 @@ async function requestAssistantSnapshot(tabId) {
 
 async function sendRelayMessage(tabId, text) {
   try {
-    return await chrome.tabs.sendMessage(tabId, {
-      type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
-      text
-    });
+    return await Promise.race([
+      chrome.tabs.sendMessage(tabId, {
+        type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
+        text
+      }),
+      sleep(8000).then(() => ({
+        ok: false,
+        error: "send_message_timeout"
+      }))
+    ]);
   } catch (error) {
     return {
       ok: false,
@@ -517,20 +558,12 @@ async function getPopupModel(activeTabId) {
     currentTab: currentTabInfo,
     controls: deriveControls(state),
     display: {
-      nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource)
+      nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+      currentStep: state.runtimeActivity?.step ?? "idle",
+      lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
+      transport: state.runtimeActivity?.transport ?? null,
+      selector: state.runtimeActivity?.selector ?? null
     }
-  };
-}
-
-function deriveControls(state) {
-  return {
-    canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state),
-    canPause: state.phase === PHASES.RUNNING,
-    canResume: state.phase === PHASES.PAUSED && hasValidBindings(state),
-    canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
-    canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
-    canSetStarter: state.phase === PHASES.IDLE || state.phase === PHASES.READY,
-    canSetOverride: canWriteOverride(state)
   };
 }
 
