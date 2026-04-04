@@ -1,8 +1,8 @@
 import {
   collectOverlaySyncTabIds,
   shouldKeepBindingForUrlChange
-} from "./core/background-helpers.mjs";
-import { parseChatGptThreadUrl } from "./core/chatgpt-url.mjs";
+} from "./core/background-helpers.ts";
+import { parseChatGptThreadUrl } from "./core/chatgpt-url.ts";
 import {
   APP_STATE_KEY,
   DEFAULT_SETTINGS,
@@ -12,14 +12,16 @@ import {
   OVERLAY_SETTINGS_KEY,
   PHASES,
   ROLE_A,
+  ROLE_B,
   ROLES,
   STOP_REASONS,
   otherRole
-} from "./core/constants.mjs";
+} from "./core/constants.ts";
 import {
   createInitialState,
-  reduceState
-} from "./core/state-machine.mjs";
+  reduceState,
+  type RuntimeStateEvent
+} from "./core/state-machine.ts";
 import {
   buildRelayEnvelope,
   evaluatePostHopGuard,
@@ -28,39 +30,72 @@ import {
   guardReasonToStopReason,
   hashText,
   normalizeAssistantText
-} from "./core/relay-core.mjs";
-import { buildDisplay, deriveControls } from "./core/popup-model.mjs";
+} from "./core/relay-core.ts";
+import { buildDisplay, deriveControls } from "./core/popup-model.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
-} from "./core/overlay-settings.mjs";
+} from "./core/overlay-settings.ts";
+import type {
+  AssistantSnapshotResponse,
+  BridgeRole,
+  OverlayModel,
+  OverlaySettings,
+  PopupCurrentTab,
+  PopupModel,
+  RelayGuardReason,
+  RelayMessageResponse,
+  RuntimeMessage,
+  RuntimeResponse,
+  RuntimeSettings,
+  RuntimeState,
+  StopReason
+} from "./shared/types.js";
+
+type OverlaySettingsResult = {
+  state: RuntimeState;
+  overlaySettings: OverlaySettings;
+};
+
+type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult;
+
+type SettledReplyResult =
+  | AssistantSnapshotResponse
+  | { ok: false; reason: "loop_cancelled" | StopReason };
+
+interface WaitForSettledReplyInput {
+  tabId: number;
+  baselineHash: string;
+  settings: RuntimeSettings;
+  token: number;
+}
 
 let activeLoopToken = 0;
-const keepAlivePorts = new Set();
+const keepAlivePorts = new Set<ChromePort>();
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
 });
 
-chrome.runtime.onStartup.addListener(async () => {
+chrome.runtime.onStartup.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
 });
 
-chrome.runtime.onConnect.addListener((port) => {
+chrome.runtime.onConnect.addListener((port): void => {
   if (port.name !== "bridge-tab-keepalive") {
     return;
   }
 
   keepAlivePorts.add(port);
-  port.onMessage.addListener(() => {});
-  port.onDisconnect.addListener(() => {
+  port.onMessage.addListener((): void => {});
+  port.onDisconnect.addListener((): void => {
     keepAlivePorts.delete(port);
   });
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId): Promise<void> => {
   const state = await getState();
   const role = findRoleByTabId(state, tabId);
   if (!role) {
@@ -70,7 +105,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await updateState({ type: "invalidate_binding", role });
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo): Promise<void> => {
   if (!changeInfo.url) {
     return;
   }
@@ -96,15 +131,24 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await persistState(nextState, state);
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  void handleMessage(message, sender)
-    .then((result) => sendResponse({ ok: true, result }))
-    .catch((error) => sendResponse({ ok: false, error: error.message }));
+chrome.runtime.onMessage.addListener(
+  (
+    message: RuntimeMessage,
+    sender: ChromeMessageSender,
+    sendResponse: (response?: RuntimeResponse<BackgroundMessageResult>) => void
+  ): boolean => {
+    void handleMessage(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
 
-  return true;
-});
+    return true;
+  }
+);
 
-async function handleMessage(message, sender) {
+async function handleMessage(
+  message: RuntimeMessage | null | undefined,
+  sender: ChromeMessageSender
+): Promise<BackgroundMessageResult> {
   switch (message?.type) {
     case MESSAGE_TYPES.GET_RUNTIME_STATE:
       return getState();
@@ -116,10 +160,10 @@ async function handleMessage(message, sender) {
       return getOverlayModel(sender.tab?.id ?? null);
 
     case MESSAGE_TYPES.SET_BINDING:
-      return bindTabToRole(message.role, message.tabId ?? sender.tab?.id);
+      return bindTabToRole(message.role, message.tabId ?? sender.tab?.id ?? null);
 
     case MESSAGE_TYPES.CLEAR_BINDING:
-      return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id));
+      return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id ?? null));
 
     case MESSAGE_TYPES.SET_STARTER:
       return updateState({ type: "set_starter", role: message.role });
@@ -134,14 +178,10 @@ async function handleMessage(message, sender) {
       return updateOverlaySettings({ collapsed: Boolean(message.collapsed) });
 
     case MESSAGE_TYPES.SET_OVERLAY_POSITION:
-      return updateOverlaySettings({
-        position: message.position ?? null
-      });
+      return updateOverlaySettings({ position: message.position ?? null });
 
     case MESSAGE_TYPES.RESET_OVERLAY_POSITION:
-      return updateOverlaySettings({
-        position: null
-      });
+      return updateOverlaySettings({ position: null });
 
     case MESSAGE_TYPES.START_SESSION:
       return startSession();
@@ -169,28 +209,23 @@ async function handleMessage(message, sender) {
   }
 }
 
-async function initializeState() {
-  const current = await chrome.storage.session.get(APP_STATE_KEY);
-  if (!current[APP_STATE_KEY]) {
-    await chrome.storage.session.set({
-      [APP_STATE_KEY]: createInitialState()
-    });
+async function initializeState(): Promise<void> {
+  const current = await getSessionValue<RuntimeState>(APP_STATE_KEY);
+  if (!current) {
+    await setSessionValue(APP_STATE_KEY, createInitialState());
   }
 }
 
-async function initializeOverlaySettings() {
-  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
-  if (!payload[OVERLAY_SETTINGS_KEY]) {
-    await chrome.storage.local.set({
-      [OVERLAY_SETTINGS_KEY]: DEFAULT_OVERLAY_SETTINGS
-    });
+async function initializeOverlaySettings(): Promise<void> {
+  const current = await getLocalValue<OverlaySettings>(OVERLAY_SETTINGS_KEY);
+  if (!current) {
+    await setLocalValue(OVERLAY_SETTINGS_KEY, DEFAULT_OVERLAY_SETTINGS);
   }
 }
 
-async function getState() {
+async function getState(): Promise<RuntimeState> {
   await initializeState();
-  const payload = await chrome.storage.session.get(APP_STATE_KEY);
-  const state = payload[APP_STATE_KEY] ?? createInitialState();
+  const state = (await getSessionValue<RuntimeState>(APP_STATE_KEY)) ?? createInitialState();
   state.settings = {
     ...DEFAULT_SETTINGS,
     ...state.settings
@@ -198,18 +233,19 @@ async function getState() {
   return state;
 }
 
-async function getOverlaySettings() {
+async function getOverlaySettings(): Promise<OverlaySettings> {
   await initializeOverlaySettings();
-  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
-  return normalizeOverlaySettings(payload[OVERLAY_SETTINGS_KEY] ?? DEFAULT_OVERLAY_SETTINGS);
+  return normalizeOverlaySettings(
+    (await getLocalValue<OverlaySettings>(OVERLAY_SETTINGS_KEY)) ?? DEFAULT_OVERLAY_SETTINGS
+  );
 }
 
-async function updateOverlaySettings(patch) {
+async function updateOverlaySettings(
+  patch: Partial<OverlaySettings>
+): Promise<OverlaySettingsResult> {
   const currentSettings = await getOverlaySettings();
   const nextSettings = mergeOverlaySettings(currentSettings, patch);
-  await chrome.storage.local.set({
-    [OVERLAY_SETTINGS_KEY]: nextSettings
-  });
+  await setLocalValue(OVERLAY_SETTINGS_KEY, nextSettings);
   const state = await getState();
   await broadcastOverlayState(state, null, true, nextSettings);
   return {
@@ -218,15 +254,16 @@ async function updateOverlaySettings(patch) {
   };
 }
 
-async function persistState(nextState, previousState = null) {
-  await chrome.storage.session.set({
-    [APP_STATE_KEY]: nextState
-  });
+async function persistState(
+  nextState: RuntimeState,
+  previousState: RuntimeState | null = null
+): Promise<RuntimeState> {
+  await setSessionValue(APP_STATE_KEY, nextState);
   await broadcastOverlayState(nextState, previousState);
   return nextState;
 }
 
-async function updateState(event) {
+async function updateState(event: RuntimeStateEvent): Promise<RuntimeState> {
   const current = await getState();
   const next = reduceState(current, event);
 
@@ -237,8 +274,11 @@ async function updateState(event) {
   return persistState(next, current);
 }
 
-async function bindTabToRole(role, tabId) {
-  if (!ROLES.includes(role) || !tabId) {
+async function bindTabToRole(
+  role: BridgeRole | null | undefined,
+  tabId: number | null | undefined
+): Promise<RuntimeState> {
+  if (!isBridgeRole(role) || !tabId) {
     throw new Error("A valid role and tab id are required.");
   }
 
@@ -257,8 +297,7 @@ async function bindTabToRole(role, tabId) {
   const otherBinding = state.bindings[otherRole(role)];
   if (
     otherBinding &&
-    (otherBinding.tabId === tab.id ||
-      otherBinding.urlInfo?.normalizedUrl === urlInfo.normalizedUrl)
+    (otherBinding.tabId === tab.id || otherBinding.urlInfo?.normalizedUrl === urlInfo.normalizedUrl)
   ) {
     throw new Error("A and B must be bound to different ChatGPT threads.");
   }
@@ -268,7 +307,7 @@ async function bindTabToRole(role, tabId) {
     role,
     binding: {
       role,
-      tabId: tab.id,
+      tabId: tab.id ?? tabId,
       title: tab.title ?? "",
       url: tab.url ?? "",
       urlInfo,
@@ -277,8 +316,8 @@ async function bindTabToRole(role, tabId) {
   });
 }
 
-async function clearBinding(role) {
-  if (!ROLES.includes(role)) {
+async function clearBinding(role: BridgeRole | null | undefined): Promise<RuntimeState> {
+  if (!isBridgeRole(role)) {
     throw new Error("A valid role is required.");
   }
 
@@ -289,7 +328,7 @@ async function clearBinding(role) {
   });
 }
 
-async function startSession() {
+async function startSession(): Promise<RuntimeState> {
   const next = await updateState({ type: "start" });
   if (next.phase === PHASES.RUNNING) {
     startRelayLoop(next);
@@ -297,11 +336,11 @@ async function startSession() {
   return next;
 }
 
-async function pauseSession() {
+async function pauseSession(): Promise<RuntimeState> {
   return updateState({ type: "pause" });
 }
 
-async function resumeSession() {
+async function resumeSession(): Promise<RuntimeState> {
   const next = await updateState({ type: "resume" });
   if (next.phase === PHASES.RUNNING) {
     startRelayLoop(next);
@@ -309,21 +348,21 @@ async function resumeSession() {
   return next;
 }
 
-async function stopSession() {
+async function stopSession(): Promise<RuntimeState> {
   return updateState({ type: "stop", reason: STOP_REASONS.USER_STOP });
 }
 
-async function clearTerminal() {
+async function clearTerminal(): Promise<RuntimeState> {
   return updateState({ type: "clear_terminal" });
 }
 
-function startRelayLoop(state) {
+function startRelayLoop(state: RuntimeState): void {
   activeLoopToken += 1;
   const token = activeLoopToken;
   void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS);
 }
 
-async function runRelayLoop(token, settings) {
+async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<void> {
   while (token === activeLoopToken) {
     const state = await getState();
     if (state.phase !== PHASES.RUNNING) {
@@ -456,7 +495,7 @@ async function runRelayLoop(token, settings) {
       return;
     }
 
-    if (settled.reason === STOP_REASONS.HOP_TIMEOUT) {
+    if ("reason" in settled && settled.reason === STOP_REASONS.HOP_TIMEOUT) {
       await updateState({
         type: "stop_condition",
         reason: STOP_REASONS.HOP_TIMEOUT
@@ -497,7 +536,14 @@ async function runRelayLoop(token, settings) {
   }
 }
 
-async function ensureRunnableBinding(role, binding) {
+async function ensureRunnableBinding(
+  role: BridgeRole,
+  binding: RuntimeState["bindings"][BridgeRole]
+): Promise<ChromeTab | null> {
+  if (!binding) {
+    return null;
+  }
+
   try {
     const tab = await chrome.tabs.get(binding.tabId);
     const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
@@ -519,42 +565,47 @@ async function ensureRunnableBinding(role, binding) {
   }
 }
 
-async function requestAssistantSnapshot(tabId) {
+async function requestAssistantSnapshot(tabId: number): Promise<AssistantSnapshotResponse> {
   try {
-    return await chrome.tabs.sendMessage(tabId, {
+    return await chrome.tabs.sendMessage<AssistantSnapshotResponse>(tabId, {
       type: MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT
     });
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       ok: false,
-      error: error.message
+      error: getErrorMessage(error)
     };
   }
 }
 
-async function sendRelayMessage(tabId, text) {
+async function sendRelayMessage(tabId: number, text: string): Promise<RelayMessageResponse> {
   try {
     return await Promise.race([
-      chrome.tabs.sendMessage(tabId, {
+      chrome.tabs.sendMessage<RelayMessageResponse>(tabId, {
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
       }),
-      sleep(8000).then(() => ({
+      sleep(8000).then<RelayMessageResponse>(() => ({
         ok: false,
         error: "send_message_timeout"
       }))
     ]);
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       ok: false,
-      error: error.message
+      error: getErrorMessage(error)
     };
   }
 }
 
-async function waitForSettledReply({ tabId, baselineHash, settings, token }) {
+async function waitForSettledReply({
+  tabId,
+  baselineHash,
+  settings,
+  token
+}: WaitForSettledReplyInput): Promise<SettledReplyResult> {
   const startedAt = Date.now();
-  let stableHash = null;
+  let stableHash: string | null = null;
   let stableCount = 0;
 
   while (Date.now() - startedAt < settings.hopTimeoutMs) {
@@ -596,17 +647,17 @@ async function waitForSettledReply({ tabId, baselineHash, settings, token }) {
   };
 }
 
-async function getPopupModel(activeTabId) {
+async function getPopupModel(activeTabId: number | null): Promise<PopupModel> {
   const state = await getState();
   const overlaySettings = await getOverlaySettings();
   const currentTab = activeTabId ? await safeGetTab(activeTabId) : null;
-  const currentTabInfo = currentTab
+  const currentTabInfo: PopupCurrentTab | null = currentTab
     ? {
         id: currentTab.id,
         title: currentTab.title ?? "",
         url: currentTab.url ?? "",
         urlInfo: parseChatGptThreadUrl(currentTab.url ?? ""),
-        assignedRole: findRoleByTabId(state, currentTab.id)
+        assignedRole: findRoleByTabId(state, currentTab.id ?? null)
       }
     : null;
 
@@ -619,25 +670,13 @@ async function getPopupModel(activeTabId) {
   };
 }
 
-async function getOverlayModel(tabId) {
+async function getOverlayModel(tabId: number | null): Promise<OverlayModel> {
   const state = await getState();
   const overlaySettings = await getOverlaySettings();
-  const assignedRole = findRoleByTabId(state, tabId);
-
-  return {
-    phase: state.phase,
-    round: state.round,
-    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
-    requiresTerminalClear: state.requiresTerminalClear,
-    assignedRole,
-    starter: state.starter,
-    controls: deriveControls(state),
-    display: buildDisplay(state),
-    overlaySettings
-  };
+  return buildOverlaySnapshot(state, tabId, overlaySettings);
 }
 
-async function safeGetTab(tabId) {
+async function safeGetTab(tabId: number): Promise<ChromeTab | null> {
   try {
     return await chrome.tabs.get(tabId);
   } catch {
@@ -646,13 +685,13 @@ async function safeGetTab(tabId) {
 }
 
 async function broadcastOverlayState(
-  state,
-  previousState = null,
+  state: RuntimeState,
+  previousState: RuntimeState | null = null,
   broadcastAllChatGptTabs = false,
-  overlaySettings = null
-) {
+  overlaySettings: OverlaySettings | null = null
+): Promise<void> {
   const nextOverlaySettings = overlaySettings ?? (await getOverlaySettings());
-  const tabIds = new Set(collectOverlaySyncTabIds(previousState, state));
+  const tabIds = new Set<number>(collectOverlaySyncTabIds(previousState, state));
 
   if (broadcastAllChatGptTabs) {
     const tabs = await chrome.tabs.query({
@@ -666,21 +705,11 @@ async function broadcastOverlayState(
   }
 
   await Promise.all(
-    Array.from(tabIds).map(async (tabId) => {
+    Array.from(tabIds).map(async (tabId): Promise<null> => {
       try {
         await chrome.tabs.sendMessage(tabId, {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
-          snapshot: {
-            phase: state.phase,
-            round: state.round,
-            nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
-            requiresTerminalClear: state.requiresTerminalClear,
-            assignedRole: findRoleByTabId(state, tabId),
-            starter: state.starter,
-            controls: deriveControls(state),
-            display: buildDisplay(state),
-            overlaySettings: nextOverlaySettings
-          }
+          snapshot: buildOverlaySnapshot(state, tabId, nextOverlaySettings)
         });
       } catch {
         return null;
@@ -690,7 +719,25 @@ async function broadcastOverlayState(
   );
 }
 
-function findRoleByTabId(state, tabId) {
+function buildOverlaySnapshot(
+  state: RuntimeState,
+  tabId: number | null,
+  overlaySettings: OverlaySettings
+): OverlayModel {
+  return {
+    phase: state.phase,
+    round: state.round,
+    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+    requiresTerminalClear: state.requiresTerminalClear,
+    assignedRole: findRoleByTabId(state, tabId),
+    starter: state.starter,
+    controls: deriveControls(state),
+    display: buildDisplay(state),
+    overlaySettings
+  };
+}
+
+function findRoleByTabId(state: RuntimeState, tabId: number | null | undefined): BridgeRole | null {
   if (!tabId) {
     return null;
   }
@@ -700,22 +747,56 @@ function findRoleByTabId(state, tabId) {
   }
 
   if (state.bindings.B?.tabId === tabId) {
-    return "B";
+    return ROLE_B;
   }
 
   return null;
 }
 
-function mapGuardReasonToStop(reason) {
+function mapGuardReasonToStop(reason: RelayGuardReason | string | null | undefined): StopReason {
   return guardReasonToStopReason(reason);
 }
 
-function sleep(durationMs) {
+function isBridgeRole(role: unknown): role is BridgeRole {
+  return typeof role === "string" && ROLES.includes(role as BridgeRole);
+}
+
+async function getSessionValue<T>(key: string): Promise<T | null> {
+  const payload = await chrome.storage.session.get(key);
+  return (payload[key] as T | undefined) ?? null;
+}
+
+async function setSessionValue<T>(key: string, value: T): Promise<void> {
+  await chrome.storage.session.set({
+    [key]: value
+  });
+}
+
+async function getLocalValue<T>(key: string): Promise<T | null> {
+  const payload = await chrome.storage.local.get(key);
+  return (payload[key] as T | undefined) ?? null;
+}
+
+async function setLocalValue<T>(key: string, value: T): Promise<void> {
+  await chrome.storage.local.set({
+    [key]: value
+  });
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error ?? "unknown_error");
+}
+
+function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
 }
 
-function structuredCloneSafe(value) {
-  return JSON.parse(JSON.stringify(value));
+function structuredCloneSafe<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }

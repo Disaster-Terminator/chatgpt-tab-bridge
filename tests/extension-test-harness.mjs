@@ -1,8 +1,8 @@
 import { access, readFile } from "node:fs/promises";
 
 const roots = ["../src/extension/", "../dist/extension/"];
-const moduleExtensions = [".mjs", ".js"];
-const sourceExtensions = [".js", ".mjs"];
+const moduleExtensions = [".mjs", ".js", ".ts"];
+const sourceExtensions = [".js", ".mjs", ".ts"];
 
 export async function importExtensionModule(moduleStem) {
   const moduleUrl = await resolveExtensionPath(moduleStem, moduleExtensions);

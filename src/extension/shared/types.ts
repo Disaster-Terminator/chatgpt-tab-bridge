@@ -1,0 +1,360 @@
+export type BridgeRole = "A" | "B";
+
+export type RuntimePhase = "idle" | "ready" | "running" | "paused" | "stopped" | "error";
+
+export type StopReason =
+  | "user_stop"
+  | "stop_marker"
+  | "max_rounds_reached"
+  | "duplicate_output"
+  | "hop_timeout"
+  | "binding_invalid";
+
+export type ErrorReason =
+  | "selector_failure"
+  | "message_send_failed"
+  | "unsupported_tab"
+  | "empty_assistant_reply"
+  | "internal_error";
+
+export type MessageType =
+  | "GET_RUNTIME_STATE"
+  | "GET_POPUP_MODEL"
+  | "GET_OVERLAY_MODEL"
+  | "SET_BINDING"
+  | "CLEAR_BINDING"
+  | "SET_STARTER"
+  | "START_SESSION"
+  | "PAUSE_SESSION"
+  | "RESUME_SESSION"
+  | "STOP_SESSION"
+  | "CLEAR_TERMINAL"
+  | "SET_NEXT_HOP_OVERRIDE"
+  | "SET_OVERLAY_ENABLED"
+  | "SET_OVERLAY_COLLAPSED"
+  | "SET_OVERLAY_POSITION"
+  | "RESET_OVERLAY_POSITION"
+  | "GET_ASSISTANT_SNAPSHOT"
+  | "SEND_RELAY_MESSAGE"
+  | "SYNC_OVERLAY_STATE"
+  | "REQUEST_OPEN_POPUP";
+
+export type BridgeDirective = "CONTINUE" | "FREEZE";
+export type RelayGuardReason = "stop_marker" | "duplicate_output" | "max_rounds_reached";
+
+export interface ChatGptThreadUrlInfo {
+  supported: true;
+  kind: "project" | "regular";
+  projectId: string | null;
+  conversationId: string;
+  normalizedUrl: string;
+}
+
+export interface UnsupportedChatGptUrlInfo {
+  supported: false;
+  kind: "unsupported";
+  projectId: null;
+  conversationId: null;
+  normalizedUrl: string | null;
+  reason: string;
+}
+
+export type ChatGptUrlInfo = ChatGptThreadUrlInfo | UnsupportedChatGptUrlInfo;
+
+export interface RuntimeBinding {
+  role: BridgeRole;
+  tabId: number;
+  title: string;
+  url: string;
+  urlInfo: ChatGptUrlInfo | null;
+  boundAt: string;
+}
+
+export interface RuntimeSettings {
+  maxRounds: number;
+  hopTimeoutMs: number;
+  pollIntervalMs: number;
+  settleSamplesRequired: number;
+  bridgeStatePrefix: string;
+  continueMarker: string;
+  stopMarker: string;
+}
+
+export interface OverlayPosition {
+  x: number;
+  y: number;
+}
+
+export interface OverlaySettings {
+  enabled: boolean;
+  collapsed: boolean;
+  position: OverlayPosition | null;
+}
+
+export interface RuntimeActivity {
+  step: string;
+  sourceRole: BridgeRole | null;
+  targetRole: BridgeRole | null;
+  pendingRound: number | null;
+  lastActionAt: string | null;
+  transport: string | null;
+  selector: string | null;
+}
+
+export interface CompletedHop {
+  sourceRole: BridgeRole;
+  targetRole: BridgeRole;
+  sourceHash: string | null;
+  targetHash: string | null;
+  round: number;
+}
+
+export interface RuntimeState {
+  phase: RuntimePhase;
+  bindings: Record<BridgeRole, RuntimeBinding | null>;
+  settings: RuntimeSettings;
+  starter: BridgeRole;
+  nextHopSource: BridgeRole;
+  nextHopOverride: BridgeRole | null;
+  round: number;
+  sessionId: number;
+  pendingFreshSession: boolean;
+  requiresTerminalClear: boolean;
+  lastStopReason: string | null;
+  lastError: string | null;
+  lastCompletedHop: CompletedHop | null;
+  lastForwardedHashes: Record<BridgeRole, string | null>;
+  lastAssistantHashes: Record<BridgeRole, string | null>;
+  runtimeActivity: RuntimeActivity;
+  updatedAt: string;
+}
+
+export interface PopupControls {
+  canStart: boolean;
+  canPause: boolean;
+  canResume: boolean;
+  canStop: boolean;
+  canClearTerminal: boolean;
+  canSetStarter: boolean;
+  canSetOverride: boolean;
+}
+
+export interface RuntimeDisplay {
+  nextHop: string;
+  currentStep: string;
+  lastActionAt: string | null;
+  transport: string | null;
+  selector: string | null;
+  lastIssue: string;
+}
+
+export interface PopupCurrentTab {
+  id: number | undefined;
+  title: string;
+  url: string;
+  urlInfo: ChatGptUrlInfo;
+  assignedRole: BridgeRole | null;
+}
+
+export interface PopupModel {
+  state: RuntimeState;
+  overlaySettings: OverlaySettings;
+  currentTab: PopupCurrentTab | null;
+  controls: PopupControls;
+  display: RuntimeDisplay;
+}
+
+export interface OverlayModel {
+  phase: RuntimePhase;
+  round: number;
+  nextHop: string;
+  requiresTerminalClear: boolean;
+  assignedRole: BridgeRole | null;
+  starter: BridgeRole;
+  controls: PopupControls;
+  display: RuntimeDisplay;
+  overlaySettings: OverlaySettings;
+}
+
+export interface AssistantSnapshot {
+  text: string;
+  hash: string;
+}
+
+export type AssistantSnapshotResponse =
+  | { ok: true; result: AssistantSnapshot }
+  | { ok: false; error: string };
+
+export type RelaySendMode = "button" | "form_submit" | "button_missing" | "button_disabled";
+export type RelayAcknowledgement =
+  | "none"
+  | "user_message_added"
+  | "generation_started"
+  | "composer_cleared";
+
+export type RelayMessageResponse =
+  | {
+      ok: true;
+      mode: RelaySendMode;
+      applyMode: string;
+      acknowledgement: RelayAcknowledgement;
+      error: null;
+    }
+  | {
+      ok: false;
+      mode?: RelaySendMode;
+      applyMode?: string;
+      acknowledgement?: RelayAcknowledgement;
+      error: string;
+    };
+
+export interface MessageBase {
+  type: MessageType;
+}
+
+export interface GetRuntimeStateMessage extends MessageBase {
+  type: "GET_RUNTIME_STATE";
+}
+
+export interface GetPopupModelMessage extends MessageBase {
+  type: "GET_POPUP_MODEL";
+  activeTabId?: number | null;
+}
+
+export interface GetOverlayModelMessage extends MessageBase {
+  type: "GET_OVERLAY_MODEL";
+}
+
+export interface SetBindingMessage extends MessageBase {
+  type: "SET_BINDING";
+  role: BridgeRole;
+  tabId?: number | null;
+}
+
+export interface ClearBindingMessage extends MessageBase {
+  type: "CLEAR_BINDING";
+  role?: BridgeRole | null;
+}
+
+export interface SetStarterMessage extends MessageBase {
+  type: "SET_STARTER";
+  role: BridgeRole;
+}
+
+export interface StartSessionMessage extends MessageBase {
+  type: "START_SESSION";
+}
+
+export interface PauseSessionMessage extends MessageBase {
+  type: "PAUSE_SESSION";
+}
+
+export interface ResumeSessionMessage extends MessageBase {
+  type: "RESUME_SESSION";
+}
+
+export interface StopSessionMessage extends MessageBase {
+  type: "STOP_SESSION";
+}
+
+export interface ClearTerminalMessage extends MessageBase {
+  type: "CLEAR_TERMINAL";
+}
+
+export interface SetNextHopOverrideMessage extends MessageBase {
+  type: "SET_NEXT_HOP_OVERRIDE";
+  role: BridgeRole | null;
+}
+
+export interface SetOverlayEnabledMessage extends MessageBase {
+  type: "SET_OVERLAY_ENABLED";
+  enabled: boolean;
+}
+
+export interface SetOverlayCollapsedMessage extends MessageBase {
+  type: "SET_OVERLAY_COLLAPSED";
+  collapsed: boolean;
+}
+
+export interface SetOverlayPositionMessage extends MessageBase {
+  type: "SET_OVERLAY_POSITION";
+  position: OverlayPosition | null;
+}
+
+export interface ResetOverlayPositionMessage extends MessageBase {
+  type: "RESET_OVERLAY_POSITION";
+}
+
+export interface GetAssistantSnapshotMessage extends MessageBase {
+  type: "GET_ASSISTANT_SNAPSHOT";
+}
+
+export interface SendRelayMessageRequest extends MessageBase {
+  type: "SEND_RELAY_MESSAGE";
+  text: string;
+}
+
+export interface SyncOverlayStateMessage extends MessageBase {
+  type: "SYNC_OVERLAY_STATE";
+  snapshot: OverlayModel;
+}
+
+export interface RequestOpenPopupMessage extends MessageBase {
+  type: "REQUEST_OPEN_POPUP";
+}
+
+export type RuntimeMessage =
+  | GetRuntimeStateMessage
+  | GetPopupModelMessage
+  | GetOverlayModelMessage
+  | SetBindingMessage
+  | ClearBindingMessage
+  | SetStarterMessage
+  | StartSessionMessage
+  | PauseSessionMessage
+  | ResumeSessionMessage
+  | StopSessionMessage
+  | ClearTerminalMessage
+  | SetNextHopOverrideMessage
+  | SetOverlayEnabledMessage
+  | SetOverlayCollapsedMessage
+  | SetOverlayPositionMessage
+  | ResetOverlayPositionMessage
+  | GetAssistantSnapshotMessage
+  | SendRelayMessageRequest
+  | SyncOverlayStateMessage
+  | RequestOpenPopupMessage;
+
+export type RuntimeResponse<T> =
+  | { ok: true; result: T }
+  | { ok: false; error: string };
+
+export interface PreSendGuardResult {
+  shouldStop: boolean;
+  reason: Extract<RelayGuardReason, "stop_marker" | "duplicate_output"> | null;
+  isEmpty: boolean;
+}
+
+export interface PostHopGuardResult {
+  shouldStop: boolean;
+  reason: Extract<RelayGuardReason, "stop_marker" | "max_rounds_reached"> | null;
+}
+
+export interface ContentBridgeGlobal {
+  applyComposerText(composer: Element | null, text: string): string;
+  findBestComposer(root: ParentNode | null): Element | null;
+  findSendButton(root: ParentNode | null, composer: Element | null): HTMLButtonElement | null;
+  hashText(value: unknown): string;
+  isElementVisible(element: Element | null): boolean;
+  normalizeText(value: unknown): string;
+  readComposerText(composer: Element | null): string;
+  triggerComposerSend(input: {
+    root: ParentNode | null;
+    composer: Element | null;
+    sendButton?: HTMLButtonElement | null;
+  }): {
+    ok: boolean;
+    mode: RelaySendMode;
+    error?: string;
+  };
+}

@@ -1,43 +1,114 @@
-import { MESSAGE_TYPES } from "./core/constants.mjs";
+import { MESSAGE_TYPES } from "./core/constants.ts";
+import type {
+  BridgeRole,
+  ClearBindingMessage,
+  GetPopupModelMessage,
+  OverlaySettings,
+  PauseSessionMessage,
+  PopupModel,
+  ResetOverlayPositionMessage,
+  ResumeSessionMessage,
+  RuntimeResponse,
+  RuntimeState,
+  SetBindingMessage,
+  SetNextHopOverrideMessage,
+  SetOverlayEnabledMessage,
+  SetStarterMessage,
+  StartSessionMessage,
+  StopSessionMessage,
+  ClearTerminalMessage
+} from "./shared/types.js";
 
 const REFRESH_INTERVAL_MS = 1000;
 
-const elements = {
-  phaseBadge: document.querySelector("#phaseBadge"),
-  currentTabStatus: document.querySelector("#currentTabStatus"),
-  bindAButton: document.querySelector("#bindAButton"),
-  bindBButton: document.querySelector("#bindBButton"),
-  unbindCurrentButton: document.querySelector("#unbindCurrentButton"),
-  bindingA: document.querySelector("#bindingA"),
-  bindingB: document.querySelector("#bindingB"),
-  overlayEnabledCheckbox: document.querySelector("#overlayEnabledCheckbox"),
-  resetOverlayPositionButton: document.querySelector("#resetOverlayPositionButton"),
-  starterSelect: document.querySelector("#starterSelect"),
-  overrideSelect: document.querySelector("#overrideSelect"),
-  startButton: document.querySelector("#startButton"),
-  pauseButton: document.querySelector("#pauseButton"),
-  resumeButton: document.querySelector("#resumeButton"),
-  stopButton: document.querySelector("#stopButton"),
-  clearTerminalButton: document.querySelector("#clearTerminalButton"),
-  copyDebugButton: document.querySelector("#copyDebugButton"),
-  roundValue: document.querySelector("#roundValue"),
-  nextHopValue: document.querySelector("#nextHopValue"),
-  currentStepValue: document.querySelector("#currentStepValue"),
-  transportValue: document.querySelector("#transportValue"),
-  selectorValue: document.querySelector("#selectorValue"),
-  issueValue: document.querySelector("#issueValue")
+interface PopupElements {
+  phaseBadge: HTMLElement;
+  currentTabStatus: HTMLElement;
+  bindAButton: HTMLButtonElement;
+  bindBButton: HTMLButtonElement;
+  unbindCurrentButton: HTMLButtonElement;
+  bindingA: HTMLElement;
+  bindingB: HTMLElement;
+  overlayEnabledCheckbox: HTMLInputElement;
+  resetOverlayPositionButton: HTMLButtonElement;
+  starterSelect: HTMLSelectElement;
+  overrideSelect: HTMLSelectElement;
+  startButton: HTMLButtonElement;
+  pauseButton: HTMLButtonElement;
+  resumeButton: HTMLButtonElement;
+  stopButton: HTMLButtonElement;
+  clearTerminalButton: HTMLButtonElement;
+  copyDebugButton: HTMLButtonElement;
+  roundValue: HTMLElement;
+  nextHopValue: HTMLElement;
+  currentStepValue: HTMLElement;
+  transportValue: HTMLElement;
+  selectorValue: HTMLElement;
+  issueValue: HTMLElement;
+}
+
+type PopupActionMessage =
+  | ClearBindingMessage
+  | ClearTerminalMessage
+  | PauseSessionMessage
+  | ResetOverlayPositionMessage
+  | ResumeSessionMessage
+  | SetBindingMessage
+  | SetNextHopOverrideMessage
+  | SetOverlayEnabledMessage
+  | SetStarterMessage
+  | StartSessionMessage
+  | StopSessionMessage;
+
+type PopupMessage = GetPopupModelMessage | PopupActionMessage;
+
+type OverlaySettingsResult = {
+  state: RuntimeState;
+  overlaySettings: OverlaySettings;
 };
 
-let currentTabId = null;
-let currentModel = null;
-let refreshTimerId = null;
-let refreshInFlight = null;
+type PopupMessageResult<T extends PopupMessage> = T["type"] extends "GET_POPUP_MODEL"
+  ? PopupModel
+  : T["type"] extends "SET_OVERLAY_ENABLED" | "RESET_OVERLAY_POSITION"
+    ? OverlaySettingsResult
+    : RuntimeState;
+
+const elements: PopupElements = {
+  phaseBadge: requireElement<HTMLElement>("#phaseBadge"),
+  currentTabStatus: requireElement<HTMLElement>("#currentTabStatus"),
+  bindAButton: requireElement<HTMLButtonElement>("#bindAButton"),
+  bindBButton: requireElement<HTMLButtonElement>("#bindBButton"),
+  unbindCurrentButton: requireElement<HTMLButtonElement>("#unbindCurrentButton"),
+  bindingA: requireElement<HTMLElement>("#bindingA"),
+  bindingB: requireElement<HTMLElement>("#bindingB"),
+  overlayEnabledCheckbox: requireElement<HTMLInputElement>("#overlayEnabledCheckbox"),
+  resetOverlayPositionButton: requireElement<HTMLButtonElement>("#resetOverlayPositionButton"),
+  starterSelect: requireElement<HTMLSelectElement>("#starterSelect"),
+  overrideSelect: requireElement<HTMLSelectElement>("#overrideSelect"),
+  startButton: requireElement<HTMLButtonElement>("#startButton"),
+  pauseButton: requireElement<HTMLButtonElement>("#pauseButton"),
+  resumeButton: requireElement<HTMLButtonElement>("#resumeButton"),
+  stopButton: requireElement<HTMLButtonElement>("#stopButton"),
+  clearTerminalButton: requireElement<HTMLButtonElement>("#clearTerminalButton"),
+  copyDebugButton: requireElement<HTMLButtonElement>("#copyDebugButton"),
+  roundValue: requireElement<HTMLElement>("#roundValue"),
+  nextHopValue: requireElement<HTMLElement>("#nextHopValue"),
+  currentStepValue: requireElement<HTMLElement>("#currentStepValue"),
+  transportValue: requireElement<HTMLElement>("#transportValue"),
+  selectorValue: requireElement<HTMLElement>("#selectorValue"),
+  issueValue: requireElement<HTMLElement>("#issueValue")
+};
+
+let currentTabId: number | null = null;
+let currentModel: PopupModel | null = null;
+let refreshTimerId: number | null = null;
+let refreshInFlight: Promise<PopupModel | null> | null = null;
 
 wireEvents();
 void refresh();
 startAutoRefresh();
 
-async function refresh() {
+async function refresh(): Promise<PopupModel | null> {
   if (refreshInFlight) {
     return refreshInFlight;
   }
@@ -50,7 +121,7 @@ async function refresh() {
   }
 }
 
-async function refreshLatestModel() {
+async function refreshLatestModel(): Promise<PopupModel | null> {
   try {
     const [activeTab] = await chrome.tabs.query({
       active: true,
@@ -67,13 +138,14 @@ async function refreshLatestModel() {
     render(response);
     return response;
   } catch (error) {
-    elements.currentTabStatus.textContent = error.message;
-    elements.issueValue.textContent = error.message;
+    const message = getErrorMessage(error);
+    elements.currentTabStatus.textContent = message;
+    elements.issueValue.textContent = message;
     return null;
   }
 }
 
-function wireEvents() {
+function wireEvents(): void {
   elements.bindAButton.addEventListener("click", () => {
     void perform({
       type: MESSAGE_TYPES.SET_BINDING,
@@ -104,12 +176,12 @@ function wireEvents() {
   elements.starterSelect.addEventListener("change", () => {
     void perform({
       type: MESSAGE_TYPES.SET_STARTER,
-      role: elements.starterSelect.value
+      role: elements.starterSelect.value as BridgeRole
     });
   });
 
   elements.overrideSelect.addEventListener("change", () => {
-    const role = elements.overrideSelect.value || null;
+    const role = toNullableRole(elements.overrideSelect.value);
     void perform({
       type: MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE,
       role
@@ -164,16 +236,16 @@ function wireEvents() {
   });
 }
 
-async function perform(message) {
+async function perform(message: PopupActionMessage): Promise<void> {
   try {
     await sendMessage(message);
     await refresh();
   } catch (error) {
-    elements.issueValue.textContent = error.message;
+    elements.issueValue.textContent = getErrorMessage(error);
   }
 }
 
-function render(model) {
+function render(model: PopupModel): void {
   const { state, currentTab, controls, display, overlaySettings } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = state.phase;
@@ -212,7 +284,7 @@ function render(model) {
   elements.overrideSelect.disabled = !controls.canSetOverride;
 }
 
-async function copyDebugSnapshot() {
+async function copyDebugSnapshot(): Promise<void> {
   const latestModel = (await refresh()) ?? currentModel;
   if (!latestModel) {
     return;
@@ -237,7 +309,7 @@ async function copyDebugSnapshot() {
   }
 }
 
-function buildDebugSnapshot(model) {
+function buildDebugSnapshot(model: PopupModel): string {
   const { state, currentTab, display } = model;
 
   return [
@@ -257,7 +329,7 @@ function buildDebugSnapshot(model) {
   ].join("\n");
 }
 
-function summarizeBinding(binding) {
+function summarizeBinding(binding: RuntimeState["bindings"][BridgeRole]): string {
   if (!binding) {
     return "Unbound";
   }
@@ -266,15 +338,15 @@ function summarizeBinding(binding) {
   return `${binding.title || label} (#${binding.tabId})`;
 }
 
-async function sendMessage(message) {
-  const response = await chrome.runtime.sendMessage(message);
+async function sendMessage<T extends PopupMessage>(message: T): Promise<PopupMessageResult<T>> {
+  const response = await chrome.runtime.sendMessage(message) as RuntimeResponse<PopupMessageResult<T>>;
   if (!response.ok) {
     throw new Error(response.error);
   }
   return response.result;
 }
 
-function startAutoRefresh() {
+function startAutoRefresh(): void {
   if (refreshTimerId !== null) {
     return;
   }
@@ -289,4 +361,21 @@ function startAutoRefresh() {
       refreshTimerId = null;
     }
   }, { once: true });
+}
+
+function requireElement<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`Missing required popup element: ${selector}`);
+  }
+
+  return element;
+}
+
+function toNullableRole(value: string): BridgeRole | null {
+  return value === "A" || value === "B" ? value : null;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

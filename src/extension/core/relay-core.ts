@@ -1,13 +1,43 @@
-import { DEFAULT_SETTINGS, otherRole } from "./constants.mjs";
+import { DEFAULT_SETTINGS, otherRole } from "./constants.ts";
+import type {
+  BridgeDirective,
+  BridgeRole,
+  PostHopGuardResult,
+  PreSendGuardResult,
+  RelayGuardReason,
+  StopReason
+} from "../shared/types.js";
 
-export function normalizeAssistantText(value) {
+interface RelayEnvelopeInput {
+  sourceRole: BridgeRole;
+  round: number;
+  message: unknown;
+  continueMarker?: string;
+  bridgeStatePrefix?: string;
+}
+
+interface PreSendGuardInput {
+  sourceText: unknown;
+  sourceHash?: string | null;
+  lastForwardedSourceHash?: string | null;
+  stopMarker?: string;
+}
+
+interface PostHopGuardInput {
+  assistantText: unknown;
+  round: number;
+  maxRounds: number;
+  stopMarker?: string;
+}
+
+export function normalizeAssistantText(value: unknown): string {
   return String(value ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\u00a0/g, " ")
     .trim();
 }
 
-export function hashText(value) {
+export function hashText(value: unknown): string {
   const text = normalizeAssistantText(value);
   let hash = 2166136261;
 
@@ -25,7 +55,7 @@ export function buildRelayEnvelope({
   message,
   continueMarker = DEFAULT_SETTINGS.continueMarker,
   bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
-}) {
+}: RelayEnvelopeInput): string {
   return [
     "[BRIDGE_CONTEXT]",
     `source: ${sourceRole}`,
@@ -42,14 +72,22 @@ export function buildRelayEnvelope({
   ].join("\n");
 }
 
-export function parseBridgeDirective(text, prefix = DEFAULT_SETTINGS.bridgeStatePrefix) {
+export function parseBridgeDirective(
+  text: unknown,
+  prefix = DEFAULT_SETTINGS.bridgeStatePrefix
+): BridgeDirective | null {
+  void prefix;
+
   const normalized = normalizeAssistantText(text);
-  const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = lines[index].match(/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i);
+    const match = lines[index]?.match(/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i);
     if (match) {
-      return match[1].toUpperCase();
+      return match[1].toUpperCase() as BridgeDirective;
     }
   }
 
@@ -61,7 +99,7 @@ export function evaluatePreSendGuard({
   sourceHash,
   lastForwardedSourceHash,
   stopMarker = DEFAULT_SETTINGS.stopMarker
-}) {
+}: PreSendGuardInput): PreSendGuardResult {
   const normalized = normalizeAssistantText(sourceText);
 
   if (!normalized) {
@@ -100,7 +138,7 @@ export function evaluatePostHopGuard({
   round,
   maxRounds,
   stopMarker = DEFAULT_SETTINGS.stopMarker
-}) {
+}: PostHopGuardInput): PostHopGuardResult {
   if (parseBridgeDirective(assistantText) === stopMarker) {
     return {
       shouldStop: true,
@@ -121,7 +159,9 @@ export function evaluatePostHopGuard({
   };
 }
 
-export function guardReasonToStopReason(reason) {
+export function guardReasonToStopReason(
+  reason: RelayGuardReason | string | null | undefined
+): StopReason {
   switch (reason) {
     case "stop_marker":
       return "stop_marker";
@@ -134,6 +174,6 @@ export function guardReasonToStopReason(reason) {
   }
 }
 
-export function formatNextHop(sourceRole) {
+export function formatNextHop(sourceRole: BridgeRole): string {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
 }

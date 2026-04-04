@@ -1,4 +1,4 @@
-// core/constants.mjs
+// core/constants.ts
 var ROLE_A = "A";
 var ROLE_B = "B";
 var ROLES = Object.freeze([ROLE_A, ROLE_B]);
@@ -62,32 +62,32 @@ var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
   position: null
 });
 
-// popup.mjs
+// popup.ts
 var REFRESH_INTERVAL_MS = 1e3;
 var elements = {
-  phaseBadge: document.querySelector("#phaseBadge"),
-  currentTabStatus: document.querySelector("#currentTabStatus"),
-  bindAButton: document.querySelector("#bindAButton"),
-  bindBButton: document.querySelector("#bindBButton"),
-  unbindCurrentButton: document.querySelector("#unbindCurrentButton"),
-  bindingA: document.querySelector("#bindingA"),
-  bindingB: document.querySelector("#bindingB"),
-  overlayEnabledCheckbox: document.querySelector("#overlayEnabledCheckbox"),
-  resetOverlayPositionButton: document.querySelector("#resetOverlayPositionButton"),
-  starterSelect: document.querySelector("#starterSelect"),
-  overrideSelect: document.querySelector("#overrideSelect"),
-  startButton: document.querySelector("#startButton"),
-  pauseButton: document.querySelector("#pauseButton"),
-  resumeButton: document.querySelector("#resumeButton"),
-  stopButton: document.querySelector("#stopButton"),
-  clearTerminalButton: document.querySelector("#clearTerminalButton"),
-  copyDebugButton: document.querySelector("#copyDebugButton"),
-  roundValue: document.querySelector("#roundValue"),
-  nextHopValue: document.querySelector("#nextHopValue"),
-  currentStepValue: document.querySelector("#currentStepValue"),
-  transportValue: document.querySelector("#transportValue"),
-  selectorValue: document.querySelector("#selectorValue"),
-  issueValue: document.querySelector("#issueValue")
+  phaseBadge: requireElement("#phaseBadge"),
+  currentTabStatus: requireElement("#currentTabStatus"),
+  bindAButton: requireElement("#bindAButton"),
+  bindBButton: requireElement("#bindBButton"),
+  unbindCurrentButton: requireElement("#unbindCurrentButton"),
+  bindingA: requireElement("#bindingA"),
+  bindingB: requireElement("#bindingB"),
+  overlayEnabledCheckbox: requireElement("#overlayEnabledCheckbox"),
+  resetOverlayPositionButton: requireElement("#resetOverlayPositionButton"),
+  starterSelect: requireElement("#starterSelect"),
+  overrideSelect: requireElement("#overrideSelect"),
+  startButton: requireElement("#startButton"),
+  pauseButton: requireElement("#pauseButton"),
+  resumeButton: requireElement("#resumeButton"),
+  stopButton: requireElement("#stopButton"),
+  clearTerminalButton: requireElement("#clearTerminalButton"),
+  copyDebugButton: requireElement("#copyDebugButton"),
+  roundValue: requireElement("#roundValue"),
+  nextHopValue: requireElement("#nextHopValue"),
+  currentStepValue: requireElement("#currentStepValue"),
+  transportValue: requireElement("#transportValue"),
+  selectorValue: requireElement("#selectorValue"),
+  issueValue: requireElement("#issueValue")
 };
 var currentTabId = null;
 var currentModel = null;
@@ -122,8 +122,9 @@ async function refreshLatestModel() {
     render(response);
     return response;
   } catch (error) {
-    elements.currentTabStatus.textContent = error.message;
-    elements.issueValue.textContent = error.message;
+    const message = getErrorMessage(error);
+    elements.currentTabStatus.textContent = message;
+    elements.issueValue.textContent = message;
     return null;
   }
 }
@@ -158,7 +159,7 @@ function wireEvents() {
     });
   });
   elements.overrideSelect.addEventListener("change", () => {
-    const role = elements.overrideSelect.value || null;
+    const role = toNullableRole(elements.overrideSelect.value);
     void perform({
       type: MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE,
       role
@@ -209,7 +210,7 @@ async function perform(message) {
     await sendMessage(message);
     await refresh();
   } catch (error) {
-    elements.issueValue.textContent = error.message;
+    elements.issueValue.textContent = getErrorMessage(error);
   }
 }
 function render(model) {
@@ -312,4 +313,17 @@ function startAutoRefresh() {
       refreshTimerId = null;
     }
   }, { once: true });
+}
+function requireElement(selector) {
+  const element = document.querySelector(selector);
+  if (!element) {
+    throw new Error(`Missing required popup element: ${selector}`);
+  }
+  return element;
+}
+function toNullableRole(value) {
+  return value === "A" || value === "B" ? value : null;
+}
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -1,4 +1,4 @@
-// core/background-helpers.mjs
+// core/background-helpers.ts
 function shouldKeepBindingForUrlChange(binding, nextUrlInfo) {
   if (!binding?.urlInfo?.supported || !nextUrlInfo?.supported) {
     return false;
@@ -13,7 +13,7 @@ function collectOverlaySyncTabIds(previousState, nextState) {
     }
     for (const role of ["A", "B"]) {
       const tabId = state.bindings[role]?.tabId;
-      if (tabId) {
+      if (tabId !== void 0 && tabId !== null) {
         tabIds.add(tabId);
       }
     }
@@ -21,7 +21,7 @@ function collectOverlaySyncTabIds(previousState, nextState) {
   return Array.from(tabIds);
 }
 
-// core/chatgpt-url.mjs
+// core/chatgpt-url.ts
 var REGULAR_THREAD_RE = /^https:\/\/chatgpt\.com\/c\/([^/?#]+)(?:[/?#].*)?$/;
 var PROJECT_THREAD_RE = /^https:\/\/chatgpt\.com\/g\/([^/?#]+)\/c\/([^/?#]+)(?:[/?#].*)?$/;
 function parseChatGptThreadUrl(rawUrl) {
@@ -61,7 +61,7 @@ function unsupported(rawUrl, reason) {
   };
 }
 
-// core/constants.mjs
+// core/constants.ts
 var APP_STATE_KEY = "chatgptBridgeRuntimeState";
 var OVERLAY_SETTINGS_KEY = "chatgptBridgeOverlaySettings";
 var ROLE_A = "A";
@@ -130,7 +130,7 @@ function otherRole(role) {
   return role === ROLE_A ? ROLE_B : ROLE_A;
 }
 
-// core/state-machine.mjs
+// core/state-machine.ts
 function createInitialState() {
   return {
     phase: PHASES.IDLE,
@@ -418,13 +418,38 @@ function toError(state, reason) {
   return state;
 }
 function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
+  return {
+    ...state,
+    bindings: {
+      A: state.bindings.A ? { ...state.bindings.A } : null,
+      B: state.bindings.B ? { ...state.bindings.B } : null
+    },
+    settings: {
+      ...state.settings
+    },
+    lastCompletedHop: state.lastCompletedHop ? { ...state.lastCompletedHop } : null,
+    lastForwardedHashes: {
+      ...state.lastForwardedHashes
+    },
+    lastAssistantHashes: {
+      ...state.lastAssistantHashes
+    },
+    runtimeActivity: {
+      ...state.runtimeActivity
+    }
+  };
 }
 function isBindingValid(binding) {
   return Boolean(binding?.tabId && binding?.urlInfo?.supported);
 }
+function isBridgeRole(value) {
+  return value === ROLE_A || value === ROLE_B;
+}
+function isTabId(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
 function normalizeBinding(binding) {
-  if (!binding) {
+  if (!binding || !isBridgeRole(binding.role) || !isTabId(binding.tabId)) {
     return null;
   }
   return {
@@ -447,7 +472,7 @@ function hasBindingConflict(state, role, candidateBinding) {
   return siblingBinding.tabId === candidateBinding.tabId || siblingBinding.urlInfo?.normalizedUrl === candidateBinding.urlInfo?.normalizedUrl;
 }
 
-// core/relay-core.mjs
+// core/relay-core.ts
 function normalizeAssistantText(value) {
   return String(value ?? "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
 }
@@ -483,10 +508,11 @@ function buildRelayEnvelope({
   ].join("\n");
 }
 function parseBridgeDirective(text, prefix = DEFAULT_SETTINGS.bridgeStatePrefix) {
+  void prefix;
   const normalized = normalizeAssistantText(text);
   const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = lines[index].match(/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i);
+    const match = lines[index]?.match(/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i);
     if (match) {
       return match[1].toUpperCase();
     }
@@ -566,7 +592,7 @@ function formatNextHop(sourceRole) {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
 }
 
-// core/popup-model.mjs
+// core/popup-model.ts
 function deriveControls(state) {
   return {
     canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state),
@@ -590,7 +616,7 @@ function buildDisplay(state) {
   };
 }
 
-// core/overlay-settings.mjs
+// core/overlay-settings.ts
 function normalizeOverlaySettings(input) {
   const position = normalizePosition(input?.position);
   return {
@@ -606,16 +632,17 @@ function mergeOverlaySettings(current, patch) {
   });
 }
 function normalizePosition(position) {
-  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+  const pos = position;
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
     return null;
   }
   return {
-    x: Math.max(0, Math.round(position.x)),
-    y: Math.max(0, Math.round(position.y))
+    x: Math.max(0, Math.round(pos.x)),
+    y: Math.max(0, Math.round(pos.y))
   };
 }
 
-// background.mjs
+// background.ts
 var activeLoopToken = 0;
 var keepAlivePorts = /* @__PURE__ */ new Set();
 chrome.runtime.onInstalled.addListener(async () => {
@@ -667,10 +694,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   };
   await persistState(nextState, state);
 });
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  void handleMessage(message, sender).then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message }));
-  return true;
-});
+chrome.runtime.onMessage.addListener(
+  (message, sender, sendResponse) => {
+    void handleMessage(message, sender).then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
+);
 async function handleMessage(message, sender) {
   switch (message?.type) {
     case MESSAGE_TYPES.GET_RUNTIME_STATE:
@@ -680,9 +709,9 @@ async function handleMessage(message, sender) {
     case MESSAGE_TYPES.GET_OVERLAY_MODEL:
       return getOverlayModel(sender.tab?.id ?? null);
     case MESSAGE_TYPES.SET_BINDING:
-      return bindTabToRole(message.role, message.tabId ?? sender.tab?.id);
+      return bindTabToRole(message.role, message.tabId ?? sender.tab?.id ?? null);
     case MESSAGE_TYPES.CLEAR_BINDING:
-      return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id));
+      return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id ?? null));
     case MESSAGE_TYPES.SET_STARTER:
       return updateState({ type: "set_starter", role: message.role });
     case MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE:
@@ -692,13 +721,9 @@ async function handleMessage(message, sender) {
     case MESSAGE_TYPES.SET_OVERLAY_COLLAPSED:
       return updateOverlaySettings({ collapsed: Boolean(message.collapsed) });
     case MESSAGE_TYPES.SET_OVERLAY_POSITION:
-      return updateOverlaySettings({
-        position: message.position ?? null
-      });
+      return updateOverlaySettings({ position: message.position ?? null });
     case MESSAGE_TYPES.RESET_OVERLAY_POSITION:
-      return updateOverlaySettings({
-        position: null
-      });
+      return updateOverlaySettings({ position: null });
     case MESSAGE_TYPES.START_SESSION:
       return startSession();
     case MESSAGE_TYPES.PAUSE_SESSION:
@@ -719,25 +744,20 @@ async function handleMessage(message, sender) {
   }
 }
 async function initializeState() {
-  const current = await chrome.storage.session.get(APP_STATE_KEY);
-  if (!current[APP_STATE_KEY]) {
-    await chrome.storage.session.set({
-      [APP_STATE_KEY]: createInitialState()
-    });
+  const current = await getSessionValue(APP_STATE_KEY);
+  if (!current) {
+    await setSessionValue(APP_STATE_KEY, createInitialState());
   }
 }
 async function initializeOverlaySettings() {
-  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
-  if (!payload[OVERLAY_SETTINGS_KEY]) {
-    await chrome.storage.local.set({
-      [OVERLAY_SETTINGS_KEY]: DEFAULT_OVERLAY_SETTINGS
-    });
+  const current = await getLocalValue(OVERLAY_SETTINGS_KEY);
+  if (!current) {
+    await setLocalValue(OVERLAY_SETTINGS_KEY, DEFAULT_OVERLAY_SETTINGS);
   }
 }
 async function getState() {
   await initializeState();
-  const payload = await chrome.storage.session.get(APP_STATE_KEY);
-  const state = payload[APP_STATE_KEY] ?? createInitialState();
+  const state = await getSessionValue(APP_STATE_KEY) ?? createInitialState();
   state.settings = {
     ...DEFAULT_SETTINGS,
     ...state.settings
@@ -746,15 +766,14 @@ async function getState() {
 }
 async function getOverlaySettings() {
   await initializeOverlaySettings();
-  const payload = await chrome.storage.local.get(OVERLAY_SETTINGS_KEY);
-  return normalizeOverlaySettings(payload[OVERLAY_SETTINGS_KEY] ?? DEFAULT_OVERLAY_SETTINGS);
+  return normalizeOverlaySettings(
+    await getLocalValue(OVERLAY_SETTINGS_KEY) ?? DEFAULT_OVERLAY_SETTINGS
+  );
 }
 async function updateOverlaySettings(patch) {
   const currentSettings = await getOverlaySettings();
   const nextSettings = mergeOverlaySettings(currentSettings, patch);
-  await chrome.storage.local.set({
-    [OVERLAY_SETTINGS_KEY]: nextSettings
-  });
+  await setLocalValue(OVERLAY_SETTINGS_KEY, nextSettings);
   const state = await getState();
   await broadcastOverlayState(state, null, true, nextSettings);
   return {
@@ -763,9 +782,7 @@ async function updateOverlaySettings(patch) {
   };
 }
 async function persistState(nextState, previousState = null) {
-  await chrome.storage.session.set({
-    [APP_STATE_KEY]: nextState
-  });
+  await setSessionValue(APP_STATE_KEY, nextState);
   await broadcastOverlayState(nextState, previousState);
   return nextState;
 }
@@ -778,7 +795,7 @@ async function updateState(event) {
   return persistState(next, current);
 }
 async function bindTabToRole(role, tabId) {
-  if (!ROLES.includes(role) || !tabId) {
+  if (!isBridgeRole2(role) || !tabId) {
     throw new Error("A valid role and tab id are required.");
   }
   const state = await getState();
@@ -799,7 +816,7 @@ async function bindTabToRole(role, tabId) {
     role,
     binding: {
       role,
-      tabId: tab.id,
+      tabId: tab.id ?? tabId,
       title: tab.title ?? "",
       url: tab.url ?? "",
       urlInfo,
@@ -808,7 +825,7 @@ async function bindTabToRole(role, tabId) {
   });
 }
 async function clearBinding(role) {
-  if (!ROLES.includes(role)) {
+  if (!isBridgeRole2(role)) {
     throw new Error("A valid role is required.");
   }
   return updateState({
@@ -961,7 +978,7 @@ async function runRelayLoop(token, settings) {
     if (token !== activeLoopToken) {
       return;
     }
-    if (settled.reason === STOP_REASONS.HOP_TIMEOUT) {
+    if ("reason" in settled && settled.reason === STOP_REASONS.HOP_TIMEOUT) {
       await updateState({
         type: "stop_condition",
         reason: STOP_REASONS.HOP_TIMEOUT
@@ -998,6 +1015,9 @@ async function runRelayLoop(token, settings) {
   }
 }
 async function ensureRunnableBinding(role, binding) {
+  if (!binding) {
+    return null;
+  }
   try {
     const tab = await chrome.tabs.get(binding.tabId);
     const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
@@ -1025,7 +1045,7 @@ async function requestAssistantSnapshot(tabId) {
   } catch (error) {
     return {
       ok: false,
-      error: error.message
+      error: getErrorMessage(error)
     };
   }
 }
@@ -1044,11 +1064,16 @@ async function sendRelayMessage(tabId, text) {
   } catch (error) {
     return {
       ok: false,
-      error: error.message
+      error: getErrorMessage(error)
     };
   }
 }
-async function waitForSettledReply({ tabId, baselineHash, settings, token }) {
+async function waitForSettledReply({
+  tabId,
+  baselineHash,
+  settings,
+  token
+}) {
   const startedAt = Date.now();
   let stableHash = null;
   let stableCount = 0;
@@ -1094,7 +1119,7 @@ async function getPopupModel(activeTabId) {
     title: currentTab.title ?? "",
     url: currentTab.url ?? "",
     urlInfo: parseChatGptThreadUrl(currentTab.url ?? ""),
-    assignedRole: findRoleByTabId(state, currentTab.id)
+    assignedRole: findRoleByTabId(state, currentTab.id ?? null)
   } : null;
   return {
     state,
@@ -1107,18 +1132,7 @@ async function getPopupModel(activeTabId) {
 async function getOverlayModel(tabId) {
   const state = await getState();
   const overlaySettings = await getOverlaySettings();
-  const assignedRole = findRoleByTabId(state, tabId);
-  return {
-    phase: state.phase,
-    round: state.round,
-    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
-    requiresTerminalClear: state.requiresTerminalClear,
-    assignedRole,
-    starter: state.starter,
-    controls: deriveControls(state),
-    display: buildDisplay(state),
-    overlaySettings
-  };
+  return buildOverlaySnapshot(state, tabId, overlaySettings);
 }
 async function safeGetTab(tabId) {
   try {
@@ -1145,17 +1159,7 @@ async function broadcastOverlayState(state, previousState = null, broadcastAllCh
       try {
         await chrome.tabs.sendMessage(tabId, {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
-          snapshot: {
-            phase: state.phase,
-            round: state.round,
-            nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
-            requiresTerminalClear: state.requiresTerminalClear,
-            assignedRole: findRoleByTabId(state, tabId),
-            starter: state.starter,
-            controls: deriveControls(state),
-            display: buildDisplay(state),
-            overlaySettings: nextOverlaySettings
-          }
+          snapshot: buildOverlaySnapshot(state, tabId, nextOverlaySettings)
         });
       } catch {
         return null;
@@ -1163,6 +1167,19 @@ async function broadcastOverlayState(state, previousState = null, broadcastAllCh
       return null;
     })
   );
+}
+function buildOverlaySnapshot(state, tabId, overlaySettings) {
+  return {
+    phase: state.phase,
+    round: state.round,
+    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+    requiresTerminalClear: state.requiresTerminalClear,
+    assignedRole: findRoleByTabId(state, tabId),
+    starter: state.starter,
+    controls: deriveControls(state),
+    display: buildDisplay(state),
+    overlaySettings
+  };
 }
 function findRoleByTabId(state, tabId) {
   if (!tabId) {
@@ -1172,12 +1189,39 @@ function findRoleByTabId(state, tabId) {
     return ROLE_A;
   }
   if (state.bindings.B?.tabId === tabId) {
-    return "B";
+    return ROLE_B;
   }
   return null;
 }
 function mapGuardReasonToStop(reason) {
   return guardReasonToStopReason(reason);
+}
+function isBridgeRole2(role) {
+  return typeof role === "string" && ROLES.includes(role);
+}
+async function getSessionValue(key) {
+  const payload = await chrome.storage.session.get(key);
+  return payload[key] ?? null;
+}
+async function setSessionValue(key, value) {
+  await chrome.storage.session.set({
+    [key]: value
+  });
+}
+async function getLocalValue(key) {
+  const payload = await chrome.storage.local.get(key);
+  return payload[key] ?? null;
+}
+async function setLocalValue(key, value) {
+  await chrome.storage.local.set({
+    [key]: value
+  });
+}
+function getErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error ?? "unknown_error");
 }
 function sleep(durationMs) {
   return new Promise((resolve) => {

@@ -7,8 +7,11 @@ const distRoot = path.resolve(process.cwd(), "dist/extension");
 const staticAssets = ["manifest.json", "popup.html", "popup.css", "overlay.css"];
 const outputFilesBySource = new Map([
   ["background.mjs", "background.js"],
-  ["popup.mjs", "popup.js"],
+  ["background.ts", "background.js"],
+  ["popup.ts", "popup.js"],
+  ["content-script.ts", "content-script.js"],
   ["content-script.js", "content-script.js"],
+  ["content-helpers.ts", "content-helpers.js"],
   ["content-helpers.js", "content-helpers.js"]
 ]);
 
@@ -32,10 +35,10 @@ async function buildRuntimeScripts() {
   await build({
     absWorkingDir: extensionRoot,
     entryPoints: [
-      { in: "background.mjs", out: "background" },
-      { in: "popup.mjs", out: "popup" },
-      { in: "content-script.js", out: "content-script" },
-      { in: "content-helpers.js", out: "content-helpers" }
+      { in: "background.ts", out: "background" },
+      { in: "popup.ts", out: "popup" },
+      { in: "content-script.ts", out: "content-script" },
+      { in: "content-helpers.ts", out: "content-helpers" }
     ],
     outdir: distRoot,
     bundle: true,

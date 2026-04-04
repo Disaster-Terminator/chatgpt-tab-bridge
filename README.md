@@ -123,17 +123,12 @@
 - 扩展入口：
   - [`dist/extension/manifest.json`](/home/raystorm/projects/meta/dist/extension/manifest.json)
 - 后台逻辑：
-  - [`dist/extension/background.mjs`](/home/raystorm/projects/meta/dist/extension/background.mjs)
+  - [`dist/extension/background.js`](/home/raystorm/projects/meta/dist/extension/background.js)
 - 页面注入：
   - [`dist/extension/content-script.js`](/home/raystorm/projects/meta/dist/extension/content-script.js)
 - Popup：
   - [`dist/extension/popup.html`](/home/raystorm/projects/meta/dist/extension/popup.html)
-  - [`dist/extension/popup.mjs`](/home/raystorm/projects/meta/dist/extension/popup.mjs)
-- 核心状态与协议：
-  - [`dist/extension/core/state-machine.mjs`](/home/raystorm/projects/meta/dist/extension/core/state-machine.mjs)
-  - [`dist/extension/core/popup-model.mjs`](/home/raystorm/projects/meta/dist/extension/core/popup-model.mjs)
-  - [`dist/extension/core/relay-core.mjs`](/home/raystorm/projects/meta/dist/extension/core/relay-core.mjs)
-  - [`dist/extension/core/chatgpt-url.mjs`](/home/raystorm/projects/meta/dist/extension/core/chatgpt-url.mjs)
+  - [`dist/extension/popup.js`](/home/raystorm/projects/meta/dist/extension/popup.js)
 
 ## 本地命令
 

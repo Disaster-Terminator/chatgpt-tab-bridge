@@ -1,7 +1,8 @@
-import { PHASES } from "./constants.mjs";
-import { canWriteOverride, hasValidBindings } from "./state-machine.mjs";
+import { PHASES } from "./constants.ts";
+import { canWriteOverride, hasValidBindings } from "./state-machine.ts";
+import type { PopupControls, RuntimeDisplay, RuntimeState } from "../shared/types.js";
 
-export function deriveControls(state) {
+export function deriveControls(state: RuntimeState): PopupControls {
   return {
     canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state),
     canPause: state.phase === PHASES.RUNNING,
@@ -13,7 +14,7 @@ export function deriveControls(state) {
   };
 }
 
-export function buildDisplay(state) {
+export function buildDisplay(state: RuntimeState): RuntimeDisplay {
   const sourceRole = state.nextHopOverride ?? state.nextHopSource;
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,

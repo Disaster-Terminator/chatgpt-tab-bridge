@@ -3,11 +3,107 @@ import {
   ERROR_REASONS,
   PHASES,
   ROLE_A,
+  ROLE_B,
   STOP_REASONS,
   otherRole
-} from "./constants.mjs";
+} from "./constants.ts";
+import type {
+  BridgeRole,
+  ErrorReason,
+  RuntimeActivity,
+  RuntimeBinding,
+  RuntimePhase,
+  RuntimeState,
+  StopReason
+} from "../shared/types.js";
 
-export function createInitialState() {
+interface SetBindingEvent {
+  type: "set_binding";
+  role: BridgeRole;
+  binding: Partial<RuntimeBinding> | null;
+}
+
+interface InvalidateBindingEvent {
+  type: "invalidate_binding";
+  role: BridgeRole;
+}
+
+interface ClearTerminalEvent {
+  type: "clear_terminal";
+}
+
+interface SetStarterEvent {
+  type: "set_starter";
+  role: BridgeRole;
+}
+
+interface StartEvent {
+  type: "start";
+}
+
+interface PauseEvent {
+  type: "pause";
+}
+
+interface ResumeEvent {
+  type: "resume";
+}
+
+interface StopEvent {
+  type: "stop";
+  reason?: StopReason | null;
+}
+
+interface SetNextHopOverrideEvent {
+  type: "set_next_hop_override";
+  role: BridgeRole | null;
+}
+
+interface HopCompletedEvent {
+  type: "hop_completed";
+  sourceRole: BridgeRole;
+  targetRole?: BridgeRole | null;
+  sourceHash?: string | null;
+  targetHash?: string | null;
+}
+
+interface StopConditionEvent {
+  type: "stop_condition";
+  reason?: StopReason | null;
+}
+
+interface SelectorFailureEvent {
+  type: "selector_failure";
+  reason?: string | null;
+}
+
+interface RuntimeErrorEvent {
+  type: "runtime_error";
+  reason?: string | null;
+}
+
+interface SetRuntimeActivityEvent {
+  type: "set_runtime_activity";
+  activity: Partial<RuntimeActivity>;
+}
+
+export type RuntimeStateEvent =
+  | SetBindingEvent
+  | InvalidateBindingEvent
+  | ClearTerminalEvent
+  | SetStarterEvent
+  | StartEvent
+  | PauseEvent
+  | ResumeEvent
+  | StopEvent
+  | SetNextHopOverrideEvent
+  | HopCompletedEvent
+  | StopConditionEvent
+  | SelectorFailureEvent
+  | RuntimeErrorEvent
+  | SetRuntimeActivityEvent;
+
+export function createInitialState(): RuntimeState {
   return {
     phase: PHASES.IDLE,
     bindings: {
@@ -48,7 +144,10 @@ export function createInitialState() {
   };
 }
 
-export function reduceState(currentState, event) {
+export function reduceState(
+  currentState: RuntimeState | null | undefined,
+  event: RuntimeStateEvent
+): RuntimeState {
   const state = cloneState(currentState ?? createInitialState());
   state.updatedAt = new Date().toISOString();
 
@@ -86,19 +185,19 @@ export function reduceState(currentState, event) {
   }
 }
 
-export function canWriteOverride(state) {
+export function canWriteOverride(state: RuntimeState): boolean {
   return state.phase === PHASES.PAUSED;
 }
 
-export function hasValidBindings(state) {
+export function hasValidBindings(state: RuntimeState): boolean {
   return isBindingValid(state.bindings.A) && isBindingValid(state.bindings.B);
 }
 
-export function isTerminalPhase(phase) {
+export function isTerminalPhase(phase: RuntimePhase): boolean {
   return phase === PHASES.STOPPED || phase === PHASES.ERROR;
 }
 
-function reduceSetBinding(state, event) {
+function reduceSetBinding(state: RuntimeState, event: SetBindingEvent): RuntimeState {
   if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
     return state;
   }
@@ -119,7 +218,7 @@ function reduceSetBinding(state, event) {
   return state;
 }
 
-function reduceInvalidateBinding(state, event) {
+function reduceInvalidateBinding(state: RuntimeState, event: InvalidateBindingEvent): RuntimeState {
   state.bindings[event.role] = null;
 
   if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
@@ -139,7 +238,7 @@ function reduceInvalidateBinding(state, event) {
   return state;
 }
 
-function reduceClearTerminal(state) {
+function reduceClearTerminal(state: RuntimeState): RuntimeState {
   if (!isTerminalPhase(state.phase)) {
     return state;
   }
@@ -153,7 +252,7 @@ function reduceClearTerminal(state) {
   return state;
 }
 
-function reduceSetStarter(state, event) {
+function reduceSetStarter(state: RuntimeState, event: SetStarterEvent): RuntimeState {
   if (state.phase === PHASES.RUNNING) {
     return state;
   }
@@ -167,7 +266,7 @@ function reduceSetStarter(state, event) {
   return state;
 }
 
-function reduceStart(state) {
+function reduceStart(state: RuntimeState): RuntimeState {
   if (state.phase !== PHASES.READY || !hasValidBindings(state) || state.requiresTerminalClear) {
     return state;
   }
@@ -205,7 +304,7 @@ function reduceStart(state) {
   return state;
 }
 
-function reducePause(state) {
+function reducePause(state: RuntimeState): RuntimeState {
   if (state.phase !== PHASES.RUNNING) {
     return state;
   }
@@ -219,7 +318,7 @@ function reducePause(state) {
   return state;
 }
 
-function reduceResume(state) {
+function reduceResume(state: RuntimeState): RuntimeState {
   if (state.phase !== PHASES.PAUSED || !hasValidBindings(state)) {
     return state;
   }
@@ -241,7 +340,10 @@ function reduceResume(state) {
   return state;
 }
 
-function reduceSetNextHopOverride(state, event) {
+function reduceSetNextHopOverride(
+  state: RuntimeState,
+  event: SetNextHopOverrideEvent
+): RuntimeState {
   if (!canWriteOverride(state)) {
     return state;
   }
@@ -255,7 +357,7 @@ function reduceSetNextHopOverride(state, event) {
   return state;
 }
 
-function reduceHopCompleted(state, event) {
+function reduceHopCompleted(state: RuntimeState, event: HopCompletedEvent): RuntimeState {
   if (state.phase !== PHASES.RUNNING) {
     return state;
   }
@@ -292,7 +394,10 @@ function reduceHopCompleted(state, event) {
   return state;
 }
 
-function reduceSetRuntimeActivity(state, event) {
+function reduceSetRuntimeActivity(
+  state: RuntimeState,
+  event: SetRuntimeActivityEvent
+): RuntimeState {
   state.runtimeActivity = {
     ...state.runtimeActivity,
     ...event.activity,
@@ -301,7 +406,7 @@ function reduceSetRuntimeActivity(state, event) {
   return state;
 }
 
-function toStopped(state, reason) {
+function toStopped(state: RuntimeState, reason: StopReason): RuntimeState {
   if (state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED) {
     return state;
   }
@@ -319,7 +424,7 @@ function toStopped(state, reason) {
   return state;
 }
 
-function toError(state, reason) {
+function toError(state: RuntimeState, reason: ErrorReason | string): RuntimeState {
   if (
     state.phase !== PHASES.RUNNING &&
     state.phase !== PHASES.PAUSED &&
@@ -342,16 +447,43 @@ function toError(state, reason) {
   return state;
 }
 
-function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
+function cloneState(state: RuntimeState): RuntimeState {
+  return {
+    ...state,
+    bindings: {
+      A: state.bindings.A ? { ...state.bindings.A } : null,
+      B: state.bindings.B ? { ...state.bindings.B } : null
+    },
+    settings: {
+      ...state.settings
+    },
+    lastCompletedHop: state.lastCompletedHop ? { ...state.lastCompletedHop } : null,
+    lastForwardedHashes: {
+      ...state.lastForwardedHashes
+    },
+    lastAssistantHashes: {
+      ...state.lastAssistantHashes
+    },
+    runtimeActivity: {
+      ...state.runtimeActivity
+    }
+  };
 }
 
-function isBindingValid(binding) {
+function isBindingValid(binding: RuntimeBinding | null | undefined): boolean {
   return Boolean(binding?.tabId && binding?.urlInfo?.supported);
 }
 
-function normalizeBinding(binding) {
-  if (!binding) {
+function isBridgeRole(value: unknown): value is BridgeRole {
+  return value === ROLE_A || value === ROLE_B;
+}
+
+function isTabId(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): RuntimeBinding | null {
+  if (!binding || !isBridgeRole(binding.role) || !isTabId(binding.tabId)) {
     return null;
   }
 
@@ -365,7 +497,11 @@ function normalizeBinding(binding) {
   };
 }
 
-function hasBindingConflict(state, role, candidateBinding) {
+function hasBindingConflict(
+  state: RuntimeState,
+  role: BridgeRole,
+  candidateBinding: RuntimeBinding | null
+): boolean {
   if (!candidateBinding) {
     return false;
   }
