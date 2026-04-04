@@ -24,6 +24,15 @@ import type {
 
 const REFRESH_INTERVAL_MS = 1000;
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Operation timed out")), timeoutMs)
+    )
+  ]);
+}
+
 interface PopupElements {
   phaseBadge: HTMLElement;
   currentTabStatus: HTMLElement;
@@ -328,10 +337,25 @@ function render(model: PopupModel): void {
 async function copyDebugSnapshot(): Promise<void> {
   const latestModel = (await refresh()) ?? currentModel;
   if (!latestModel) {
+    elements.issueValue.textContent = "No data available";
     return;
   }
 
-  const ackDebug = await chrome.tabs.sendMessage(currentTabId!, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }).catch(() => null);
+  if (!currentTabId) {
+    elements.issueValue.textContent = getPopupCopy(currentLocale).unsupportedTab;
+    return;
+  }
+
+  let ackDebug: any = null;
+  try {
+    ackDebug = await withTimeout(
+      chrome.tabs.sendMessage(currentTabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
+      5000
+    );
+  } catch (error) {
+    console.warn("Failed to fetch ack debug:", error);
+  }
+
   const payload = buildDebugSnapshot(latestModel, ackDebug);
 
   try {
@@ -423,7 +447,10 @@ function startAutoRefresh(): void {
   }
 
   refreshTimerId = window.setInterval(() => {
-    void refresh();
+    void refresh().catch((error) => {
+      console.error("Refresh failed:", error);
+      // Don't let errors stop the refresh cycle
+    });
   }, REFRESH_INTERVAL_MS);
 
   window.addEventListener("beforeunload", () => {
