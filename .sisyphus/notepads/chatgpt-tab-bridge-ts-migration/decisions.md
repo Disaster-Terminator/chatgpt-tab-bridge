@@ -16,3 +16,7 @@
 ## 2026-04-04 (F2)
 - Kept `normalizeBinding()` conservative: invalid role/tab payloads now return `null` instead of relying on unchecked casts, preserving the existing invalid-binding path in the reducer.
 - Added warning logs to the two previously empty content-script catches so transient runtime issues are still ignored functionally but no longer disappear silently during debugging.
+
+## 2026-04-04 (typecheck cleanup pass)
+- Exported Chrome ambient helper interfaces from `shared/globals.d.ts` and imported `ChromePort`/`ChromeMessageSender`/`ChromeTab` where used to avoid module-scope type visibility gaps.
+- Replaced `innerText` reads in content-script message scraping paths with `textContent` normalization to keep DOM extraction behavior while matching `Element` typings.

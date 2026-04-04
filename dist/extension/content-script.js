@@ -178,7 +178,11 @@ function defaultInputEvent(type, init) {
   if (typeof InputEvent === "function") {
     return new InputEvent(type, init);
   }
-  return { type, ...init };
+  return new Event(type, {
+    bubbles: init.bubbles,
+    cancelable: init.cancelable,
+    composed: init.composed
+  });
 }
 
 // core/constants.ts
@@ -248,6 +252,23 @@ var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
 // content-script.ts
 var overlay = createOverlay();
 var keepAlivePort = connectKeepAlivePort();
+var defaultControls = {
+  canStart: false,
+  canPause: false,
+  canResume: false,
+  canStop: false,
+  canClearTerminal: false,
+  canSetStarter: false,
+  canSetOverride: false
+};
+var defaultDisplay = {
+  nextHop: "A -> B",
+  currentStep: "idle",
+  lastActionAt: null,
+  transport: null,
+  selector: null,
+  lastIssue: "None"
+};
 var overlaySnapshot = {
   phase: "idle",
   round: 0,
@@ -255,8 +276,8 @@ var overlaySnapshot = {
   assignedRole: null,
   requiresTerminalClear: false,
   starter: "A",
-  controls: {},
-  display: {},
+  controls: defaultControls,
+  display: defaultDisplay,
   overlaySettings: {
     enabled: true,
     collapsed: false,
@@ -368,6 +389,9 @@ function bindOverlayEvents() {
   });
   requireOverlayElement("[data-role='starter']").addEventListener("change", (event) => {
     const target = event.target;
+    if (target.value !== "A" && target.value !== "B") {
+      return;
+    }
     void dispatchOverlayAction({
       type: MESSAGE_TYPES.SET_STARTER,
       role: target.value
@@ -387,7 +411,7 @@ async function refreshOverlayModel() {
     const response = await chrome.runtime.sendMessage({
       type: MESSAGE_TYPES.GET_OVERLAY_MODEL
     });
-    const model = response?.ok ? response.result : response;
+    const model = response.ok ? response.result : null;
     if (!model) {
       return;
     }
@@ -553,7 +577,7 @@ function readAssistantSnapshot() {
       error: "assistant_message_not_found"
     };
   }
-  const text = normalizeText(latest.innerText || latest.textContent || "");
+  const text = normalizeText(latest.textContent || "");
   if (!text) {
     return {
       ok: false,
@@ -602,12 +626,22 @@ async function sendRelayMessage(text) {
       composer,
       expectedText: text
     });
+    if (!acknowledgement.ok) {
+      const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
+      return {
+        ok: false,
+        mode: sendResult.mode,
+        applyMode,
+        acknowledgement: acknowledgement.signal,
+        error: acknowledgementError
+      };
+    }
     return {
-      ok: sendResult.ok && acknowledgement.ok,
+      ok: true,
       mode: sendResult.mode,
       applyMode,
       acknowledgement: acknowledgement.signal,
-      error: acknowledgement.ok ? null : acknowledgement.error
+      error: null
     };
   } catch (error) {
     return {
@@ -625,7 +659,7 @@ function findLatestAssistantElement() {
   ];
   for (const selector of selectors) {
     const candidates = Array.from(document.querySelectorAll(selector)).filter(
-      (element) => normalizeText(element.innerText || element.textContent || "")
+      (element) => normalizeText(element.textContent || "")
     );
     if (candidates.length > 0) {
       return candidates[candidates.length - 1];
@@ -696,7 +730,7 @@ function readLatestUserHash() {
   if (!latest) {
     return null;
   }
-  const text = normalizeText(latest.innerText || latest.textContent || "");
+  const text = normalizeText(latest.textContent || "");
   return text ? hashText(text) : null;
 }
 function isGenerationInProgress() {
@@ -713,7 +747,7 @@ function findLatestMessageElement(role) {
   ];
   for (const selector of selectors) {
     const candidates = Array.from(document.querySelectorAll(selector)).filter(
-      (element) => normalizeText(element.innerText || element.textContent || "")
+      (element) => normalizeText(element.textContent || "")
     );
     if (candidates.length > 0) {
       return candidates[candidates.length - 1];

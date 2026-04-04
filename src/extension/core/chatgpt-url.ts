@@ -39,7 +39,7 @@ function unsupported(rawUrl: unknown, reason: string): ChatGptUrlInfo {
     kind: "unsupported",
     projectId: null,
     conversationId: null,
-    normalizedUrl: rawUrl ?? null,
+    normalizedUrl: rawUrl != null ? String(rawUrl) : null,
     reason
   };
 }

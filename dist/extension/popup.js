@@ -296,7 +296,7 @@ function summarizeBinding(binding) {
 async function sendMessage(message) {
   const response = await chrome.runtime.sendMessage(message);
   if (!response.ok) {
-    throw new Error(response.error);
+    throw new Error("error" in response ? response.error : "runtime_message_failed");
   }
   return response.result;
 }

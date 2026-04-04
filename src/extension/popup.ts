@@ -341,7 +341,7 @@ function summarizeBinding(binding: RuntimeState["bindings"][BridgeRole]): string
 async function sendMessage<T extends PopupMessage>(message: T): Promise<PopupMessageResult<T>> {
   const response = await chrome.runtime.sendMessage(message) as RuntimeResponse<PopupMessageResult<T>>;
   if (!response.ok) {
-    throw new Error(response.error);
+    throw new Error("error" in response ? response.error : "runtime_message_failed");
   }
   return response.result;
 }

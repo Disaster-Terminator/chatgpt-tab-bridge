@@ -227,10 +227,14 @@ export function isElementVisible(element: Element | null | undefined): boolean {
   return Boolean(rects && rects.length > 0);
 }
 
-function defaultInputEvent(type: string, init: InputEventInit): InputEvent | (InputEventInit & { type: string }) {
+function defaultInputEvent(type: string, init: InputEventInit): Event {
   if (typeof InputEvent === "function") {
     return new InputEvent(type, init);
   }
 
-  return { type, ...init };
+  return new Event(type, {
+    bubbles: init.bubbles,
+    cancelable: init.cancelable,
+    composed: init.composed
+  });
 }

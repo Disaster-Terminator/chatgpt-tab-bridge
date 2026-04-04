@@ -6,3 +6,6 @@
 
 ## 2026-04-04 (F2)
 - File-level LSP diagnostics are still unavailable in this environment because `typescript-language-server` is not installed; verification relied on `pnpm run build` and `pnpm test` instead.
+
+## 2026-04-04 (typecheck cleanup pass)
+- `lsp_diagnostics` remains unavailable for TypeScript in this environment (`typescript-language-server` missing), so verification used `pnpm run typecheck` as the authoritative check.

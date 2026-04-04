@@ -3,6 +3,8 @@ import type {
   RuntimeMessage
 } from "./types";
 
+export {};
+
 declare global {
   const chrome: ChromeNamespace;
 
@@ -13,9 +15,21 @@ declare global {
   interface GlobalThis {
     ChatGptBridgeContent?: ContentBridgeGlobal;
   }
+
+  interface Element {
+    focus(options?: FocusOptions): void;
+  }
+
+  interface ParentNode {
+    getElementById(id: string): Element | null;
+  }
+
+  interface HTMLElement {
+    innerText: string;
+  }
 }
 
-interface ChromeNamespace {
+export interface ChromeNamespace {
   action: {
     openPopup?: () => Promise<void>;
   };
@@ -27,7 +41,7 @@ interface ChromeNamespace {
   tabs: ChromeTabsApi;
 }
 
-interface ChromeRuntime {
+export interface ChromeRuntime {
   id: string;
   onInstalled: ChromeEvent<() => void>;
   onStartup: ChromeEvent<() => void>;
@@ -37,29 +51,29 @@ interface ChromeRuntime {
   sendMessage<T = unknown>(message: RuntimeMessage): Promise<T>;
 }
 
-type ChromeRuntimeMessageListener = (
+export type ChromeRuntimeMessageListener = (
   message: RuntimeMessage,
   sender: ChromeMessageSender,
   sendResponse: (response?: unknown) => void
 ) => boolean | void;
 
-interface ChromePort {
+export interface ChromePort {
   name: string;
   onDisconnect: ChromeEvent<() => void>;
   onMessage: ChromeEvent<(message: unknown) => void>;
   postMessage(message: unknown): void;
 }
 
-interface ChromeMessageSender {
+export interface ChromeMessageSender {
   tab?: ChromeTab;
 }
 
-interface ChromeStorageArea {
+export interface ChromeStorageArea {
   get(key: string): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
 }
 
-interface ChromeTabsApi {
+export interface ChromeTabsApi {
   onRemoved: ChromeEvent<(tabId: number) => void>;
   onUpdated: ChromeEvent<(tabId: number, changeInfo: { url?: string }) => void>;
   get(tabId: number): Promise<ChromeTab>;
@@ -67,14 +81,12 @@ interface ChromeTabsApi {
   sendMessage<T = unknown>(tabId: number, message: RuntimeMessage): Promise<T>;
 }
 
-interface ChromeTab {
+export interface ChromeTab {
   id?: number;
   title?: string;
   url?: string;
 }
 
-interface ChromeEvent<TListener extends (...args: any[]) => any> {
+export interface ChromeEvent<TListener extends (...args: any[]) => any> {
   addListener(listener: TListener): void;
 }
-
-export {};

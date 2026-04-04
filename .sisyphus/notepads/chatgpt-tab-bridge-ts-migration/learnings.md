@@ -28,3 +28,8 @@
 ## 2026-04-04 (F2 quality debt)
 - `content-script.ts` should import `MESSAGE_TYPES` from `core/constants.ts` and `OverlayModel` as a type-only import from `shared/types.ts` instead of redefining overlay protocol shapes locally.
 - `state-machine.ts` can drop JSON clone assertions by explicitly cloning nested state branches; this preserves reducer behavior while avoiding `as RuntimeState`.
+
+## 2026-04-04 (typecheck cleanup pass)
+- `OverlayModel` defaults in `content-script.ts` must fully satisfy `PopupControls` and `RuntimeDisplay`; empty objects regress quickly during TS migrations.
+- For runtime message responses, normalize on `RuntimeResponse<T>` and branch on the `ok` discriminant before reading `result`/`error`.
+- `InputEvent` fallback helpers should return `Event` instances, not plain objects, so `dispatchEvent` stays type-safe across environments.

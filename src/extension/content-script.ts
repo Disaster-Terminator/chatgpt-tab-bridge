@@ -8,10 +8,34 @@ import {
   triggerComposerSend
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
-import type { OverlayModel } from "./shared/types.js";
+import type {
+  OverlayModel,
+  PopupControls,
+  RuntimeDisplay,
+  RuntimeMessage,
+  RuntimeResponse
+} from "./shared/types.js";
+import type { ChromePort } from "./shared/globals";
 
 const overlay = createOverlay();
 let keepAlivePort: ChromePort | null = connectKeepAlivePort();
+const defaultControls: PopupControls = {
+  canStart: false,
+  canPause: false,
+  canResume: false,
+  canStop: false,
+  canClearTerminal: false,
+  canSetStarter: false,
+  canSetOverride: false
+};
+const defaultDisplay: RuntimeDisplay = {
+  nextHop: "A -> B",
+  currentStep: "idle",
+  lastActionAt: null,
+  transport: null,
+  selector: null,
+  lastIssue: "None"
+};
 let overlaySnapshot: OverlayModel = {
   phase: "idle",
   round: 0,
@@ -19,8 +43,8 @@ let overlaySnapshot: OverlayModel = {
   assignedRole: null,
   requiresTerminalClear: false,
   starter: "A",
-  controls: {},
-  display: {},
+  controls: defaultControls,
+  display: defaultDisplay,
   overlaySettings: {
     enabled: true,
     collapsed: false,
@@ -151,6 +175,10 @@ function bindOverlayEvents(): void {
 
   requireOverlayElement<HTMLSelectElement>("[data-role='starter']").addEventListener("change", (event) => {
     const target = event.target as HTMLSelectElement;
+    if (target.value !== "A" && target.value !== "B") {
+      return;
+    }
+
     void dispatchOverlayAction({
       type: MESSAGE_TYPES.SET_STARTER,
       role: target.value
@@ -160,7 +188,7 @@ function bindOverlayEvents(): void {
   initOverlayDrag();
 }
 
-async function dispatchOverlayAction(message: Record<string, unknown>): Promise<void> {
+async function dispatchOverlayAction(message: RuntimeMessage): Promise<void> {
   try {
     await chrome.runtime.sendMessage(message);
   } finally {
@@ -170,11 +198,11 @@ async function dispatchOverlayAction(message: Record<string, unknown>): Promise<
 
 async function refreshOverlayModel(): Promise<void> {
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await chrome.runtime.sendMessage<RuntimeResponse<OverlayModel>>({
       type: MESSAGE_TYPES.GET_OVERLAY_MODEL
     });
 
-    const model = response?.ok ? response.result : response;
+    const model = response.ok ? response.result : null;
     if (!model) {
       return;
     }
@@ -363,7 +391,7 @@ function readAssistantSnapshot():
     };
   }
 
-  const text = normalizeText(latest.innerText || latest.textContent || "");
+  const text = normalizeText(latest.textContent || "");
   if (!text) {
     return {
       ok: false,
@@ -424,12 +452,23 @@ async function sendRelayMessage(text: string): Promise<{
       expectedText: text
     });
 
+    if (!acknowledgement.ok) {
+      const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
+      return {
+        ok: false,
+        mode: sendResult.mode,
+        applyMode,
+        acknowledgement: acknowledgement.signal,
+        error: acknowledgementError
+      };
+    }
+
     return {
-      ok: sendResult.ok && acknowledgement.ok,
+      ok: true,
       mode: sendResult.mode,
       applyMode,
       acknowledgement: acknowledgement.signal,
-      error: acknowledgement.ok ? null : acknowledgement.error
+      error: null
     };
   } catch (error) {
     return {
@@ -449,7 +488,7 @@ function findLatestAssistantElement(): Element | null {
 
   for (const selector of selectors) {
     const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
-      normalizeText(element.innerText || element.textContent || "")
+      normalizeText(element.textContent || "")
     );
     if (candidates.length > 0) {
       return candidates[candidates.length - 1];
@@ -550,7 +589,7 @@ function readLatestUserHash(): string | null {
     return null;
   }
 
-  const text = normalizeText(latest.innerText || latest.textContent || "");
+  const text = normalizeText(latest.textContent || "");
   return text ? hashText(text) : null;
 }
 
@@ -571,7 +610,7 @@ function findLatestMessageElement(role: "user" | "assistant"): Element | null {
 
   for (const selector of selectors) {
     const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
-      normalizeText(element.innerText || element.textContent || "")
+      normalizeText(element.textContent || "")
     );
     if (candidates.length > 0) {
       return candidates[candidates.length - 1];

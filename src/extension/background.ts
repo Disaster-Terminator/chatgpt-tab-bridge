@@ -37,6 +37,11 @@ import {
   normalizeOverlaySettings
 } from "./core/overlay-settings.ts";
 import type {
+  ChromeMessageSender,
+  ChromePort,
+  ChromeTab
+} from "./shared/globals";
+import type {
   AssistantSnapshotResponse,
   BridgeRole,
   OverlayModel,

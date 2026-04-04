@@ -56,7 +56,7 @@ function unsupported(rawUrl, reason) {
     kind: "unsupported",
     projectId: null,
     conversationId: null,
-    normalizedUrl: rawUrl ?? null,
+    normalizedUrl: rawUrl != null ? String(rawUrl) : null,
     reason
   };
 }
