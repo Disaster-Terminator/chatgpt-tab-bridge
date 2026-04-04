@@ -5,7 +5,7 @@ import process from "node:process";
 
 import { chromium } from "playwright";
 
-const extensionPath = path.resolve(process.cwd(), "src/extension");
+const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
 const browserExecutablePath = process.env.BROWSER_EXECUTABLE_PATH || null;
 const interactive = process.argv.includes("--interactive");
 const targetUrl = readFlag("--url") || "https://chatgpt.com";
@@ -93,4 +93,14 @@ function readFlag(flagName) {
   }
 
   return process.argv[index + 1] ?? null;
+}
+
+function readPathFlag(flagName) {
+  const value = readFlag(flagName);
+  if (!value) {
+    return null;
+  }
+
+  // Resolve relative paths against cwd, preserve absolute paths
+  return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
 }

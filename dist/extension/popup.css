@@ -1,0 +1,130 @@
+:root {
+  color-scheme: light;
+  --bg: #fbf5ea;
+  --panel: #fff9ef;
+  --ink: #1d1a17;
+  --muted: #665f56;
+  --line: #d9ccba;
+  --accent: #0a7c86;
+  --accent-strong: #085f66;
+  --warning: #9b4d00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 "Segoe UI", sans-serif;
+}
+
+.popup {
+  width: 360px;
+  padding: 16px;
+}
+
+.popup__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.popup__eyebrow {
+  margin: 0 0 4px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+.popup__title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.popup__badge {
+  min-width: 76px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: #efe4d5;
+  text-align: center;
+  font-weight: 700;
+}
+
+.popup__section {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.popup__section h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.popup__label {
+  display: block;
+  margin: 8px 0 6px;
+  color: var(--muted);
+}
+
+.popup__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.popup__actions--stack {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.popup__binding,
+.popup__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+button,
+select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:not(:disabled):hover {
+  background: var(--accent-strong);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+#issueValue {
+  color: var(--warning);
+  text-align: right;
+}

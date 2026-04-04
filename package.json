@@ -10,6 +10,7 @@
     "oh-my-codex": "^0.11.12"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "playwright": "^1.59.1",
     "playwright-core": "^1.59.1"
   }

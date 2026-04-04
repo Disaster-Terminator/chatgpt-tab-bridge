@@ -17,13 +17,16 @@ test("buildRelayEnvelope includes bridge context, payload, and machine-readable 
     round: 3,
     message: "hello"
   });
+  const lines = envelope.split("\n");
 
-  assert.match(envelope, /^\[BRIDGE_CONTEXT\]/);
-  assert.match(envelope, /source: A/);
-  assert.match(envelope, /round: 3/);
-  assert.match(envelope, /hello/);
-  assert.match(envelope, /\[BRIDGE_STATE\] CONTINUE/);
-  assert.match(envelope, /\[BRIDGE_STATE\] FREEZE/);
+  assert.equal(lines[0], "[BRIDGE_CONTEXT]");
+  assert.equal(lines[1], "source: A");
+  assert.equal(lines[2], "round: 3");
+  assert.equal(lines[4], "hello");
+  assert.equal(lines[6], "[BRIDGE_INSTRUCTION]");
+  assert.equal(lines[9], "[BRIDGE_STATE] CONTINUE");
+  assert.equal(lines[10], "or");
+  assert.equal(lines[11], "[BRIDGE_STATE] FREEZE");
 });
 
 test("parseBridgeDirective reads the final machine-readable state line", () => {

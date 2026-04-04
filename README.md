@@ -121,19 +121,19 @@
 ## 目录说明
 
 - 扩展入口：
-  - [`src/extension/manifest.json`](/home/raystorm/projects/meta/src/extension/manifest.json)
+  - [`dist/extension/manifest.json`](/home/raystorm/projects/meta/dist/extension/manifest.json)
 - 后台逻辑：
-  - [`src/extension/background.mjs`](/home/raystorm/projects/meta/src/extension/background.mjs)
+  - [`dist/extension/background.mjs`](/home/raystorm/projects/meta/dist/extension/background.mjs)
 - 页面注入：
-  - [`src/extension/content-script.js`](/home/raystorm/projects/meta/src/extension/content-script.js)
+  - [`dist/extension/content-script.js`](/home/raystorm/projects/meta/dist/extension/content-script.js)
 - Popup：
-  - [`src/extension/popup.html`](/home/raystorm/projects/meta/src/extension/popup.html)
-  - [`src/extension/popup.mjs`](/home/raystorm/projects/meta/src/extension/popup.mjs)
+  - [`dist/extension/popup.html`](/home/raystorm/projects/meta/dist/extension/popup.html)
+  - [`dist/extension/popup.mjs`](/home/raystorm/projects/meta/dist/extension/popup.mjs)
 - 核心状态与协议：
-  - [`src/extension/core/state-machine.mjs`](/home/raystorm/projects/meta/src/extension/core/state-machine.mjs)
-  - [`src/extension/core/popup-model.mjs`](/home/raystorm/projects/meta/src/extension/core/popup-model.mjs)
-  - [`src/extension/core/relay-core.mjs`](/home/raystorm/projects/meta/src/extension/core/relay-core.mjs)
-  - [`src/extension/core/chatgpt-url.mjs`](/home/raystorm/projects/meta/src/extension/core/chatgpt-url.mjs)
+  - [`dist/extension/core/state-machine.mjs`](/home/raystorm/projects/meta/dist/extension/core/state-machine.mjs)
+  - [`dist/extension/core/popup-model.mjs`](/home/raystorm/projects/meta/dist/extension/core/popup-model.mjs)
+  - [`dist/extension/core/relay-core.mjs`](/home/raystorm/projects/meta/dist/extension/core/relay-core.mjs)
+  - [`dist/extension/core/chatgpt-url.mjs`](/home/raystorm/projects/meta/dist/extension/core/chatgpt-url.mjs)
 
 ## 本地命令
 
@@ -185,6 +185,6 @@ pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
 ## 在 Edge 里加载
 
 1. 打开 `edge://extensions`
-2. 开启“开发人员模式”
-3. 点击“加载已解压的扩展”
-4. 选择目录 [`src/extension`](/home/raystorm/projects/meta/src/extension)
+2. 开启"开发人员模式"
+3. 点击"加载已解压的扩展"
+4. 选择目录 [`dist/extension`](/home/raystorm/projects/meta/dist/extension)

@@ -78,6 +78,28 @@ test("override writes are ignored outside paused", () => {
   let state = createInitialState();
   state = reduceState(state, { type: "set_next_hop_override", role: "B" });
   assert.equal(state.nextHopOverride, null);
+
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  assert.equal(state.phase, PHASES.READY);
+
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  assert.equal(state.nextHopOverride, null);
+
+  state = reduceState(state, { type: "start" });
+  assert.equal(state.phase, PHASES.RUNNING);
+
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  assert.equal(state.nextHopOverride, null);
+
+  state = reduceState(state, {
+    type: "selector_failure",
+    reason: ERROR_REASONS.SELECTOR_FAILURE
+  });
+  assert.equal(state.phase, PHASES.ERROR);
+
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  assert.equal(state.nextHopOverride, null);
 });
 
 test("paused override can be cleared explicitly", () => {
@@ -146,9 +168,49 @@ test("clearTerminal then start is the only round reset gate", () => {
 
   assert.equal(state.round, 1);
   assert.equal(state.phase, PHASES.STOPPED);
+  assert.equal(state.requiresTerminalClear, true);
+
+  state = reduceState(state, { type: "start" });
+  assert.equal(state.phase, PHASES.STOPPED);
+  assert.equal(state.round, 1);
 
   state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 3) });
   assert.equal(state.phase, PHASES.STOPPED);
+  assert.equal(state.round, 1);
+
+  state = reduceState(state, { type: "clear_terminal" });
+  assert.equal(state.phase, PHASES.READY);
+  assert.equal(state.round, 1);
+  assert.equal(state.requiresTerminalClear, false);
+
+  state = reduceState(state, { type: "start" });
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.round, 0);
+});
+
+test("clearTerminal is required after error before a fresh start can reset round", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, {
+    type: "hop_completed",
+    sourceRole: "A",
+    targetRole: "B",
+    sourceHash: "h1",
+    targetHash: "h2"
+  });
+  state = reduceState(state, {
+    type: "selector_failure",
+    reason: ERROR_REASONS.SELECTOR_FAILURE
+  });
+
+  assert.equal(state.phase, PHASES.ERROR);
+  assert.equal(state.round, 1);
+  assert.equal(state.requiresTerminalClear, true);
+
+  state = reduceState(state, { type: "start" });
+  assert.equal(state.phase, PHASES.ERROR);
   assert.equal(state.round, 1);
 
   state = reduceState(state, { type: "clear_terminal" });
