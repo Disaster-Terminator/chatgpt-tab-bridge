@@ -73,19 +73,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === MESSAGE_TYPES.SEND_RELAY_MESSAGE) {
-    Promise.resolve(sendRelayMessage(message.text))
-      .then(sendResponse)
-      .catch((error: unknown) => {
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : "send_relay_message_failed"
-        });
-      });
-    return true;
-  }
+   if (message?.type === MESSAGE_TYPES.SEND_RELAY_MESSAGE) {
+     Promise.resolve(sendRelayMessage(message.text))
+       .then(sendResponse)
+       .catch((error: unknown) => {
+         sendResponse({
+           ok: false,
+           error: error instanceof Error ? error.message : "send_relay_message_failed"
+         });
+       });
+     return true;
+   }
 
-  if (message?.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
+   if (message?.type === MESSAGE_TYPES.GET_LAST_ACK_DEBUG) {
+     sendResponse(lastAckDebug ?? { ok: false, error: "no_ack_debug" });
+     return true;
+   }
+
+   if (message?.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
     overlaySnapshot = {
       ...overlaySnapshot,
       ...message.snapshot
@@ -454,13 +459,28 @@ async function sendRelayMessage(text: string): Promise<{
       };
     }
 
-    const acknowledgement = await waitForSubmissionAcknowledgement({
-      baseline: submissionBaseline,
-      composer,
-      expectedText: text
-    });
+     const acknowledgement = await waitForSubmissionAcknowledgement({
+       baseline: submissionBaseline,
+       composer,
+       expectedText: text
+     });
 
-    if (!acknowledgement.ok) {
+     // Capture debug information about the last acknowledgement
+     lastAckDebug = {
+       ok: acknowledgement.ok,
+       signal: acknowledgement.ok ? acknowledgement.signal : null,
+       error: acknowledgement.ok ? null : ("error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged"),
+       timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
+       baseline: submissionBaseline,
+       after: {
+         latestUserHash: readLatestUserHash(),
+         composerText: readComposerText(composer),
+         generating: isGenerationInProgress()
+       },
+       timestamp: Date.now()
+     };
+
+     if (!acknowledgement.ok) {
       const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
       return {
         ok: false,
@@ -586,7 +606,7 @@ async function waitForSubmissionAcknowledgement({
     const timeout = setTimeout(() => {
       observer.disconnect();
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, 5000);
+    }, 10000);
 
     const observer = new MutationObserver(() => {
       // Defer heavy DOM checks to next microtask to avoid blocking
@@ -604,7 +624,6 @@ async function waitForSubmissionAcknowledgement({
       childList: true,
       subtree: true,
       attributes: true,
-      characterData: true,
       attributeFilter: ["aria-label", "disabled", "style", "class"]
     });
   });

@@ -331,7 +331,8 @@ async function copyDebugSnapshot(): Promise<void> {
     return;
   }
 
-  const payload = buildDebugSnapshot(latestModel);
+  const ackDebug = await chrome.tabs.sendMessage(currentTabId!, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }).catch(() => null);
+  const payload = buildDebugSnapshot(latestModel, ackDebug);
 
   try {
     await navigator.clipboard.writeText(payload);
@@ -350,7 +351,7 @@ async function copyDebugSnapshot(): Promise<void> {
   }
 }
 
-function buildDebugSnapshot(model: PopupModel): string {
+function buildDebugSnapshot(model: PopupModel, ackDebug: any): string {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
 
@@ -360,7 +361,7 @@ function buildDebugSnapshot(model: PopupModel): string {
       ? copy.tabEligible(currentTab.urlInfo.kind)
       : copy.unsupportedTab;
 
-  return [
+  const lines = [
     copy.title,
     "",
     `${formatPhase(currentLocale, state.phase)}`,
@@ -374,15 +375,37 @@ function buildDebugSnapshot(model: PopupModel): string {
     `${copy.transportLabel}: ${display.transport || copy.none}`,
     `${copy.selectorLabel}: ${display.selector || copy.none}`,
     `${copy.lastIssueLabel}: ${state.lastError || state.lastStopReason || copy.none}`
-  ].join("\n");
-}
+  ];
 
-function summarizeBinding(binding: RuntimeState["bindings"][BridgeRole]): string {
-  if (!binding) {
-    return "Unbound";
+  if (ackDebug) {
+    lines.push(
+      "",
+      "Ack Debug:",
+      `  Timestamp: ${new Date(ackDebug.timestamp).toISOString()}`,
+      `  Expected (hash): ${ackDebug?.baseline?.expectedHash || 'N/A'}`,
+      `  Baseline:`,
+      `    userHash: ${ackDebug?.baseline?.userHash || 'N/A'}`,
+      `    composerText: ${ackDebug?.baseline?.composerText ? ackDebug.baseline.composerText.substring(0, 60) + (ackDebug.baseline.composerText.length > 60 ? '...' : '') : 'N/A'}`,
+      `    generating: ${ackDebug?.baseline?.generating ?? 'N/A'}`,
+      `  After:`,
+      `    latestUserHash: ${ackDebug?.after?.latestUserHash || 'N/A'}`,
+      `    composerText: ${ackDebug?.after?.composerText ? ackDebug.after.composerText.substring(0, 60) + (ackDebug.after.composerText.length > 60 ? '...' : '') : 'N/A'}`,
+      `    generating: ${ackDebug?.after?.generating ?? 'N/A'}`,
+      `  Signal: ${ackDebug?.signal || 'none'}`,
+      `  Timed out: ${ackDebug?.timedOut ?? false}`,
+      `  Error: ${ackDebug?.error || 'none'}`
+    );
   }
 
-  const label = binding.urlInfo?.kind === "project" ? "project thread" : "thread";
+  return lines.join("\n");
+}
+
+function summarizeBinding(copy: PopupCopy, binding: RuntimeState["bindings"][BridgeRole]): string {
+  if (!binding) {
+    return copy.unbound;
+  }
+
+  const label = binding.urlInfo?.kind === "project" ? copy.projectThreadLabel : copy.threadLabel;
   return `${binding.title || label} (#${binding.tabId})`;
 }
 
