@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PHASES } from "../src/extension/core/constants.mjs";
-import { buildDisplay, deriveControls } from "../src/extension/core/popup-model.mjs";
-import { createInitialState } from "../src/extension/core/state-machine.mjs";
-import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
+import { importExtensionModule } from "./extension-test-harness.mjs";
+
+const { PHASES } = await importExtensionModule("core/constants");
+const { buildDisplay, deriveControls } = await importExtensionModule("core/popup-model");
+const { createInitialState } = await importExtensionModule("core/state-machine");
+const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
 
 function bind(state, role, tabId) {
   state.bindings[role] = {

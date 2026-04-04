@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
+import { importExtensionModule } from "./extension-test-harness.mjs";
+
+const {
   buildRelayEnvelope,
   evaluatePostHopGuard,
   evaluatePreSendGuard,
@@ -9,7 +11,7 @@ import {
   guardReasonToStopReason,
   hashText,
   parseBridgeDirective
-} from "../src/extension/core/relay-core.mjs";
+} = await importExtensionModule("core/relay-core");
 
 test("buildRelayEnvelope includes bridge context, payload, and machine-readable tail instructions", () => {
   const envelope = buildRelayEnvelope({

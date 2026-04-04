@@ -1,14 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const source = await readFile(new URL("../src/extension/content-helpers.js", import.meta.url), "utf8");
+import { readExtensionSource } from "./extension-test-harness.mjs";
+
+const { source, fileUrl } = await readExtensionSource("content-helpers");
 const context = {
   globalThis: {}
 };
 vm.runInNewContext(source, context, {
-  filename: "content-helpers.js"
+  filename: fileUrl.pathname.split("/").pop()
 });
 
 const helpers = context.globalThis.ChatGptBridgeContent;

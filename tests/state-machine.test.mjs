@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
-import { ERROR_REASONS, PHASES, STOP_REASONS } from "../src/extension/core/constants.mjs";
-import {
+import { importExtensionModule } from "./extension-test-harness.mjs";
+
+const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
+const { ERROR_REASONS, PHASES, STOP_REASONS } = await importExtensionModule("core/constants");
+const {
   canWriteOverride,
   createInitialState,
   reduceState
-} from "../src/extension/core/state-machine.mjs";
+} = await importExtensionModule("core/state-machine");
 
 function createBinding(role, tabId, url = `https://chatgpt.com/c/${role.toLowerCase()}-${tabId}`) {
   return {

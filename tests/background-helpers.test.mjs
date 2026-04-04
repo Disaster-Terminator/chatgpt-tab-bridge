@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
-import {
-  collectOverlaySyncTabIds,
-  shouldKeepBindingForUrlChange
-} from "../src/extension/core/background-helpers.mjs";
+import { importExtensionModule } from "./extension-test-harness.mjs";
+
+const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
+const { collectOverlaySyncTabIds, shouldKeepBindingForUrlChange } = await importExtensionModule(
+  "core/background-helpers"
+);
 
 test("shouldKeepBindingForUrlChange preserves only the same normalized thread", () => {
   const binding = {

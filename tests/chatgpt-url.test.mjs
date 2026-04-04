@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
+import { importExtensionModule } from "./extension-test-harness.mjs";
+
+const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
 
 test("parses regular ChatGPT thread URLs", () => {
   const parsed = parseChatGptThreadUrl("https://chatgpt.com/c/abc-123");
