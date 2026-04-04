@@ -1056,7 +1056,7 @@ async function sendRelayMessage(tabId, text) {
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
       }),
-      sleep(8e3).then(() => ({
+      sleep(15e3).then(() => ({
         ok: false,
         error: "send_message_timeout"
       }))

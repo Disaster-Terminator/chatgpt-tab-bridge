@@ -62,6 +62,320 @@ var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
   position: null
 });
 
+// copy/bridge-copy.ts
+var DEFAULT_UI_LOCALE = "zh-CN";
+var zhCN = {
+  overlay: {
+    bridgeTitle: "\u4E2D\u7EE7",
+    phaseReady: "\u5C31\u7EEA",
+    phaseRunning: "\u8FD0\u884C\u4E2D",
+    phasePaused: "\u5DF2\u6682\u505C",
+    phaseStopped: "\u5DF2\u505C\u6B62",
+    phaseError: "\u9519\u8BEF",
+    phaseIdle: "\u7A7A\u95F2",
+    roleUnbound: "\u672A\u7ED1\u5B9A",
+    roleBoundA: "\u5DF2\u7ED1\u5B9A A",
+    roleBoundB: "\u5DF2\u7ED1\u5B9A B",
+    roundLabel: "\u8F6E\u6B21",
+    nextLabel: "\u4E0B\u4E00\u8DF3",
+    stepLabel: "\u6B65\u9AA4",
+    issueLabel: "\u95EE\u9898",
+    starterLabel: "\u8D77\u59CB\u4FA7",
+    starterA: "A \u8D77\u59CB",
+    starterB: "B \u8D77\u59CB",
+    bindA: "\u7ED1\u5B9A A",
+    bindB: "\u7ED1\u5B9A B",
+    unbind: "\u89E3\u7ED1",
+    start: "\u5F00\u59CB",
+    pause: "\u6682\u505C",
+    resume: "\u6062\u590D",
+    stop: "\u505C\u6B62",
+    clear: "\u6E05\u7A7A",
+    popup: "\u9762\u677F",
+    collapseExpand: "+",
+    collapseCollapse: "\u2212",
+    none: "\u65E0",
+    idle: "\u7A7A\u95F2"
+  },
+  popup: {
+    eyebrow: "ChatGPT \u4E2D\u7EE7",
+    title: "\u63A7\u5236\u9762\u677F",
+    sectionCurrentTab: "\u5F53\u524D\u6807\u7B7E\u9875",
+    sectionBindings: "\u7ED1\u5B9A",
+    sectionOverlay: "\u60AC\u6D6E\u7A97",
+    sectionRunControls: "\u8FD0\u884C\u63A7\u5236",
+    sectionFallback: "\u5907\u7528\u64CD\u4F5C",
+    sectionDebug: "\u8C03\u8BD5",
+    debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
+    labelStarter: "\u8D77\u59CB\u4FA7",
+    labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
+    labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
+    labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
+    bindA: "\u7ED1\u5B9A A",
+    bindB: "\u7ED1\u5B9A B",
+    unbind: "\u89E3\u7ED1",
+    start: "\u5F00\u59CB",
+    pause: "\u6682\u505C",
+    resume: "\u6062\u590D",
+    stop: "\u505C\u6B62",
+    clearTerminal: "\u6E05\u7A7A\u7EC8\u7AEF",
+    resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
+    copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
+    copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
+    noActiveTab: "\u65E0\u53EF\u7528\u6D3B\u52A8\u6807\u7B7E\u9875\u3002",
+    unsupportedTab: "\u5F53\u524D\u6807\u7B7E\u9875\u4E0D\u662F\u652F\u6301\u7684 ChatGPT \u7EBF\u7A0B\u3002",
+    tabBoundAs: (role) => `\u5F53\u524D\u6807\u7B7E\u9875\u5DF2\u7ED1\u5B9A\u4E3A ${role}\u3002`,
+    tabEligible: (kind) => `\u5F53\u524D\u6807\u7B7E\u9875\u7B26\u5408\u6761\u4EF6\uFF08${kind}\uFF09\u3002`,
+    unbound: "\u672A\u7ED1\u5B9A",
+    none: "\u65E0",
+    idle: "\u7A7A\u95F2",
+    roundLabel: "\u8F6E\u6B21",
+    nextHopLabel: "\u4E0B\u4E00\u8DF3",
+    currentStepLabel: "\u5F53\u524D\u6B65\u9AA4",
+    transportLabel: "\u4F20\u8F93",
+    selectorLabel: "\u9009\u62E9\u5668",
+    lastIssueLabel: "\u6700\u540E\u95EE\u9898",
+    overrideNone: "\u4E0D\u8986\u76D6",
+    overrideA: "A \u2192 B",
+    overrideB: "B \u2192 A",
+    starterA: "A \u8D77\u59CB",
+    starterB: "B \u8D77\u59CB",
+    localeLabel: "\u8BED\u8A00",
+    localeZh: "\u4E2D\u6587",
+    localeEn: "English",
+    localeBilingual: "\u53CC\u8BED",
+    helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002"
+  }
+};
+var en = {
+  overlay: {
+    bridgeTitle: "Bridge",
+    phaseReady: "Ready",
+    phaseRunning: "Running",
+    phasePaused: "Paused",
+    phaseStopped: "Stopped",
+    phaseError: "Error",
+    phaseIdle: "Idle",
+    roleUnbound: "Unbound",
+    roleBoundA: "Bound as A",
+    roleBoundB: "Bound as B",
+    roundLabel: "Round",
+    nextLabel: "Next",
+    stepLabel: "Step",
+    issueLabel: "Issue",
+    starterLabel: "Starter",
+    starterA: "A starts",
+    starterB: "B starts",
+    bindA: "Bind A",
+    bindB: "Bind B",
+    unbind: "Unbind",
+    start: "Start",
+    pause: "Pause",
+    resume: "Resume",
+    stop: "Stop",
+    clear: "Clear",
+    popup: "Popup",
+    collapseExpand: "+",
+    collapseCollapse: "\u2212",
+    none: "None",
+    idle: "idle"
+  },
+  popup: {
+    eyebrow: "ChatGPT Bridge",
+    title: "Popup control surface",
+    sectionCurrentTab: "Current tab",
+    sectionBindings: "Bindings",
+    sectionOverlay: "Overlay",
+    sectionRunControls: "Run controls",
+    sectionFallback: "Fallback",
+    sectionDebug: "Debug",
+    debugSummary: "Debug info",
+    labelStarter: "Starter side",
+    labelOverride: "Paused next hop override",
+    labelEnableOverlay: "Enable overlay",
+    labelDefaultExpanded: "Default expanded overlay",
+    bindA: "Bind A",
+    bindB: "Bind B",
+    unbind: "Unbind current tab",
+    start: "Start",
+    pause: "Pause",
+    resume: "Resume",
+    stop: "Stop",
+    clearTerminal: "Clear terminal",
+    resetPosition: "Reset position",
+    copyDebug: "Copy debug snapshot",
+    copied: "Debug snapshot copied",
+    noActiveTab: "No active tab available.",
+    unsupportedTab: "Current tab is not a supported ChatGPT thread.",
+    tabBoundAs: (role) => `Current tab is bound as ${role}.`,
+    tabEligible: (kind) => `Current tab is eligible (${kind}).`,
+    unbound: "Unbound",
+    none: "None",
+    idle: "idle",
+    roundLabel: "Round",
+    nextHopLabel: "Next hop",
+    currentStepLabel: "Current step",
+    transportLabel: "Transport",
+    selectorLabel: "Selector",
+    lastIssueLabel: "Last issue",
+    overrideNone: "No override",
+    overrideA: "A \u2192 B",
+    overrideB: "B \u2192 A",
+    starterA: "A starts",
+    starterB: "B starts",
+    localeLabel: "Language",
+    localeZh: "\u4E2D\u6587",
+    localeEn: "English",
+    localeBilingual: "Bilingual",
+    helpText: "Override only applies while paused; Clear returns stopped/error to ready."
+  }
+};
+function toBilingual(zh, en2) {
+  return `${zh} ${en2}`;
+}
+function getOverlayCopy(locale) {
+  if (locale === "bilingual") {
+    const z = zhCN.overlay;
+    const e = en.overlay;
+    return {
+      bridgeTitle: toBilingual(z.bridgeTitle, e.bridgeTitle),
+      phaseReady: toBilingual(z.phaseReady, e.phaseReady),
+      phaseRunning: toBilingual(z.phaseRunning, e.phaseRunning),
+      phasePaused: toBilingual(z.phasePaused, e.phasePaused),
+      phaseStopped: toBilingual(z.phaseStopped, e.phaseStopped),
+      phaseError: toBilingual(z.phaseError, e.phaseError),
+      phaseIdle: toBilingual(z.phaseIdle, e.phaseIdle),
+      roleUnbound: toBilingual(z.roleUnbound, e.roleUnbound),
+      roleBoundA: toBilingual(z.roleBoundA, e.roleBoundA),
+      roleBoundB: toBilingual(z.roleBoundB, e.roleBoundB),
+      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
+      nextLabel: toBilingual(z.nextLabel, e.nextLabel),
+      stepLabel: toBilingual(z.stepLabel, e.stepLabel),
+      issueLabel: toBilingual(z.issueLabel, e.issueLabel),
+      starterLabel: toBilingual(z.starterLabel, e.starterLabel),
+      starterA: toBilingual(z.starterA, e.starterA),
+      starterB: toBilingual(z.starterB, e.starterB),
+      bindA: toBilingual(z.bindA, e.bindA),
+      bindB: toBilingual(z.bindB, e.bindB),
+      unbind: toBilingual(z.unbind, e.unbind),
+      start: toBilingual(z.start, e.start),
+      pause: toBilingual(z.pause, e.pause),
+      resume: toBilingual(z.resume, e.resume),
+      stop: toBilingual(z.stop, e.stop),
+      clear: toBilingual(z.clear, e.clear),
+      popup: toBilingual(z.popup, e.popup),
+      collapseExpand: e.collapseExpand,
+      collapseCollapse: e.collapseCollapse,
+      none: toBilingual(z.none, e.none),
+      idle: toBilingual(z.idle, e.idle)
+    };
+  }
+  return locale === "en" ? en.overlay : zhCN.overlay;
+}
+function getPopupCopy(locale) {
+  if (locale === "bilingual") {
+    const z = zhCN.popup;
+    const e = en.popup;
+    return {
+      eyebrow: toBilingual(z.eyebrow, e.eyebrow),
+      title: toBilingual(z.title, e.title),
+      sectionCurrentTab: toBilingual(z.sectionCurrentTab, e.sectionCurrentTab),
+      sectionBindings: toBilingual(z.sectionBindings, e.sectionBindings),
+      sectionOverlay: toBilingual(z.sectionOverlay, e.sectionOverlay),
+      sectionRunControls: toBilingual(z.sectionRunControls, e.sectionRunControls),
+      sectionFallback: toBilingual(z.sectionFallback, e.sectionFallback),
+      sectionDebug: toBilingual(z.sectionDebug, e.sectionDebug),
+      debugSummary: toBilingual(z.debugSummary, e.debugSummary),
+      labelStarter: toBilingual(z.labelStarter, e.labelStarter),
+      labelOverride: toBilingual(z.labelOverride, e.labelOverride),
+      labelEnableOverlay: toBilingual(z.labelEnableOverlay, e.labelEnableOverlay),
+      labelDefaultExpanded: toBilingual(z.labelDefaultExpanded, e.labelDefaultExpanded),
+      bindA: toBilingual(z.bindA, e.bindA),
+      bindB: toBilingual(z.bindB, e.bindB),
+      unbind: toBilingual(z.unbind, e.unbind),
+      start: toBilingual(z.start, e.start),
+      pause: toBilingual(z.pause, e.pause),
+      resume: toBilingual(z.resume, e.resume),
+      stop: toBilingual(z.stop, e.stop),
+      clearTerminal: toBilingual(z.clearTerminal, e.clearTerminal),
+      resetPosition: toBilingual(z.resetPosition, e.resetPosition),
+      copyDebug: toBilingual(z.copyDebug, e.copyDebug),
+      copied: toBilingual(z.copied, e.copied),
+      noActiveTab: toBilingual(z.noActiveTab, e.noActiveTab),
+      unsupportedTab: toBilingual(z.unsupportedTab, e.unsupportedTab),
+      tabBoundAs: (role) => toBilingual(z.tabBoundAs(role), e.tabBoundAs(role)),
+      tabEligible: (kind) => toBilingual(z.tabEligible(kind), e.tabEligible(kind)),
+      unbound: toBilingual(z.unbound, e.unbound),
+      none: toBilingual(z.none, e.none),
+      idle: toBilingual(z.idle, e.idle),
+      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
+      nextHopLabel: toBilingual(z.nextHopLabel, e.nextHopLabel),
+      currentStepLabel: toBilingual(z.currentStepLabel, e.currentStepLabel),
+      transportLabel: toBilingual(z.transportLabel, e.transportLabel),
+      selectorLabel: toBilingual(z.selectorLabel, e.selectorLabel),
+      lastIssueLabel: toBilingual(z.lastIssueLabel, e.lastIssueLabel),
+      overrideNone: toBilingual(z.overrideNone, e.overrideNone),
+      overrideA: toBilingual(z.overrideA, e.overrideA),
+      overrideB: toBilingual(z.overrideB, e.overrideB),
+      starterA: toBilingual(z.starterA, e.starterA),
+      starterB: toBilingual(z.starterB, e.starterB),
+      localeLabel: toBilingual(z.localeLabel, e.localeLabel),
+      localeZh: toBilingual(z.localeZh, e.localeZh),
+      localeEn: toBilingual(z.localeEn, e.localeEn),
+      localeBilingual: toBilingual(z.localeBilingual, e.localeBilingual),
+      helpText: toBilingual(z.helpText, e.helpText)
+    };
+  }
+  return locale === "en" ? en.popup : zhCN.popup;
+}
+function formatPhase(locale, phase) {
+  const c = getOverlayCopy(locale);
+  switch (phase) {
+    case "ready":
+      return c.phaseReady;
+    case "running":
+      return c.phaseRunning;
+    case "paused":
+      return c.phasePaused;
+    case "stopped":
+      return c.phaseStopped;
+    case "error":
+      return c.phaseError;
+    default:
+      return c.phaseIdle;
+  }
+}
+function applyStaticCopy(root, locale) {
+  const c = getPopupCopy(locale);
+  root.querySelectorAll("[data-copy]").forEach((el) => {
+    const key = el.dataset.copy;
+    if (!key) return;
+    const value = c[key];
+    if (typeof value === "string") {
+      el.textContent = value;
+    }
+  });
+}
+
+// ui/preferences.ts
+var UI_LOCALE_STORAGE_KEY = "chatgptBridgeUiLocale";
+function readUiLocale() {
+  try {
+    const raw = localStorage.getItem(UI_LOCALE_STORAGE_KEY);
+    if (raw === "zh-CN" || raw === "en" || raw === "bilingual") {
+      return raw;
+    }
+  } catch {
+  }
+  return DEFAULT_UI_LOCALE;
+}
+function writeUiLocale(locale) {
+  try {
+    localStorage.setItem(UI_LOCALE_STORAGE_KEY, locale);
+  } catch {
+  }
+}
+
 // popup.ts
 var REFRESH_INTERVAL_MS = 1e3;
 var elements = {
@@ -72,7 +386,9 @@ var elements = {
   unbindCurrentButton: requireElement("#unbindCurrentButton"),
   bindingA: requireElement("#bindingA"),
   bindingB: requireElement("#bindingB"),
+  localeSelect: requireElement("#localeSelect"),
   overlayEnabledCheckbox: requireElement("#overlayEnabledCheckbox"),
+  defaultExpandedCheckbox: requireElement("#defaultExpandedCheckbox"),
   resetOverlayPositionButton: requireElement("#resetOverlayPositionButton"),
   starterSelect: requireElement("#starterSelect"),
   overrideSelect: requireElement("#overrideSelect"),
@@ -93,6 +409,9 @@ var currentTabId = null;
 var currentModel = null;
 var refreshTimerId = null;
 var refreshInFlight = null;
+var currentLocale = readUiLocale();
+applyStaticCopy(document.body, currentLocale);
+document.documentElement.lang = currentLocale === "en" ? "en" : "zh-CN";
 wireEvents();
 void refresh();
 startAutoRefresh();
@@ -204,6 +523,22 @@ function wireEvents() {
       type: MESSAGE_TYPES.RESET_OVERLAY_POSITION
     });
   });
+  elements.localeSelect.addEventListener("change", () => {
+    const newLocale = elements.localeSelect.value;
+    currentLocale = newLocale;
+    writeUiLocale(newLocale);
+    document.documentElement.lang = newLocale === "en" ? "en" : "zh-CN";
+    applyStaticCopy(document.body, newLocale);
+    if (currentModel) {
+      render(currentModel);
+    }
+  });
+  elements.defaultExpandedCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_OVERLAY_COLLAPSED,
+      collapsed: !elements.defaultExpandedCheckbox.checked
+    });
+  });
 }
 async function perform(message) {
   try {
@@ -214,26 +549,29 @@ async function perform(message) {
   }
 }
 function render(model) {
+  const copy = getPopupCopy(currentLocale);
   const { state, currentTab, controls, display, overlaySettings } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
-  elements.phaseBadge.textContent = state.phase;
+  elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
+  elements.phaseBadge.dataset.phase = state.phase;
   elements.bindingA.textContent = summarizeBinding(state.bindings.A);
   elements.bindingB.textContent = summarizeBinding(state.bindings.B);
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
-  elements.currentStepValue.textContent = display.currentStep || "idle";
-  elements.transportValue.textContent = display.transport || "None";
-  elements.selectorValue.textContent = display.selector || "None";
-  elements.issueValue.textContent = state.lastError || state.lastStopReason || "None";
+  elements.currentStepValue.textContent = display.currentStep || copy.idle;
+  elements.transportValue.textContent = display.transport || copy.none;
+  elements.selectorValue.textContent = display.selector || copy.none;
+  elements.issueValue.textContent = state.lastError || state.lastStopReason || copy.none;
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
+  elements.localeSelect.value = currentLocale;
   if (!currentTab) {
-    elements.currentTabStatus.textContent = "No active tab available.";
+    elements.currentTabStatus.textContent = copy.noActiveTab;
   } else if (!currentTab.urlInfo.supported) {
-    elements.currentTabStatus.textContent = "Current tab is not a supported ChatGPT thread.";
+    elements.currentTabStatus.textContent = copy.unsupportedTab;
   } else {
-    elements.currentTabStatus.textContent = currentTab.assignedRole ? `Current tab is bound as ${currentTab.assignedRole}.` : `Current tab is eligible (${currentTab.urlInfo.kind}).`;
+    elements.currentTabStatus.textContent = currentTab.assignedRole ? copy.tabBoundAs(currentTab.assignedRole) : copy.tabEligible(currentTab.urlInfo.kind);
   }
   elements.bindAButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
   elements.bindBButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
@@ -245,6 +583,13 @@ function render(model) {
   elements.clearTerminalButton.disabled = !controls.canClearTerminal;
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
+  const starterOptions = elements.starterSelect.options;
+  starterOptions[0].textContent = copy.starterA;
+  starterOptions[1].textContent = copy.starterB;
+  const overrideOptions = elements.overrideSelect.options;
+  overrideOptions[0].textContent = copy.overrideNone;
+  overrideOptions[1].textContent = copy.overrideA;
+  overrideOptions[2].textContent = copy.overrideB;
 }
 async function copyDebugSnapshot() {
   const latestModel = await refresh() ?? currentModel;
@@ -254,7 +599,7 @@ async function copyDebugSnapshot() {
   const payload = buildDebugSnapshot(latestModel);
   try {
     await navigator.clipboard.writeText(payload);
-    elements.issueValue.textContent = "Debug snapshot copied";
+    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
   } catch {
     const fallback = document.createElement("textarea");
     fallback.value = payload;
@@ -265,25 +610,27 @@ async function copyDebugSnapshot() {
     fallback.select();
     document.execCommand("copy");
     fallback.remove();
-    elements.issueValue.textContent = "Debug snapshot copied";
+    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
   }
 }
 function buildDebugSnapshot(model) {
+  const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
+  const tabStatus = currentTab?.assignedRole ? copy.tabBoundAs(currentTab.assignedRole) : currentTab?.urlInfo?.supported ? copy.tabEligible(currentTab.urlInfo.kind) : copy.unsupportedTab;
   return [
-    "ChatGPT Bridge",
+    copy.title,
     "",
-    `Phase: ${state.phase}`,
-    `Current tab: ${currentTab?.assignedRole ? `bound as ${currentTab.assignedRole}` : currentTab?.urlInfo?.supported ? "eligible" : "unsupported"}`,
-    `Binding A: ${summarizeBinding(state.bindings.A)}`,
-    `Binding B: ${summarizeBinding(state.bindings.B)}`,
-    `Starter: ${state.starter}`,
-    `Round: ${state.round}`,
-    `Next hop: ${display.nextHop}`,
-    `Current step: ${display.currentStep || "idle"}`,
-    `Transport: ${display.transport || "None"}`,
-    `Selector: ${display.selector || "None"}`,
-    `Last issue: ${state.lastError || state.lastStopReason || "None"}`
+    `${formatPhase(currentLocale, state.phase)}`,
+    tabStatus,
+    `A: ${summarizeBinding(state.bindings.A)}`,
+    `B: ${summarizeBinding(state.bindings.B)}`,
+    `${copy.labelStarter}: ${state.starter}`,
+    `${copy.roundLabel}: ${state.round}`,
+    `${copy.nextHopLabel}: ${display.nextHop}`,
+    `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
+    `${copy.transportLabel}: ${display.transport || copy.none}`,
+    `${copy.selectorLabel}: ${display.selector || copy.none}`,
+    `${copy.lastIssueLabel}: ${state.lastError || state.lastStopReason || copy.none}`
   ].join("\n");
 }
 function summarizeBinding(binding) {

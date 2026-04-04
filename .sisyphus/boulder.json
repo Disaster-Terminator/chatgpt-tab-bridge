@@ -1,136 +1,16 @@
 {
-  "active_plan": "/home/raystorm/projects/meta/.sisyphus/plans/chatgpt-tab-bridge-ts-migration.md",
-  "started_at": "2026-04-04T05:28:04.453Z",
+  "active_plan": "/home/raystorm/projects/meta/.sisyphus/plans/frontend-optimization.md",
+  "started_at": "2026-04-04T11:14:27.000Z",
   "session_ids": [
-    "ses_2a915575bffetiQdO5ORObknV3",
-    "ses_2a9093b53ffexeHHhvJDSUi5tL",
-    "ses_2a9068599ffeDIq9bSSjknvQNO",
-    "ses_2a9027790ffehiNMeHP4QcbKms",
-    "ses_2a8fa2d4dffeNbzE4sXYtBS4dS",
-    "ses_2a8f663f9ffeeSWGoktRbt4yjZ",
-    "ses_2a8f15845ffeX04znOiB3adMZV",
-    "ses_2a8effc66ffe5jOycdc4HVCnuY",
-    "ses_2a8ea4310ffeacWz4eA3DqLWzn",
-    "ses_2a8e55c36ffePu8NVJRfIknNKi",
-    "ses_2a8db05a9ffeFVW2EDQesssryK",
-    "ses_2a8d7dc71ffedhojrFNikcUFqg",
-    "ses_2a8d7dd0fffeNUypFFhEV6Y2CF",
-    "ses_2a8d7dba7ffeR9fLqJtn6U9ev2",
-    "ses_2a8d7de8cffeNoSMrunFPIsuoC",
-    "ses_2a8ca1fa2ffenDntQ9joqeX2fc",
-    "ses_2a8c8d9e8ffeLcquof2d9L8EBo",
-    "ses_2a8a180e0ffeiXyDQZlSUh9rkP"
+    "ses_2a7e8edb5ffercckih2isbEkYY",
+    "ses_2a7b833dbffekS3vMX3KaoxMee",
+    "ses_2a7b45a41ffe7yHhkah3pOxizM",
+    "ses_2a7b45a02ffeNDeaCzn9BRkb2e",
+    "ses_2a7b37015ffea2PCegK58K2q2j",
+    "ses_2a7a69297ffeXuMkuG5D63qnSH",
+    "ses_2a7a6925dffeTtVwdgEqnn8nIL"
   ],
-  "plan_name": "chatgpt-tab-bridge-ts-migration",
+  "plan_name": "frontend-optimization",
   "agent": "atlas",
-  "task_sessions": {
-    "todo:1": {
-      "task_key": "todo:1",
-      "task_label": "1",
-      "task_title": "Freeze Baseline Contracts and Risk Map",
-      "session_id": "ses_2a9093b53ffexeHHhvJDSUi5tL",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T05:30:41.552Z"
-    },
-    "todo:2": {
-      "task_key": "todo:2",
-      "task_label": "2",
-      "task_title": "Build Real dist/extension Pipeline",
-      "session_id": "ses_2a9068599ffeDIq9bSSjknvQNO",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T05:35:08.559Z"
-    },
-    "todo:3": {
-      "task_key": "todo:3",
-      "task_label": "3",
-      "task_title": "Centralize Extension Path Resolution for Smoke/Semi/Manual Loading",
-      "session_id": "ses_2a9027790ffehiNMeHP4QcbKms",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-04-04T05:36:50.070Z"
-    },
-    "todo:4": {
-      "task_key": "todo:4",
-      "task_label": "4",
-      "task_title": "Decouple Tests from Source Extension Suffixes",
-      "session_id": "ses_2a8fa2d4dffeNbzE4sXYtBS4dS",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T05:47:28.286Z"
-    },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "Introduce Shared Type Contracts and Extension Ambient Types",
-      "session_id": "ses_2a8f663f9ffeeSWGoktRbt4yjZ",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T05:54:01.586Z"
-    },
-    "todo:6": {
-      "task_key": "todo:6",
-      "task_label": "6",
-      "task_title": "Migrate Low-Risk Core Utility Modules to TypeScript",
-      "session_id": "ses_2a8f15845ffeX04znOiB3adMZV",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-04-04T05:55:43.137Z"
-    },
-    "todo:7": {
-      "task_key": "todo:7",
-      "task_label": "7",
-      "task_title": "Migrate Protocol and State Core to TypeScript",
-      "session_id": "ses_2a8effc66ffe5jOycdc4HVCnuY",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T06:02:01.707Z"
-    },
-    "todo:8": {
-      "task_key": "todo:8",
-      "task_label": "8",
-      "task_title": "Migrate popup.mjs to popup.ts Without UI Drift",
-      "session_id": "ses_2a8ea4310ffeacWz4eA3DqLWzn",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T06:05:54.997Z"
-    },
-    "todo:9": {
-      "task_key": "todo:9",
-      "task_label": "9",
-      "task_title": "Migrate background.mjs to background.ts While Preserving Runtime Semantics",
-      "session_id": "ses_2a8e55c36ffePu8NVJRfIknNKi",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-04T06:13:55.363Z"
-    },
-    "todo:10": {
-      "task_key": "todo:10",
-      "task_label": "10",
-      "task_title": "Migrate content helpers and content script to TypeScript With Equivalent DOM Behavior",
-      "session_id": "ses_2a8df46a4ffeCyZINVsTORf0Sw",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-04-04T06:18:28.738Z"
-    },
-    "todo:11": {
-      "task_key": "todo:11",
-      "task_label": "11",
-      "task_title": "Close the Migration: Commands, Docs, and Final Dist Compatibility",
-      "session_id": "ses_2a8d8f8abffeEQSyQOaAqCg0W9",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-04-04T06:21:44.612Z"
-    },
-    "final-wave:f1": {
-      "task_key": "final-wave:f1",
-      "task_label": "F1",
-      "task_title": "Plan Compliance Audit — oracle",
-      "session_id": "ses_2a8a180e0ffeiXyDQZlSUh9rkP",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-04-04T07:25:55.022Z"
-    }
-  }
+  "task_sessions": {}
 }

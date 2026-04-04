@@ -1,4 +1,6 @@
 import { MESSAGE_TYPES } from "./core/constants.ts";
+import { getPopupCopy, applyStaticCopy, formatPhase, type UiLocale } from "./copy/bridge-copy.ts";
+import { readUiLocale, writeUiLocale } from "./ui/preferences.ts";
 import type {
   BridgeRole,
   ClearBindingMessage,
@@ -13,6 +15,7 @@ import type {
   SetBindingMessage,
   SetNextHopOverrideMessage,
   SetOverlayEnabledMessage,
+  SetOverlayCollapsedMessage,
   SetStarterMessage,
   StartSessionMessage,
   StopSessionMessage,
@@ -29,7 +32,9 @@ interface PopupElements {
   unbindCurrentButton: HTMLButtonElement;
   bindingA: HTMLElement;
   bindingB: HTMLElement;
+  localeSelect: HTMLSelectElement;
   overlayEnabledCheckbox: HTMLInputElement;
+  defaultExpandedCheckbox: HTMLInputElement;
   resetOverlayPositionButton: HTMLButtonElement;
   starterSelect: HTMLSelectElement;
   overrideSelect: HTMLSelectElement;
@@ -56,6 +61,7 @@ type PopupActionMessage =
   | SetBindingMessage
   | SetNextHopOverrideMessage
   | SetOverlayEnabledMessage
+  | SetOverlayCollapsedMessage
   | SetStarterMessage
   | StartSessionMessage
   | StopSessionMessage;
@@ -81,7 +87,9 @@ const elements: PopupElements = {
   unbindCurrentButton: requireElement<HTMLButtonElement>("#unbindCurrentButton"),
   bindingA: requireElement<HTMLElement>("#bindingA"),
   bindingB: requireElement<HTMLElement>("#bindingB"),
+  localeSelect: requireElement<HTMLSelectElement>("#localeSelect"),
   overlayEnabledCheckbox: requireElement<HTMLInputElement>("#overlayEnabledCheckbox"),
+  defaultExpandedCheckbox: requireElement<HTMLInputElement>("#defaultExpandedCheckbox"),
   resetOverlayPositionButton: requireElement<HTMLButtonElement>("#resetOverlayPositionButton"),
   starterSelect: requireElement<HTMLSelectElement>("#starterSelect"),
   overrideSelect: requireElement<HTMLSelectElement>("#overrideSelect"),
@@ -103,6 +111,10 @@ let currentTabId: number | null = null;
 let currentModel: PopupModel | null = null;
 let refreshTimerId: number | null = null;
 let refreshInFlight: Promise<PopupModel | null> | null = null;
+let currentLocale: UiLocale = readUiLocale();
+
+applyStaticCopy(document.body, currentLocale);
+document.documentElement.lang = currentLocale === "en" ? "en" : "zh-CN";
 
 wireEvents();
 void refresh();
@@ -234,6 +246,24 @@ function wireEvents(): void {
       type: MESSAGE_TYPES.RESET_OVERLAY_POSITION
     });
   });
+
+  elements.localeSelect.addEventListener("change", () => {
+    const newLocale = elements.localeSelect.value as UiLocale;
+    currentLocale = newLocale;
+    writeUiLocale(newLocale);
+    document.documentElement.lang = newLocale === "en" ? "en" : "zh-CN";
+    applyStaticCopy(document.body, newLocale);
+    if (currentModel) {
+      render(currentModel);
+    }
+  });
+
+  elements.defaultExpandedCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_OVERLAY_COLLAPSED,
+      collapsed: !elements.defaultExpandedCheckbox.checked
+    });
+  });
 }
 
 async function perform(message: PopupActionMessage): Promise<void> {
@@ -246,30 +276,32 @@ async function perform(message: PopupActionMessage): Promise<void> {
 }
 
 function render(model: PopupModel): void {
+  const copy = getPopupCopy(currentLocale);
   const { state, currentTab, controls, display, overlaySettings } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
-  elements.phaseBadge.textContent = state.phase;
+  elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
+  elements.phaseBadge.dataset.phase = state.phase;
   elements.bindingA.textContent = summarizeBinding(state.bindings.A);
   elements.bindingB.textContent = summarizeBinding(state.bindings.B);
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
-  elements.currentStepValue.textContent = display.currentStep || "idle";
-  elements.transportValue.textContent = display.transport || "None";
-  elements.selectorValue.textContent = display.selector || "None";
-  elements.issueValue.textContent = state.lastError || state.lastStopReason || "None";
+  elements.currentStepValue.textContent = display.currentStep || copy.idle;
+  elements.transportValue.textContent = display.transport || copy.none;
+  elements.selectorValue.textContent = display.selector || copy.none;
+  elements.issueValue.textContent = state.lastError || state.lastStopReason || copy.none;
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
+  elements.localeSelect.value = currentLocale;
 
   if (!currentTab) {
-    elements.currentTabStatus.textContent = "No active tab available.";
+    elements.currentTabStatus.textContent = copy.noActiveTab;
   } else if (!currentTab.urlInfo.supported) {
-    elements.currentTabStatus.textContent =
-      "Current tab is not a supported ChatGPT thread.";
+    elements.currentTabStatus.textContent = copy.unsupportedTab;
   } else {
     elements.currentTabStatus.textContent = currentTab.assignedRole
-      ? `Current tab is bound as ${currentTab.assignedRole}.`
-      : `Current tab is eligible (${currentTab.urlInfo.kind}).`;
+      ? copy.tabBoundAs(currentTab.assignedRole)
+      : copy.tabEligible(currentTab.urlInfo.kind);
   }
 
   elements.bindAButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
@@ -282,6 +314,15 @@ function render(model: PopupModel): void {
   elements.clearTerminalButton.disabled = !controls.canClearTerminal;
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
+
+  const starterOptions = elements.starterSelect.options;
+  starterOptions[0].textContent = copy.starterA;
+  starterOptions[1].textContent = copy.starterB;
+
+  const overrideOptions = elements.overrideSelect.options;
+  overrideOptions[0].textContent = copy.overrideNone;
+  overrideOptions[1].textContent = copy.overrideA;
+  overrideOptions[2].textContent = copy.overrideB;
 }
 
 async function copyDebugSnapshot(): Promise<void> {
@@ -294,7 +335,7 @@ async function copyDebugSnapshot(): Promise<void> {
 
   try {
     await navigator.clipboard.writeText(payload);
-    elements.issueValue.textContent = "Debug snapshot copied";
+    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
   } catch {
     const fallback = document.createElement("textarea");
     fallback.value = payload;
@@ -305,27 +346,34 @@ async function copyDebugSnapshot(): Promise<void> {
     fallback.select();
     document.execCommand("copy");
     fallback.remove();
-    elements.issueValue.textContent = "Debug snapshot copied";
+    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
   }
 }
 
 function buildDebugSnapshot(model: PopupModel): string {
+  const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
 
+  const tabStatus = currentTab?.assignedRole
+    ? copy.tabBoundAs(currentTab.assignedRole)
+    : currentTab?.urlInfo?.supported
+      ? copy.tabEligible(currentTab.urlInfo.kind)
+      : copy.unsupportedTab;
+
   return [
-    "ChatGPT Bridge",
+    copy.title,
     "",
-    `Phase: ${state.phase}`,
-    `Current tab: ${currentTab?.assignedRole ? `bound as ${currentTab.assignedRole}` : currentTab?.urlInfo?.supported ? "eligible" : "unsupported"}`,
-    `Binding A: ${summarizeBinding(state.bindings.A)}`,
-    `Binding B: ${summarizeBinding(state.bindings.B)}`,
-    `Starter: ${state.starter}`,
-    `Round: ${state.round}`,
-    `Next hop: ${display.nextHop}`,
-    `Current step: ${display.currentStep || "idle"}`,
-    `Transport: ${display.transport || "None"}`,
-    `Selector: ${display.selector || "None"}`,
-    `Last issue: ${state.lastError || state.lastStopReason || "None"}`
+    `${formatPhase(currentLocale, state.phase)}`,
+    tabStatus,
+    `A: ${summarizeBinding(state.bindings.A)}`,
+    `B: ${summarizeBinding(state.bindings.B)}`,
+    `${copy.labelStarter}: ${state.starter}`,
+    `${copy.roundLabel}: ${state.round}`,
+    `${copy.nextHopLabel}: ${display.nextHop}`,
+    `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
+    `${copy.transportLabel}: ${display.transport || copy.none}`,
+    `${copy.selectorLabel}: ${display.selector || copy.none}`,
+    `${copy.lastIssueLabel}: ${state.lastError || state.lastStopReason || copy.none}`
   ].join("\n");
 }
 

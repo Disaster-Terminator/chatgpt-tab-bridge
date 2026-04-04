@@ -8,6 +8,8 @@ import {
   triggerComposerSend
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
+import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
+import { readUiLocale, observeUiLocale } from "./ui/preferences.ts";
 import type {
   OverlayModel,
   PopupControls,
@@ -51,6 +53,12 @@ let overlaySnapshot: OverlayModel = {
     position: null
   }
 };
+
+let overlayLocale: UiLocale = readUiLocale();
+observeUiLocale((locale) => {
+  overlayLocale = locale;
+  renderOverlay();
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT) {
@@ -173,18 +181,6 @@ function bindOverlayEvents(): void {
     void dispatchOverlayAction({ type: MESSAGE_TYPES.CLEAR_TERMINAL });
   });
 
-  requireOverlayElement<HTMLSelectElement>("[data-role='starter']").addEventListener("change", (event) => {
-    const target = event.target as HTMLSelectElement;
-    if (target.value !== "A" && target.value !== "B") {
-      return;
-    }
-
-    void dispatchOverlayAction({
-      type: MESSAGE_TYPES.SET_STARTER,
-      role: target.value
-    });
-  });
-
   initOverlayDrag();
 }
 
@@ -218,54 +214,53 @@ async function refreshOverlayModel(): Promise<void> {
 }
 
 function createOverlay(): HTMLElement {
+  const c = getOverlayCopy(overlayLocale);
   const node = document.createElement("aside");
   node.className = "chatgpt-bridge-overlay";
   node.dataset.extensionId = chrome.runtime.id;
   node.innerHTML = `
       <div class="chatgpt-bridge-overlay__header" data-drag-handle="true">
-        <div class="chatgpt-bridge-overlay__title">Bridge</div>
-        <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse">−</button>
+        <div class="chatgpt-bridge-overlay__title">${c.bridgeTitle}</div>
+        <span class="chatgpt-bridge-overlay__phase-badge" data-slot="phase-badge" data-phase="idle">${c.phaseIdle}</span>
+        <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse" aria-label="${c.collapseExpand}">${c.collapseCollapse}</button>
       </div>
       <div class="chatgpt-bridge-overlay__body">
-      <div class="chatgpt-bridge-overlay__hero">
-        <div class="chatgpt-bridge-overlay__role" data-slot="role">Unbound</div>
-        <div class="chatgpt-bridge-overlay__phase" data-slot="phase">idle</div>
+      <div class="chatgpt-bridge-overlay__role-row">
+        <div class="chatgpt-bridge-overlay__role" data-slot="role">${c.roleUnbound}</div>
       </div>
       <div class="chatgpt-bridge-overlay__stats">
         <div class="chatgpt-bridge-overlay__stat">
-          <span>Round</span>
+          <span>${c.roundLabel}</span>
           <strong data-slot="round">0</strong>
         </div>
         <div class="chatgpt-bridge-overlay__stat">
-          <span>Next</span>
+          <span>${c.nextLabel}</span>
           <strong data-slot="next-hop">A -> B</strong>
         </div>
       </div>
-      <div class="chatgpt-bridge-overlay__debug">
-        <div class="chatgpt-bridge-overlay__meta" data-slot="step">Step: idle</div>
-        <div class="chatgpt-bridge-overlay__meta" data-slot="issue">Issue: None</div>
+      <div class="chatgpt-bridge-overlay__step-band" data-slot="step-band">${c.stepLabel}: ${c.idle}</div>
+      <div class="chatgpt-bridge-overlay__issue-row" data-slot="issue-row" hidden>
+        <span data-slot="issue">${c.issueLabel}: ${c.none}</span>
       </div>
-      <label class="chatgpt-bridge-overlay__label">Starter
-        <select data-role="starter">
-          <option value="A">A starts</option>
-          <option value="B">B starts</option>
-        </select>
-      </label>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-bind-role="A">Bind A</button>
-        <button type="button" data-bind-role="B">Bind B</button>
-        <button type="button" data-action="unbind">Unbind</button>
+      <div class="chatgpt-bridge-overlay__starter-row" data-slot="starter-row">
+        <span>${c.starterLabel}:</span>
+        <strong data-slot="starter">${c.starterA}</strong>
       </div>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-action="start">Start</button>
-        <button type="button" data-action="pause">Pause</button>
-        <button type="button" data-action="resume">Resume</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--binding">
+        <button type="button" data-bind-role="A">${c.bindA}</button>
+        <button type="button" data-bind-role="B">${c.bindB}</button>
+        <button type="button" data-action="unbind">${c.unbind}</button>
       </div>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-action="stop">Stop</button>
-        <button type="button" data-action="clear-terminal">Clear</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--session">
+        <button type="button" data-action="start">${c.start}</button>
+        <button type="button" data-action="pause">${c.pause}</button>
+        <button type="button" data-action="resume">${c.resume}</button>
+        <button type="button" data-action="stop">${c.stop}</button>
       </div>
-      <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">Open popup</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--aux">
+        <button type="button" data-action="clear-terminal">${c.clear}</button>
+        <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">${c.popup}</button>
+      </div>
       </div>
     `;
   document.documentElement.appendChild(node);
@@ -273,18 +268,31 @@ function createOverlay(): HTMLElement {
 }
 
 function renderOverlay(): void {
+  const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
 
-  requireOverlayElement("[data-slot='role']").textContent = overlaySnapshot.assignedRole
-    ? `Bound as ${overlaySnapshot.assignedRole}`
-    : "Unbound";
-  requireOverlayElement("[data-slot='phase']").textContent = overlaySnapshot.phase;
+  requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
+
+  const phaseBadge = requireOverlayElement<HTMLElement>("[data-slot='phase-badge']");
+  phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
+  phaseBadge.dataset.phase = overlaySnapshot.phase;
+
   requireOverlayElement("[data-slot='round']").textContent = String(overlaySnapshot.round);
   requireOverlayElement("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
-  requireOverlayElement("[data-slot='step']").textContent = `Step: ${display?.currentStep || "idle"}`;
-  requireOverlayElement("[data-slot='issue']").textContent = `Issue: ${display?.lastIssue || "None"}`;
-  requireOverlayElement<HTMLSelectElement>('[data-role="starter"]').value = overlaySnapshot.starter;
+  requireOverlayElement("[data-slot='step-band']").textContent = formatStepLine(overlayLocale, display?.currentStep);
+
+  const issueRow = requireOverlayElement<HTMLElement>("[data-slot='issue-row']");
+  const issueText = display?.lastIssue;
+  if (!issueText || issueText === "None") {
+    issueRow.hidden = true;
+  } else {
+    issueRow.hidden = false;
+    requireOverlayElement("[data-slot='issue']").textContent = formatIssueLine(overlayLocale, issueText);
+  }
+
+  requireOverlayElement("[data-slot='starter']").textContent = formatStarter(overlayLocale, overlaySnapshot.starter);
+
   overlay.classList.toggle("chatgpt-bridge-overlay--terminal", Boolean(overlaySnapshot.requiresTerminalClear));
   overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed));
   overlay.hidden = overlaySettings?.enabled === false;
@@ -299,7 +307,7 @@ function renderOverlay(): void {
   requireOverlayElement<HTMLButtonElement>("[data-action='stop']").disabled = !controls?.canStop;
   requireOverlayElement<HTMLButtonElement>("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
   requireOverlayElement<HTMLButtonElement>(".chatgpt-bridge-overlay__collapse").textContent =
-    overlaySettings?.collapsed ? "+" : "−";
+    overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
 }
 
 function applyOverlayPosition(position: { x: number; y: number } | null): void {
@@ -519,18 +527,38 @@ async function waitForSendButton({
   root: ParentNode;
   composer: Element;
 }): Promise<HTMLButtonElement | null> {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < 5000) {
-    const button = findSendButton(root, composer);
-    if (button) {
-      return button;
-    }
-
-    await sleep(200);
+  // Immediate check first
+  const button = findSendButton(root, composer);
+  if (button) {
+    return button;
   }
 
-  return null;
+  // Use MutationObserver to react to DOM changes (not throttled in background tabs)
+  return new Promise<HTMLButtonElement | null>((resolve) => {
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, 5000);
+
+    const observer = new MutationObserver(() => {
+      // Defer heavy check to next microtask to avoid blocking
+      queueMicrotask(() => {
+        const found = findSendButton(root, composer);
+        if (found) {
+          clearTimeout(timeout);
+          observer.disconnect();
+          resolve(found);
+        }
+      });
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["disabled", "aria-disabled", "style", "class"]
+    });
+  });
 }
 
 async function waitForSubmissionAcknowledgement({
@@ -545,42 +573,64 @@ async function waitForSubmissionAcknowledgement({
   | { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" }
   | { ok: false; error: "send_not_acknowledged"; signal: "none" }
 > {
-  const startedAt = Date.now();
   const expectedHash = hashText(expectedText);
 
-  while (Date.now() - startedAt < 5000) {
-    const composerText = readComposerText(composer);
-    const latestUserHash = readLatestUserHash();
-
-    if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
-      return {
-        ok: true,
-        signal: "user_message_added"
-      };
-    }
-
-    if (isGenerationInProgress() && composerText !== expectedText) {
-      return {
-        ok: true,
-        signal: "generation_started"
-      };
-    }
-
-    if (!composerText || composerText !== expectedText) {
-      return {
-        ok: true,
-        signal: "composer_cleared"
-      };
-    }
-
-    await sleep(250);
+  // Immediate check first
+  const immediate = checkAckSignals(baseline, composer, expectedHash);
+  if (immediate) {
+    return immediate;
   }
 
-  return {
-    ok: false,
-    error: "send_not_acknowledged",
-    signal: "none"
-  };
+  // Use MutationObserver (not throttled in background tabs)
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
+    }, 5000);
+
+    const observer = new MutationObserver(() => {
+      // Defer heavy DOM checks to next microtask to avoid blocking
+      queueMicrotask(() => {
+        const result = checkAckSignals(baseline, composer, expectedHash);
+        if (result) {
+          clearTimeout(timeout);
+          observer.disconnect();
+          resolve(result);
+        }
+      });
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+      attributeFilter: ["aria-label", "disabled", "style", "class"]
+    });
+  });
+}
+
+function checkAckSignals(
+  baseline: { userHash: string | null },
+  composer: Element,
+  expectedHash: string
+): { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" } | null {
+  const composerText = readComposerText(composer);
+  const latestUserHash = readLatestUserHash();
+
+  if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
+    return { ok: true, signal: "user_message_added" };
+  }
+
+  if (isGenerationInProgress() && composerText !== expectedHash) {
+    return { ok: true, signal: "generation_started" };
+  }
+
+  if (!composerText || composerText !== expectedHash) {
+    return { ok: true, signal: "composer_cleared" };
+  }
+
+  return null;
 }
 
 function readLatestUserHash(): string | null {

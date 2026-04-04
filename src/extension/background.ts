@@ -590,7 +590,7 @@ async function sendRelayMessage(tabId: number, text: string): Promise<RelayMessa
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
       }),
-      sleep(8000).then<RelayMessageResponse>(() => ({
+      sleep(15000).then<RelayMessageResponse>(() => ({
         ok: false,
         error: "send_message_timeout"
       }))

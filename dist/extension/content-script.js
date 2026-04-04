@@ -249,6 +249,278 @@ var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
   position: null
 });
 
+// copy/bridge-copy.ts
+var DEFAULT_UI_LOCALE = "zh-CN";
+var zhCN = {
+  overlay: {
+    bridgeTitle: "\u4E2D\u7EE7",
+    phaseReady: "\u5C31\u7EEA",
+    phaseRunning: "\u8FD0\u884C\u4E2D",
+    phasePaused: "\u5DF2\u6682\u505C",
+    phaseStopped: "\u5DF2\u505C\u6B62",
+    phaseError: "\u9519\u8BEF",
+    phaseIdle: "\u7A7A\u95F2",
+    roleUnbound: "\u672A\u7ED1\u5B9A",
+    roleBoundA: "\u5DF2\u7ED1\u5B9A A",
+    roleBoundB: "\u5DF2\u7ED1\u5B9A B",
+    roundLabel: "\u8F6E\u6B21",
+    nextLabel: "\u4E0B\u4E00\u8DF3",
+    stepLabel: "\u6B65\u9AA4",
+    issueLabel: "\u95EE\u9898",
+    starterLabel: "\u8D77\u59CB\u4FA7",
+    starterA: "A \u8D77\u59CB",
+    starterB: "B \u8D77\u59CB",
+    bindA: "\u7ED1\u5B9A A",
+    bindB: "\u7ED1\u5B9A B",
+    unbind: "\u89E3\u7ED1",
+    start: "\u5F00\u59CB",
+    pause: "\u6682\u505C",
+    resume: "\u6062\u590D",
+    stop: "\u505C\u6B62",
+    clear: "\u6E05\u7A7A",
+    popup: "\u9762\u677F",
+    collapseExpand: "+",
+    collapseCollapse: "\u2212",
+    none: "\u65E0",
+    idle: "\u7A7A\u95F2"
+  },
+  popup: {
+    eyebrow: "ChatGPT \u4E2D\u7EE7",
+    title: "\u63A7\u5236\u9762\u677F",
+    sectionCurrentTab: "\u5F53\u524D\u6807\u7B7E\u9875",
+    sectionBindings: "\u7ED1\u5B9A",
+    sectionOverlay: "\u60AC\u6D6E\u7A97",
+    sectionRunControls: "\u8FD0\u884C\u63A7\u5236",
+    sectionFallback: "\u5907\u7528\u64CD\u4F5C",
+    sectionDebug: "\u8C03\u8BD5",
+    debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
+    labelStarter: "\u8D77\u59CB\u4FA7",
+    labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
+    labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
+    labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
+    bindA: "\u7ED1\u5B9A A",
+    bindB: "\u7ED1\u5B9A B",
+    unbind: "\u89E3\u7ED1",
+    start: "\u5F00\u59CB",
+    pause: "\u6682\u505C",
+    resume: "\u6062\u590D",
+    stop: "\u505C\u6B62",
+    clearTerminal: "\u6E05\u7A7A\u7EC8\u7AEF",
+    resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
+    copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
+    copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
+    noActiveTab: "\u65E0\u53EF\u7528\u6D3B\u52A8\u6807\u7B7E\u9875\u3002",
+    unsupportedTab: "\u5F53\u524D\u6807\u7B7E\u9875\u4E0D\u662F\u652F\u6301\u7684 ChatGPT \u7EBF\u7A0B\u3002",
+    tabBoundAs: (role) => `\u5F53\u524D\u6807\u7B7E\u9875\u5DF2\u7ED1\u5B9A\u4E3A ${role}\u3002`,
+    tabEligible: (kind) => `\u5F53\u524D\u6807\u7B7E\u9875\u7B26\u5408\u6761\u4EF6\uFF08${kind}\uFF09\u3002`,
+    unbound: "\u672A\u7ED1\u5B9A",
+    none: "\u65E0",
+    idle: "\u7A7A\u95F2",
+    roundLabel: "\u8F6E\u6B21",
+    nextHopLabel: "\u4E0B\u4E00\u8DF3",
+    currentStepLabel: "\u5F53\u524D\u6B65\u9AA4",
+    transportLabel: "\u4F20\u8F93",
+    selectorLabel: "\u9009\u62E9\u5668",
+    lastIssueLabel: "\u6700\u540E\u95EE\u9898",
+    overrideNone: "\u4E0D\u8986\u76D6",
+    overrideA: "A \u2192 B",
+    overrideB: "B \u2192 A",
+    starterA: "A \u8D77\u59CB",
+    starterB: "B \u8D77\u59CB",
+    localeLabel: "\u8BED\u8A00",
+    localeZh: "\u4E2D\u6587",
+    localeEn: "English",
+    localeBilingual: "\u53CC\u8BED",
+    helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002"
+  }
+};
+var en = {
+  overlay: {
+    bridgeTitle: "Bridge",
+    phaseReady: "Ready",
+    phaseRunning: "Running",
+    phasePaused: "Paused",
+    phaseStopped: "Stopped",
+    phaseError: "Error",
+    phaseIdle: "Idle",
+    roleUnbound: "Unbound",
+    roleBoundA: "Bound as A",
+    roleBoundB: "Bound as B",
+    roundLabel: "Round",
+    nextLabel: "Next",
+    stepLabel: "Step",
+    issueLabel: "Issue",
+    starterLabel: "Starter",
+    starterA: "A starts",
+    starterB: "B starts",
+    bindA: "Bind A",
+    bindB: "Bind B",
+    unbind: "Unbind",
+    start: "Start",
+    pause: "Pause",
+    resume: "Resume",
+    stop: "Stop",
+    clear: "Clear",
+    popup: "Popup",
+    collapseExpand: "+",
+    collapseCollapse: "\u2212",
+    none: "None",
+    idle: "idle"
+  },
+  popup: {
+    eyebrow: "ChatGPT Bridge",
+    title: "Popup control surface",
+    sectionCurrentTab: "Current tab",
+    sectionBindings: "Bindings",
+    sectionOverlay: "Overlay",
+    sectionRunControls: "Run controls",
+    sectionFallback: "Fallback",
+    sectionDebug: "Debug",
+    debugSummary: "Debug info",
+    labelStarter: "Starter side",
+    labelOverride: "Paused next hop override",
+    labelEnableOverlay: "Enable overlay",
+    labelDefaultExpanded: "Default expanded overlay",
+    bindA: "Bind A",
+    bindB: "Bind B",
+    unbind: "Unbind current tab",
+    start: "Start",
+    pause: "Pause",
+    resume: "Resume",
+    stop: "Stop",
+    clearTerminal: "Clear terminal",
+    resetPosition: "Reset position",
+    copyDebug: "Copy debug snapshot",
+    copied: "Debug snapshot copied",
+    noActiveTab: "No active tab available.",
+    unsupportedTab: "Current tab is not a supported ChatGPT thread.",
+    tabBoundAs: (role) => `Current tab is bound as ${role}.`,
+    tabEligible: (kind) => `Current tab is eligible (${kind}).`,
+    unbound: "Unbound",
+    none: "None",
+    idle: "idle",
+    roundLabel: "Round",
+    nextHopLabel: "Next hop",
+    currentStepLabel: "Current step",
+    transportLabel: "Transport",
+    selectorLabel: "Selector",
+    lastIssueLabel: "Last issue",
+    overrideNone: "No override",
+    overrideA: "A \u2192 B",
+    overrideB: "B \u2192 A",
+    starterA: "A starts",
+    starterB: "B starts",
+    localeLabel: "Language",
+    localeZh: "\u4E2D\u6587",
+    localeEn: "English",
+    localeBilingual: "Bilingual",
+    helpText: "Override only applies while paused; Clear returns stopped/error to ready."
+  }
+};
+function toBilingual(zh, en2) {
+  return `${zh} ${en2}`;
+}
+function getOverlayCopy(locale) {
+  if (locale === "bilingual") {
+    const z = zhCN.overlay;
+    const e = en.overlay;
+    return {
+      bridgeTitle: toBilingual(z.bridgeTitle, e.bridgeTitle),
+      phaseReady: toBilingual(z.phaseReady, e.phaseReady),
+      phaseRunning: toBilingual(z.phaseRunning, e.phaseRunning),
+      phasePaused: toBilingual(z.phasePaused, e.phasePaused),
+      phaseStopped: toBilingual(z.phaseStopped, e.phaseStopped),
+      phaseError: toBilingual(z.phaseError, e.phaseError),
+      phaseIdle: toBilingual(z.phaseIdle, e.phaseIdle),
+      roleUnbound: toBilingual(z.roleUnbound, e.roleUnbound),
+      roleBoundA: toBilingual(z.roleBoundA, e.roleBoundA),
+      roleBoundB: toBilingual(z.roleBoundB, e.roleBoundB),
+      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
+      nextLabel: toBilingual(z.nextLabel, e.nextLabel),
+      stepLabel: toBilingual(z.stepLabel, e.stepLabel),
+      issueLabel: toBilingual(z.issueLabel, e.issueLabel),
+      starterLabel: toBilingual(z.starterLabel, e.starterLabel),
+      starterA: toBilingual(z.starterA, e.starterA),
+      starterB: toBilingual(z.starterB, e.starterB),
+      bindA: toBilingual(z.bindA, e.bindA),
+      bindB: toBilingual(z.bindB, e.bindB),
+      unbind: toBilingual(z.unbind, e.unbind),
+      start: toBilingual(z.start, e.start),
+      pause: toBilingual(z.pause, e.pause),
+      resume: toBilingual(z.resume, e.resume),
+      stop: toBilingual(z.stop, e.stop),
+      clear: toBilingual(z.clear, e.clear),
+      popup: toBilingual(z.popup, e.popup),
+      collapseExpand: e.collapseExpand,
+      collapseCollapse: e.collapseCollapse,
+      none: toBilingual(z.none, e.none),
+      idle: toBilingual(z.idle, e.idle)
+    };
+  }
+  return locale === "en" ? en.overlay : zhCN.overlay;
+}
+function formatPhase(locale, phase) {
+  const c = getOverlayCopy(locale);
+  switch (phase) {
+    case "ready":
+      return c.phaseReady;
+    case "running":
+      return c.phaseRunning;
+    case "paused":
+      return c.phasePaused;
+    case "stopped":
+      return c.phaseStopped;
+    case "error":
+      return c.phaseError;
+    default:
+      return c.phaseIdle;
+  }
+}
+function formatRoleStatus(locale, assignedRole) {
+  const c = getOverlayCopy(locale);
+  if (!assignedRole) return c.roleUnbound;
+  return assignedRole === "A" ? c.roleBoundA : c.roleBoundB;
+}
+function formatStarter(locale, role) {
+  const c = getOverlayCopy(locale);
+  return role === "A" ? c.starterA : c.starterB;
+}
+function formatStepLine(locale, step) {
+  const c = getOverlayCopy(locale);
+  const s = step || c.idle;
+  return `${c.stepLabel}: ${s}`;
+}
+function formatIssueLine(locale, issue) {
+  const c = getOverlayCopy(locale);
+  const i = issue || c.none;
+  return `${c.issueLabel}: ${i}`;
+}
+
+// ui/preferences.ts
+var UI_LOCALE_STORAGE_KEY = "chatgptBridgeUiLocale";
+function readUiLocale() {
+  try {
+    const raw = localStorage.getItem(UI_LOCALE_STORAGE_KEY);
+    if (raw === "zh-CN" || raw === "en" || raw === "bilingual") {
+      return raw;
+    }
+  } catch {
+  }
+  return DEFAULT_UI_LOCALE;
+}
+function observeUiLocale(callback) {
+  const handler = (event) => {
+    if (event.key === UI_LOCALE_STORAGE_KEY && event.newValue) {
+      const value = event.newValue;
+      if (value === "zh-CN" || value === "en" || value === "bilingual") {
+        callback(value);
+      }
+    }
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
+}
+
 // content-script.ts
 var overlay = createOverlay();
 var keepAlivePort = connectKeepAlivePort();
@@ -284,6 +556,11 @@ var overlaySnapshot = {
     position: null
   }
 };
+var overlayLocale = readUiLocale();
+observeUiLocale((locale) => {
+  overlayLocale = locale;
+  renderOverlay();
+});
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT) {
     try {
@@ -387,16 +664,6 @@ function bindOverlayEvents() {
   requireOverlayElement("[data-action='clear-terminal']").addEventListener("click", () => {
     void dispatchOverlayAction({ type: MESSAGE_TYPES.CLEAR_TERMINAL });
   });
-  requireOverlayElement("[data-role='starter']").addEventListener("change", (event) => {
-    const target = event.target;
-    if (target.value !== "A" && target.value !== "B") {
-      return;
-    }
-    void dispatchOverlayAction({
-      type: MESSAGE_TYPES.SET_STARTER,
-      role: target.value
-    });
-  });
   initOverlayDrag();
 }
 async function dispatchOverlayAction(message) {
@@ -425,69 +692,78 @@ async function refreshOverlayModel() {
   }
 }
 function createOverlay() {
+  const c = getOverlayCopy(overlayLocale);
   const node = document.createElement("aside");
   node.className = "chatgpt-bridge-overlay";
   node.dataset.extensionId = chrome.runtime.id;
   node.innerHTML = `
       <div class="chatgpt-bridge-overlay__header" data-drag-handle="true">
-        <div class="chatgpt-bridge-overlay__title">Bridge</div>
-        <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse">\u2212</button>
+        <div class="chatgpt-bridge-overlay__title">${c.bridgeTitle}</div>
+        <span class="chatgpt-bridge-overlay__phase-badge" data-slot="phase-badge" data-phase="idle">${c.phaseIdle}</span>
+        <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse" aria-label="${c.collapseExpand}">${c.collapseCollapse}</button>
       </div>
       <div class="chatgpt-bridge-overlay__body">
-      <div class="chatgpt-bridge-overlay__hero">
-        <div class="chatgpt-bridge-overlay__role" data-slot="role">Unbound</div>
-        <div class="chatgpt-bridge-overlay__phase" data-slot="phase">idle</div>
+      <div class="chatgpt-bridge-overlay__role-row">
+        <div class="chatgpt-bridge-overlay__role" data-slot="role">${c.roleUnbound}</div>
       </div>
       <div class="chatgpt-bridge-overlay__stats">
         <div class="chatgpt-bridge-overlay__stat">
-          <span>Round</span>
+          <span>${c.roundLabel}</span>
           <strong data-slot="round">0</strong>
         </div>
         <div class="chatgpt-bridge-overlay__stat">
-          <span>Next</span>
+          <span>${c.nextLabel}</span>
           <strong data-slot="next-hop">A -> B</strong>
         </div>
       </div>
-      <div class="chatgpt-bridge-overlay__debug">
-        <div class="chatgpt-bridge-overlay__meta" data-slot="step">Step: idle</div>
-        <div class="chatgpt-bridge-overlay__meta" data-slot="issue">Issue: None</div>
+      <div class="chatgpt-bridge-overlay__step-band" data-slot="step-band">${c.stepLabel}: ${c.idle}</div>
+      <div class="chatgpt-bridge-overlay__issue-row" data-slot="issue-row" hidden>
+        <span data-slot="issue">${c.issueLabel}: ${c.none}</span>
       </div>
-      <label class="chatgpt-bridge-overlay__label">Starter
-        <select data-role="starter">
-          <option value="A">A starts</option>
-          <option value="B">B starts</option>
-        </select>
-      </label>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-bind-role="A">Bind A</button>
-        <button type="button" data-bind-role="B">Bind B</button>
-        <button type="button" data-action="unbind">Unbind</button>
+      <div class="chatgpt-bridge-overlay__starter-row" data-slot="starter-row">
+        <span>${c.starterLabel}:</span>
+        <strong data-slot="starter">${c.starterA}</strong>
       </div>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-action="start">Start</button>
-        <button type="button" data-action="pause">Pause</button>
-        <button type="button" data-action="resume">Resume</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--binding">
+        <button type="button" data-bind-role="A">${c.bindA}</button>
+        <button type="button" data-bind-role="B">${c.bindB}</button>
+        <button type="button" data-action="unbind">${c.unbind}</button>
       </div>
-      <div class="chatgpt-bridge-overlay__actions">
-        <button type="button" data-action="stop">Stop</button>
-        <button type="button" data-action="clear-terminal">Clear</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--session">
+        <button type="button" data-action="start">${c.start}</button>
+        <button type="button" data-action="pause">${c.pause}</button>
+        <button type="button" data-action="resume">${c.resume}</button>
+        <button type="button" data-action="stop">${c.stop}</button>
       </div>
-      <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">Open popup</button>
+      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--aux">
+        <button type="button" data-action="clear-terminal">${c.clear}</button>
+        <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">${c.popup}</button>
+      </div>
       </div>
     `;
   document.documentElement.appendChild(node);
   return node;
 }
 function renderOverlay() {
+  const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
-  requireOverlayElement("[data-slot='role']").textContent = overlaySnapshot.assignedRole ? `Bound as ${overlaySnapshot.assignedRole}` : "Unbound";
-  requireOverlayElement("[data-slot='phase']").textContent = overlaySnapshot.phase;
+  requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
+  const phaseBadge = requireOverlayElement("[data-slot='phase-badge']");
+  phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
+  phaseBadge.dataset.phase = overlaySnapshot.phase;
   requireOverlayElement("[data-slot='round']").textContent = String(overlaySnapshot.round);
   requireOverlayElement("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
-  requireOverlayElement("[data-slot='step']").textContent = `Step: ${display?.currentStep || "idle"}`;
-  requireOverlayElement("[data-slot='issue']").textContent = `Issue: ${display?.lastIssue || "None"}`;
-  requireOverlayElement('[data-role="starter"]').value = overlaySnapshot.starter;
+  requireOverlayElement("[data-slot='step-band']").textContent = formatStepLine(overlayLocale, display?.currentStep);
+  const issueRow = requireOverlayElement("[data-slot='issue-row']");
+  const issueText = display?.lastIssue;
+  if (!issueText || issueText === "None") {
+    issueRow.hidden = true;
+  } else {
+    issueRow.hidden = false;
+    requireOverlayElement("[data-slot='issue']").textContent = formatIssueLine(overlayLocale, issueText);
+  }
+  requireOverlayElement("[data-slot='starter']").textContent = formatStarter(overlayLocale, overlaySnapshot.starter);
   overlay.classList.toggle("chatgpt-bridge-overlay--terminal", Boolean(overlaySnapshot.requiresTerminalClear));
   overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed));
   overlay.hidden = overlaySettings?.enabled === false;
@@ -500,7 +776,7 @@ function renderOverlay() {
   requireOverlayElement("[data-action='resume']").disabled = !controls?.canResume;
   requireOverlayElement("[data-action='stop']").disabled = !controls?.canStop;
   requireOverlayElement("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
-  requireOverlayElement(".chatgpt-bridge-overlay__collapse").textContent = overlaySettings?.collapsed ? "+" : "\u2212";
+  requireOverlayElement(".chatgpt-bridge-overlay__collapse").textContent = overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
 }
 function applyOverlayPosition(position) {
   if (!position) {
@@ -679,51 +955,80 @@ async function waitForSendButton({
   root,
   composer
 }) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 5e3) {
-    const button = findSendButton(root, composer);
-    if (button) {
-      return button;
-    }
-    await sleep(200);
+  const button = findSendButton(root, composer);
+  if (button) {
+    return button;
   }
-  return null;
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, 5e3);
+    const observer = new MutationObserver(() => {
+      queueMicrotask(() => {
+        const found = findSendButton(root, composer);
+        if (found) {
+          clearTimeout(timeout);
+          observer.disconnect();
+          resolve(found);
+        }
+      });
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["disabled", "aria-disabled", "style", "class"]
+    });
+  });
 }
 async function waitForSubmissionAcknowledgement({
   baseline,
   composer,
   expectedText
 }) {
-  const startedAt = Date.now();
   const expectedHash = hashText(expectedText);
-  while (Date.now() - startedAt < 5e3) {
-    const composerText = readComposerText(composer);
-    const latestUserHash = readLatestUserHash();
-    if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
-      return {
-        ok: true,
-        signal: "user_message_added"
-      };
-    }
-    if (isGenerationInProgress() && composerText !== expectedText) {
-      return {
-        ok: true,
-        signal: "generation_started"
-      };
-    }
-    if (!composerText || composerText !== expectedText) {
-      return {
-        ok: true,
-        signal: "composer_cleared"
-      };
-    }
-    await sleep(250);
+  const immediate = checkAckSignals(baseline, composer, expectedHash);
+  if (immediate) {
+    return immediate;
   }
-  return {
-    ok: false,
-    error: "send_not_acknowledged",
-    signal: "none"
-  };
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
+    }, 5e3);
+    const observer = new MutationObserver(() => {
+      queueMicrotask(() => {
+        const result = checkAckSignals(baseline, composer, expectedHash);
+        if (result) {
+          clearTimeout(timeout);
+          observer.disconnect();
+          resolve(result);
+        }
+      });
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+      attributeFilter: ["aria-label", "disabled", "style", "class"]
+    });
+  });
+}
+function checkAckSignals(baseline, composer, expectedHash) {
+  const composerText = readComposerText(composer);
+  const latestUserHash = readLatestUserHash();
+  if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
+    return { ok: true, signal: "user_message_added" };
+  }
+  if (isGenerationInProgress() && composerText !== expectedHash) {
+    return { ok: true, signal: "generation_started" };
+  }
+  if (!composerText || composerText !== expectedHash) {
+    return { ok: true, signal: "composer_cleared" };
+  }
+  return null;
 }
 function readLatestUserHash() {
   const latest = findLatestMessageElement("user");
@@ -754,11 +1059,6 @@ function findLatestMessageElement(role) {
     }
   }
   return null;
-}
-function sleep(durationMs) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, durationMs);
-  });
 }
 function requireOverlayElement(selector) {
   const element = overlay.querySelector(selector);
