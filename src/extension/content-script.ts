@@ -54,6 +54,8 @@ let overlaySnapshot: OverlayModel = {
   }
 };
 
+let lastAckDebug: any = null;
+
 let overlayLocale: UiLocale = readUiLocale();
 observeUiLocale((locale) => {
   overlayLocale = locale;
@@ -596,7 +598,7 @@ async function waitForSubmissionAcknowledgement({
   const expectedHash = hashText(expectedText);
 
   // Immediate check first
-  const immediate = checkAckSignals(baseline, composer, expectedHash);
+  const immediate = checkAckSignals(baseline, composer, expectedHash, expectedText);
   if (immediate) {
     return immediate;
   }
@@ -611,7 +613,7 @@ async function waitForSubmissionAcknowledgement({
     const observer = new MutationObserver(() => {
       // Defer heavy DOM checks to next microtask to avoid blocking
       queueMicrotask(() => {
-        const result = checkAckSignals(baseline, composer, expectedHash);
+        const result = checkAckSignals(baseline, composer, expectedHash, expectedText);
         if (result) {
           clearTimeout(timeout);
           observer.disconnect();
@@ -632,7 +634,8 @@ async function waitForSubmissionAcknowledgement({
 function checkAckSignals(
   baseline: { userHash: string | null },
   composer: Element,
-  expectedHash: string
+  expectedHash: string,
+  expectedText: string
 ): { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" } | null {
   const composerText = readComposerText(composer);
   const latestUserHash = readLatestUserHash();
@@ -641,11 +644,11 @@ function checkAckSignals(
     return { ok: true, signal: "user_message_added" };
   }
 
-  if (isGenerationInProgress() && composerText !== expectedHash) {
+  if (isGenerationInProgress() && composerText !== expectedText) {
     return { ok: true, signal: "generation_started" };
   }
 
-  if (!composerText || composerText !== expectedHash) {
+  if (!composerText || composerText !== expectedText) {
     return { ok: true, signal: "composer_cleared" };
   }
 
