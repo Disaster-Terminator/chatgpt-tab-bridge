@@ -82,7 +82,8 @@ var STOP_REASONS = Object.freeze({
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
   BINDING_INVALID: "binding_invalid",
-  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
+  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
+  TARGET_SETTLE_TIMEOUT: "target_settle_timeout"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -935,6 +936,57 @@ async function runStarterPreflight(state) {
   });
   return false;
 }
+async function runTargetPreflight(targetRole, targetBinding, state, token) {
+  if (!targetBinding) {
+    return true;
+  }
+  const threadActivity = await requestThreadActivity(targetBinding.tabId);
+  if (!threadActivity.ok) {
+    return true;
+  }
+  if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
+    return true;
+  }
+  const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
+  const pollIntervalMs = state.settings?.pollIntervalMs ?? DEFAULT_SETTINGS.pollIntervalMs;
+  const startTime = Date.now();
+  const sourceRole = otherRole(targetRole);
+  while (Date.now() - startTime < timeoutMs) {
+    if (token !== activeLoopToken) {
+      return false;
+    }
+    const currentState = await getState();
+    if (currentState.phase !== PHASES.RUNNING) {
+      return false;
+    }
+    const activity = await requestThreadActivity(targetBinding.tabId);
+    if (!activity.ok) {
+      return true;
+    }
+    if (!activity.result.generating && activity.result.sendButtonReady) {
+      return true;
+    }
+    if (!activity.result.generating && !activity.result.sendButtonReady) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "target_busy"
+        }
+      });
+    }
+    await sleep(pollIntervalMs);
+  }
+  await updateState({
+    type: "stop_condition",
+    reason: STOP_REASONS.TARGET_SETTLE_TIMEOUT
+  });
+  return false;
+}
 async function stopSession() {
   return updateState({ type: "stop", reason: STOP_REASONS.USER_STOP });
 }
@@ -977,6 +1029,10 @@ async function runRelayLoop(token, settings) {
     const sourceTab = await ensureRunnableBinding(sourceRole, sourceBinding);
     const targetTab = await ensureRunnableBinding(targetRole, targetBinding);
     if (!sourceTab || !targetTab) {
+      return;
+    }
+    const targetPreflight = await runTargetPreflight(targetRole, targetBinding, state, token);
+    if (!targetPreflight) {
       return;
     }
     const sourceSnapshot = await requestAssistantSnapshot(sourceBinding.tabId);

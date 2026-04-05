@@ -77,15 +77,25 @@ function findLatestUserMessageHash() {
   return null;
 }
 function checkAckSignals(input) {
-  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
+  const { baselineGenerating, baselineUserHash, baselineSendButtonReady = false, composer, expectedHash, expectedText } = input;
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
-  if (latestUserHash && latestUserHash !== baselineUserHash && latestUserHash === expectedHash) {
-    return { ok: true, signal: "user_message_added" };
-  }
   const currentGenerating = isGenerationInProgressFromDoc();
-  if (currentGenerating && baselineGenerating !== true) {
+  const sendButton = findSendButton(document, composer);
+  const currentSendButtonReady = sendButton !== null && !sendButton.disabled;
+  if (latestUserHash && latestUserHash !== baselineUserHash) {
+    if (latestUserHash === expectedHash) {
+      return { ok: true, signal: "user_message_added" };
+    }
+  }
+  if (!baselineGenerating && currentGenerating) {
     return { ok: true, signal: "generation_started" };
+  }
+  if (baselineGenerating && !currentGenerating) {
+    return { ok: true, signal: "generation_started" };
+  }
+  if (!baselineSendButtonReady && currentSendButtonReady) {
+    return { ok: true, signal: "send_button_appeared" };
   }
   if (isComposerTrulyCleared(composerText, expectedText)) {
     return { ok: true, signal: "composer_cleared" };
@@ -285,7 +295,8 @@ var STOP_REASONS = Object.freeze({
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
   BINDING_INVALID: "binding_invalid",
-  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
+  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
+  TARGET_SETTLE_TIMEOUT: "target_settle_timeout"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -1173,9 +1184,13 @@ function findLatestAssistantElement() {
   return null;
 }
 function captureSubmissionBaseline(expectedText) {
+  const composer = findBestComposer(document);
+  const sendButton = composer ? findSendButton(document, composer) : null;
+  const sendButtonReady = sendButton !== null && !sendButton.disabled;
   return {
-    composerText: readComposerText(findBestComposer(document)),
+    composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
+    sendButtonReady,
     userHash: findLatestUserMessageHash(),
     expectedHash: hashText(expectedText)
   };
@@ -1220,6 +1235,7 @@ async function waitForSubmissionAcknowledgement({
   const input = {
     baselineUserHash: baseline.userHash,
     baselineGenerating: baseline.generating,
+    baselineSendButtonReady: baseline.sendButtonReady,
     composer,
     expectedHash,
     expectedText

@@ -20,3 +20,8 @@
 ## 2026-04-04 (typecheck cleanup pass)
 - Exported Chrome ambient helper interfaces from `shared/globals.d.ts` and imported `ChromePort`/`ChromeMessageSender`/`ChromeTab` where used to avoid module-scope type visibility gaps.
 - Replaced `innerText` reads in content-script message scraping paths with `textContent` normalization to keep DOM extraction behavior while matching `Element` typings.
+
+## 2026-04-04 (send ack RCA)
+- Treat the first-hop `send_message_timeout` as an acknowledgement-detection failure first, not a relay-core guard failure: pre/post-hop guards are downstream of the send-ack path and do not explain the immediate user report.
+- Prefer a future fix that acknowledges send success from multiple independent signals (modern stop-button detection, user-message insertion, composer change/polling) instead of coupling generation-start detection to composer text mutation.
+- Any future timeout handling should assume background-tab timer throttling and avoid relying on a single content-script `setTimeout(5000)` fallback to beat the background's 15s timeout race.

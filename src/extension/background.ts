@@ -415,6 +415,74 @@ async function runStarterPreflight(state: RuntimeState): Promise<boolean> {
   return false;
 }
 
+async function runTargetPreflight(
+  targetRole: BridgeRole,
+  targetBinding: RuntimeState["bindings"][BridgeRole],
+  state: RuntimeState,
+  token: number
+): Promise<boolean> {
+  if (!targetBinding) {
+    return true;
+  }
+
+  const threadActivity = await requestThreadActivity(targetBinding.tabId);
+  if (!threadActivity.ok) {
+    return true;
+  }
+
+  if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
+    return true;
+  }
+
+  const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
+  const pollIntervalMs = state.settings?.pollIntervalMs ?? DEFAULT_SETTINGS.pollIntervalMs;
+  const startTime = Date.now();
+  const sourceRole = otherRole(targetRole);
+
+  while (Date.now() - startTime < timeoutMs) {
+    if (token !== activeLoopToken) {
+      return false;
+    }
+
+    const currentState = await getState();
+    if (currentState.phase !== PHASES.RUNNING) {
+      return false;
+    }
+
+    const activity = await requestThreadActivity(targetBinding.tabId);
+    if (!activity.ok) {
+      return true;
+    }
+
+    if (!activity.result.generating && activity.result.sendButtonReady) {
+      return true;
+    }
+
+    if (!activity.result.generating && !activity.result.sendButtonReady) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "target_busy"
+        }
+      });
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  await updateState({
+    type: "stop_condition",
+    reason: STOP_REASONS.TARGET_SETTLE_TIMEOUT
+  });
+
+  return false;
+}
+
 async function stopSession(): Promise<RuntimeState> {
   return updateState({ type: "stop", reason: STOP_REASONS.USER_STOP });
 }
@@ -466,6 +534,12 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
 
     if (!sourceTab || !targetTab) {
       return;
+    }
+
+    // P0-1: Target-side preflight - check target is ready to receive
+    const targetPreflight = await runTargetPreflight(targetRole, targetBinding, state, token);
+    if (!targetPreflight) {
+      return; // Target not ready, stop condition already set
     }
 
     const sourceSnapshot = await requestAssistantSnapshot(sourceBinding.tabId);

@@ -9,7 +9,8 @@ import {
   isGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
-  triggerComposerSend
+  triggerComposerSend,
+  type AckSignal
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
 import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
@@ -714,12 +715,18 @@ function findLatestAssistantElement(): Element | null {
 function captureSubmissionBaseline(expectedText: string): {
   composerText: string;
   generating: boolean;
+  sendButtonReady: boolean;
   userHash: string | null;
   expectedHash: string;
 } {
+  const composer = findBestComposer(document);
+  const sendButton = composer ? findSendButton(document, composer) : null;
+  const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  
   return {
-    composerText: readComposerText(findBestComposer(document)),
+    composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
+    sendButtonReady,
     userHash: findLatestUserMessageHash(),
     expectedHash: hashText(expectedText)
   };
@@ -771,11 +778,11 @@ async function waitForSubmissionAcknowledgement({
   composer,
   expectedText
 }: {
-  baseline: { userHash: string | null; generating: boolean };
+  baseline: { userHash: string | null; generating: boolean; sendButtonReady: boolean };
   composer: Element;
   expectedText: string;
 }): Promise<
-  | { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" }
+  | { ok: true; signal: AckSignal }
   | { ok: false; error: "send_not_acknowledged"; signal: "none" }
 > {
   const expectedHash = hashText(expectedText);
@@ -783,6 +790,7 @@ async function waitForSubmissionAcknowledgement({
   const input = {
     baselineUserHash: baseline.userHash,
     baselineGenerating: baseline.generating,
+    baselineSendButtonReady: baseline.sendButtonReady,
     composer,
     expectedHash,
     expectedText

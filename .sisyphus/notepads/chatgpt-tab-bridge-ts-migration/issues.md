@@ -9,3 +9,8 @@
 
 ## 2026-04-04 (typecheck cleanup pass)
 - `lsp_diagnostics` remains unavailable for TypeScript in this environment (`typescript-language-server` missing), so verification used `pnpm run typecheck` as the authoritative check.
+
+## 2026-04-04 (send ack RCA)
+- `waitForSubmissionAcknowledgement()` can miss real sends because `generation_started` currently requires both a generation indicator and composer text divergence; if ChatGPT starts generating while the composer still matches the submitted payload, no ack is emitted.
+- For textarea/value composers, ChatGPT can clear `.value` without a DOM mutation that `MutationObserver` sees, so the `composer_cleared` path may never re-run even though the send succeeded.
+- If all ack signals are missed in a background tab, the content script falls back to a 5s timer that can itself be throttled; background `sendRelayMessage()` then surfaces `send_message_timeout` from its 15s race even after a visually successful click.

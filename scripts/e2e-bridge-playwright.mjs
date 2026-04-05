@@ -212,7 +212,21 @@ async function cleanupEnv(env) {
 async function runHappyPath(env) {
   const { pageA, pageB, popupPage } = env;
   
-  // Start
+  const initialRound = await popupPage.locator("#roundValue").innerText();
+  
+  const initialTargetUserHash = await pageB.evaluate(() => {
+    const userMsg = document.querySelector('[data-message-author-role="user"]');
+    if (!userMsg) return null;
+    const text = userMsg.textContent?.trim() || "";
+    if (!text) return null;
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return "h" + (hash >>> 0).toString(16);
+  });
+
   await expectOverlayActionEnabled(pageA, "start");
   await clickOverlayAction(pageA, "start");
   await expectPopupPhaseState(popupPage, "running");
@@ -224,7 +238,42 @@ async function runHappyPath(env) {
     overrideSelectEnabled: false
   });
 
-  // Pause
+  await sleep(8000);
+
+  const newRound = await popupPage.locator("#roundValue").innerText();
+  
+  const newTargetUserHash = await pageB.evaluate(() => {
+    const userMsg = document.querySelector('[data-message-author-role="user"]');
+    if (!userMsg) return null;
+    const text = userMsg.textContent?.trim() || "";
+    if (!text) return null;
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return "h" + (hash >>> 0).toString(16);
+  });
+
+  const roundChanged = newRound !== initialRound && parseInt(newRound, 10) > parseInt(initialRound, 10);
+  const targetReceivedMessage = newTargetUserHash !== null && newTargetUserHash !== initialTargetUserHash;
+
+  if (!roundChanged && !targetReceivedMessage) {
+    throw new Error(
+      `First hop did not complete successfully. ` +
+      `Round: ${initialRound} -> ${newRound}, ` +
+      `Target user hash: ${initialTargetUserHash} -> ${newTargetUserHash}. ` +
+      `Expected round increase or target receiving a message.`
+    );
+  }
+
+  await expectPopupControlState(popupPage, {
+    canPause: true,
+    canResume: false,
+    canStop: true,
+    overrideSelectEnabled: false
+  });
+
   await expectOverlayActionEnabled(pageA, "pause");
   await clickOverlayAction(pageA, "pause");
   await expectPopupPhaseState(popupPage, "paused");
@@ -236,12 +285,17 @@ async function runHappyPath(env) {
     overrideSelectEnabled: true
   });
 
-  // Resume
   await expectOverlayActionEnabled(pageA, "resume");
   await clickOverlayAction(pageA, "resume");
   await expectPopupPhaseState(popupPage, "running");
 
-  // Stop
+  await expectPopupControlState(popupPage, {
+    canPause: true,
+    canResume: false,
+    canStop: true,
+    overrideSelectEnabled: false
+  });
+
   await expectOverlayActionEnabled(pageA, "stop");
   await clickOverlayAction(pageA, "stop");
   await expectPopupPhaseState(popupPage, "stopped");

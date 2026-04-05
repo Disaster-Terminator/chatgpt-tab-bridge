@@ -116,30 +116,42 @@ export function findLatestUserMessageHash(): string | null {
   return null;
 }
 
-export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared";
+export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared" | "send_button_appeared";
 
 export interface CheckAckSignalsInput {
   baselineGenerating?: boolean;
   baselineUserHash: string | null;
+  baselineSendButtonReady?: boolean;
   composer: Element;
   expectedHash: string;
   expectedText: string;
 }
 
 export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal: AckSignal } | null {
-  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
+  const { baselineGenerating, baselineUserHash, baselineSendButtonReady = false, composer, expectedHash, expectedText } = input;
 
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
+  const currentGenerating = isGenerationInProgressFromDoc();
+  const sendButton = findSendButton(document, composer);
+  const currentSendButtonReady = sendButton !== null && !sendButton.disabled;
 
-  if (latestUserHash && latestUserHash !== baselineUserHash && latestUserHash === expectedHash) {
-    return { ok: true, signal: "user_message_added" };
+  if (latestUserHash && latestUserHash !== baselineUserHash) {
+    if (latestUserHash === expectedHash) {
+      return { ok: true, signal: "user_message_added" };
+    }
   }
 
-  const currentGenerating = isGenerationInProgressFromDoc();
-  if (currentGenerating && baselineGenerating !== true) {
-    // Only ack if this is a NEW generation (false → true transition)
+  if (!baselineGenerating && currentGenerating) {
     return { ok: true, signal: "generation_started" };
+  }
+
+  if (baselineGenerating && !currentGenerating) {
+    return { ok: true, signal: "generation_started" };
+  }
+
+  if (!baselineSendButtonReady && currentSendButtonReady) {
+    return { ok: true, signal: "send_button_appeared" };
   }
 
   if (isComposerTrulyCleared(composerText, expectedText)) {
