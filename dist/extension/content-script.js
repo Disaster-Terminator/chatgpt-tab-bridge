@@ -128,24 +128,34 @@ function showsPayloadAdoption(latestText, expectedText) {
   return false;
 }
 function checkAckSignals(input) {
-  const { baselineGenerating, baselineUserHash, baselineSendButtonReady = false, composer, expectedHash, expectedText } = input;
+  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
   const latestUserText = findLatestUserMessageText();
   const currentGenerating = isGenerationInProgressFromDoc();
+  const composerCleared = isComposerTrulyCleared(composerText, expectedText);
   if (latestUserHash && latestUserHash !== baselineUserHash) {
     if (latestUserText && showsPayloadAdoption(latestUserText, expectedText)) {
-      return { ok: true, signal: "user_message_added" };
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
     }
     if (latestUserHash === expectedHash) {
-      return { ok: true, signal: "user_message_added" };
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
     }
   }
   if (!baselineGenerating && currentGenerating) {
-    return { ok: true, signal: "generation_started" };
+    if (composerCleared) {
+      return { ok: true, signal: "generation_started", evidence: "strong_with_auxiliary" };
+    }
+    return { ok: true, signal: "generation_started", evidence: "strong" };
   }
-  if (isComposerTrulyCleared(composerText, expectedText)) {
-    return { ok: true, signal: "composer_cleared" };
+  if (composerCleared) {
+    return { ok: true, signal: "composer_cleared", evidence: "auxiliary_only" };
   }
   return null;
 }
@@ -1179,6 +1189,7 @@ async function sendRelayMessage(text) {
     lastAckDebug = {
       ok: acknowledgement.ok,
       signal: acknowledgement.ok ? acknowledgement.signal : null,
+      evidence: acknowledgement.ok && "evidence" in acknowledgement ? acknowledgement.evidence : null,
       error: acknowledgement.ok ? null : "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged",
       timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
       baseline: submissionBaseline,
@@ -1279,16 +1290,18 @@ async function waitForSubmissionAcknowledgement({
   expectedText
 }) {
   const expectedHash = hashText(expectedText);
+  const postClickTimestamp = Date.now();
   const input = {
     baselineUserHash: baseline.userHash,
     baselineGenerating: baseline.generating,
     baselineSendButtonReady: baseline.sendButtonReady,
     composer,
     expectedHash,
-    expectedText
+    expectedText,
+    postClickTimestamp
   };
   const immediate = checkAckSignals(input);
-  if (immediate) {
+  if (immediate && immediate.evidence !== "auxiliary_only") {
     return immediate;
   }
   const startTime = Date.now();
@@ -1301,7 +1314,7 @@ async function waitForSubmissionAcknowledgement({
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
     }, maxPollingTime);
     const checkAndResolve = (result) => {
-      if (result) {
+      if (result && result.evidence !== "auxiliary_only") {
         clearTimeout(timeout);
         observer.disconnect();
         pollingHandle && clearInterval(pollingHandle);

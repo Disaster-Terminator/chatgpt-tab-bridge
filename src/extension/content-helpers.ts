@@ -116,7 +116,8 @@ export function findLatestUserMessageHash(): string | null {
   return null;
 }
 
-export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared";
+export type AckSignal = "user_message_added" | "generation_started";
+export type AuxiliarySignal = "composer_cleared";
 
 export interface CheckAckSignalsInput {
   baselineGenerating?: boolean;
@@ -125,7 +126,13 @@ export interface CheckAckSignalsInput {
   composer: Element;
   expectedHash: string;
   expectedText: string;
+  postClickTimestamp?: number;
 }
+
+export type CheckAckSignalsResult = 
+  | { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" }
+  | { ok: true; signal: AuxiliarySignal; evidence: "auxiliary_only" }
+  | null;
 
 /**
  * Find the text content of the latest user message in the conversation.
@@ -209,29 +216,52 @@ function showsPayloadAdoption(latestText: string, expectedText: string): boolean
   return false;
 }
 
-export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal: AckSignal } | null {
-  const { baselineGenerating, baselineUserHash, baselineSendButtonReady = false, composer, expectedHash, expectedText } = input;
+/**
+ * Check acknowledgment signals after message submission.
+ * 
+ * Strong evidence (can succeed alone):
+ * - user_message_added: latest user message changed with payload adoption
+ * - generation_started: generation actually started (not stopped)
+ * 
+ * Auxiliary evidence (must combine with strong evidence):
+ * - composer_cleared: composer content changed - weak signal, needs strong evidence
+ */
+export function checkAckSignals(input: CheckAckSignalsInput): CheckAckSignalsResult {
+  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
 
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
   const latestUserText = findLatestUserMessageText();
   const currentGenerating = isGenerationInProgressFromDoc();
+  const composerCleared = isComposerTrulyCleared(composerText, expectedText);
 
+  // STRONG EVIDENCE: user_message_added with payload adoption
   if (latestUserHash && latestUserHash !== baselineUserHash) {
     if (latestUserText && showsPayloadAdoption(latestUserText, expectedText)) {
-      return { ok: true, signal: "user_message_added" };
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
     }
     if (latestUserHash === expectedHash) {
-      return { ok: true, signal: "user_message_added" };
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
     }
   }
 
+  // STRONG EVIDENCE: generation_started (truly started, not stopped)
   if (!baselineGenerating && currentGenerating) {
-    return { ok: true, signal: "generation_started" };
+    if (composerCleared) {
+      return { ok: true, signal: "generation_started", evidence: "strong_with_auxiliary" };
+    }
+    return { ok: true, signal: "generation_started", evidence: "strong" };
   }
 
-  if (isComposerTrulyCleared(composerText, expectedText)) {
-    return { ok: true, signal: "composer_cleared" };
+  // AUXILIARY ONLY: composer_cleared cannot succeed alone
+  if (composerCleared) {
+    return { ok: true, signal: "composer_cleared", evidence: "auxiliary_only" };
   }
 
   return null;

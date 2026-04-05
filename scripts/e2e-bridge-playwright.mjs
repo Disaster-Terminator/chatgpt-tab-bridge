@@ -128,10 +128,21 @@ async function runScenario(name, scenarioFn) {
         diagContent += `\nTarget thread activity capture failed: ${e.message}`;
       }
 
-      // P0-5: Add Ack Debug info from popup
+      // P0-4: Add real Ack Debug from content-script via GET_LAST_ACK_DEBUG
       try {
-        const ackDebugText = await env.popupPage.locator("#lastIssue").innerText().catch(() => "N/A");
-        diagContent += `\nAck Debug (lastIssue): ${ackDebugText}\n`;
+        const ackDebugResponse = await env.pageA.evaluate(() => {
+          return new Promise((resolve) => {
+            chrome.runtime.sendMessage({ type: "GET_LAST_ACK_DEBUG" }, (response) => {
+              resolve(response);
+            });
+          });
+        }).catch(() => null);
+        
+        if (ackDebugResponse) {
+          diagContent += `\nAck Debug (GET_LAST_ACK_DEBUG):\n${JSON.stringify(ackDebugResponse, null, 2)}\n`;
+        } else {
+          diagContent += `\nAck Debug: unavailable\n`;
+        }
       } catch (e) {
         diagContent += `\nAck Debug capture failed: ${e.message}`;
       }

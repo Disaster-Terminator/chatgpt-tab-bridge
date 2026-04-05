@@ -10,7 +10,8 @@ import {
   normalizeText,
   readComposerText,
   triggerComposerSend,
-  type AckSignal
+  type AckSignal,
+  type CheckAckSignalsResult
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
 import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
@@ -652,19 +653,20 @@ async function sendRelayMessage(text: string): Promise<{
      });
 
      // Capture debug information about the last acknowledgement
-     lastAckDebug = {
-       ok: acknowledgement.ok,
-       signal: acknowledgement.ok ? acknowledgement.signal : null,
-       error: acknowledgement.ok ? null : ("error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged"),
-       timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
-       baseline: submissionBaseline,
-        after: {
+      lastAckDebug = {
+        ok: acknowledgement.ok,
+        signal: acknowledgement.ok ? acknowledgement.signal : null,
+        evidence: acknowledgement.ok && "evidence" in acknowledgement ? acknowledgement.evidence : null,
+        error: acknowledgement.ok ? null : ("error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged"),
+        timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
+        baseline: submissionBaseline,
+         after: {
           latestUserHash: findLatestUserMessageHash(),
           composerText: readComposerText(composer),
           generating: isGenerationInProgressFromDoc()
         },
-       timestamp: Date.now()
-     };
+        timestamp: Date.now()
+      };
 
      if (!acknowledgement.ok) {
       const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
@@ -781,11 +783,13 @@ async function waitForSubmissionAcknowledgement({
   baseline: { userHash: string | null; generating: boolean; sendButtonReady: boolean };
   composer: Element;
   expectedText: string;
+  postClickTimestamp?: number;
 }): Promise<
-  | { ok: true; signal: AckSignal }
+  | { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" }
   | { ok: false; error: "send_not_acknowledged"; signal: "none" }
 > {
   const expectedHash = hashText(expectedText);
+  const postClickTimestamp = Date.now();
 
   const input = {
     baselineUserHash: baseline.userHash,
@@ -793,12 +797,13 @@ async function waitForSubmissionAcknowledgement({
     baselineSendButtonReady: baseline.sendButtonReady,
     composer,
     expectedHash,
-    expectedText
+    expectedText,
+    postClickTimestamp
   };
 
   const immediate = checkAckSignals(input);
-  if (immediate) {
-    return immediate;
+  if (immediate && immediate.evidence !== "auxiliary_only") {
+    return immediate as { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" };
   }
 
   const startTime = Date.now();
@@ -812,12 +817,12 @@ async function waitForSubmissionAcknowledgement({
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
     }, maxPollingTime);
 
-    const checkAndResolve = (result: { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" } | { ok: false; error: "send_not_acknowledged"; signal: "none" } | null) => {
-      if (result) {
+    const checkAndResolve = (result: CheckAckSignalsResult) => {
+      if (result && result.evidence !== "auxiliary_only") {
         clearTimeout(timeout);
         observer.disconnect();
         pollingHandle && clearInterval(pollingHandle);
-        resolve(result);
+        resolve(result as { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" });
       }
     };
 

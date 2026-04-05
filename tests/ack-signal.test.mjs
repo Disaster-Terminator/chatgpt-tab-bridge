@@ -276,7 +276,7 @@ test("checkAckSignals ignores unrelated user message hash changes", async () => 
   }
 });
 
-test("checkAckSignals acks composer_cleared when composer is truly empty", async () => {
+test("REGRESSION: composer_cleared alone returns auxiliary_only evidence", async () => {
   const mockDoc = {
     querySelector: () => null,
     querySelectorAll: () => []
@@ -287,13 +287,40 @@ test("checkAckSignals acks composer_cleared when composer is truly empty", async
   try {
     const result = checkAckSignals({
       baselineUserHash: null,
-      composer: createMockComposer(""),  // Empty composer
+      composer: createMockComposer(""),
       expectedHash: "hashed",
       expectedText: "sent message"
     });
 
-    // Should return composer_cleared when composer is empty and no generation
     assert.equal(result?.signal, "composer_cleared");
+    assert.equal(result?.evidence, "auxiliary_only", "composer_cleared must be auxiliary_only");
+  } finally {
+    globalThis.document = originalGlobal;
+  }
+});
+
+test("REGRESSION: strong signal + composer_cleared returns strong_with_auxiliary", async () => {
+  const mockDoc = {
+    querySelector: (selector) => {
+      if (selector.includes("user")) return { textContent: "user message" };
+      return null;
+    },
+    querySelectorAll: (sel) => sel.includes("user") ? [{ textContent: "user message" }] : []
+  };
+  const originalGlobal = globalThis.document;
+  globalThis.document = mockDoc;
+
+  try {
+    const result = checkAckSignals({
+      baselineUserHash: null,
+      baselineGenerating: false,
+      composer: createMockComposer(""),  // Empty = composer_cleared
+      expectedHash: "h75ac8c95",  // hash of "user message"
+      expectedText: "user message"
+    });
+
+    assert.equal(result?.signal, "user_message_added", "Should detect user message");
+    assert.equal(result?.evidence, "strong_with_auxiliary", "user_message_added with composer_cleared should be strong_with_auxiliary");
   } finally {
     globalThis.document = originalGlobal;
   }
