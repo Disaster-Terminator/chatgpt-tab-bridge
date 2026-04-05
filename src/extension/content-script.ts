@@ -1,5 +1,6 @@
 import {
   applyComposerText,
+  checkAckSignals,
   findBestComposer,
   findSendButton,
   hashText,
@@ -729,28 +730,41 @@ async function waitForSubmissionAcknowledgement({
 > {
   const expectedHash = hashText(expectedText);
 
-  // Immediate check first
-  const immediate = checkAckSignals(baseline, composer, expectedHash, expectedText);
+  const input = {
+    baselineUserHash: baseline.userHash,
+    composer,
+    expectedHash,
+    expectedText
+  };
+
+  const immediate = checkAckSignals(input);
   if (immediate) {
     return immediate;
   }
 
-  // Use MutationObserver (not throttled in background tabs)
+  const startTime = Date.now();
+  const pollingInterval = 200;
+  const maxPollingTime = 10000;
+
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       observer.disconnect();
+      pollingHandle && clearInterval(pollingHandle);
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, 10000);
+    }, maxPollingTime);
+
+    const checkAndResolve = (result: { ok: true; signal: string } | null) => {
+      if (result) {
+        clearTimeout(timeout);
+        observer.disconnect();
+        pollingHandle && clearInterval(pollingHandle);
+        resolve(result);
+      }
+    };
 
     const observer = new MutationObserver(() => {
-      // Defer heavy DOM checks to next microtask to avoid blocking
       queueMicrotask(() => {
-        const result = checkAckSignals(baseline, composer, expectedHash, expectedText);
-        if (result) {
-          clearTimeout(timeout);
-          observer.disconnect();
-          resolve(result);
-        }
+        checkAndResolve(checkAckSignals(input));
       });
     });
 
@@ -758,115 +772,20 @@ async function waitForSubmissionAcknowledgement({
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["aria-label", "disabled", "style", "class"]
+      attributeFilter: ["aria-label", "disabled", "style", "class", "data-testid"]
     });
-  });
-}
 
-function checkAckSignals(
-  baseline: { userHash: string | null },
-  composer: Element,
-  expectedHash: string,
-  expectedText: string
-): { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" } | null {
-  const composerText = readComposerText(composer);
-  const latestUserHash = readLatestUserHash();
-
-  // P0-4: Strong signal - user message hash matches expected
-  if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
-    return { ok: true, signal: "user_message_added" };
-  }
-
-  // P0-2: Decouple generation_started from composerText changes
-  // P0-3: Expanded isGenerationInProgress() handles this
-  if (isGenerationInProgress()) {
-    return { ok: true, signal: "generation_started" };
-  }
-
-  // P0-1: Tighten composer_cleared - only if truly cleared, not just different
-  // P0-4: Require strong signal, not weak string difference
-  if (isComposerTrulyCleared(composerText, expectedText)) {
-    return { ok: true, signal: "composer_cleared" };
-  }
-
-  return null;
-}
-
-/**
- * P0-1: Tightened composer_cleared detection
- * Only return true if composer is truly empty or no longer contains significant payload.
- * Avoid false positives from minor normalization, line folding, or DOM reordering.
- */
-function isComposerTrulyCleared(currentText: string, expectedText: string): boolean {
-  // Empty or whitespace-only is truly cleared
-  if (!currentText || currentText.trim() === "") {
-    return true;
-  }
-
-  // If not empty, check if it still contains the expected payload
-  // If it still contains significant parts of the bridge message, it's NOT cleared
-  if (stillContainsExpectedPayload(currentText, expectedText)) {
-    return false;
-  }
-
-  // It's cleared - no significant payload remaining
-  return true;
-}
-
-/**
- * P0-1: Check if composer still contains significant parts of the expected payload.
- * Use normalized comparison to avoid false negatives from minor normalization.
- * Returns true if significant payload remains (NOT cleared).
- */
-function stillContainsExpectedPayload(currentText: string, expectedText: string): boolean {
-  if (!expectedText || !currentText) {
-    return false;
-  }
-
-  // Normalize both for comparison
-  const normalizedCurrent = normalizeText(currentText);
-  const normalizedExpected = normalizeText(expectedText);
-
-  // If exact match after normalization, not cleared
-  if (normalizedCurrent === normalizedExpected) {
-    return true;
-  }
-
-  // Check if significant portion remains (at least 50% of expected text is still present)
-  // This handles cases where minor normalization occurred but content wasn't actually sent
-  let matchCount = 0;
-  const expectedWords = normalizedExpected.split(/\s+/).filter(w => w.length > 0);
-  const currentWords = normalizedCurrent.split(/\s+/).filter(w => w.length > 0);
-
-  for (const word of expectedWords) {
-    if (currentWords.some(cw => cw.includes(word) || word.includes(cw))) {
-      matchCount++;
+    let pollingHandle: ReturnType<typeof setInterval> | null = null;
+    if (typeof setInterval !== "undefined") {
+      pollingHandle = setInterval(() => {
+        if (Date.now() - startTime >= maxPollingTime) {
+          pollingHandle && clearInterval(pollingHandle);
+          return;
+        }
+        checkAndResolve(checkAckSignals(input));
+      }, pollingInterval);
     }
-  }
-
-  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
-  return similarity >= 0.5;
-}
-
-/**
- * P0-3: Expanded generation detection
- * Prioritizes data-testid="stop-button", falls back to aria-label patterns.
- */
-function isGenerationInProgress(): boolean {
-  // Primary: data-testid="stop-button" (most reliable, language-agnostic)
-  if (
-    document.querySelector('button[data-testid="stop-button"]') ||
-    document.querySelector('button[data-testid="stop-generating-button"]')
-  ) {
-    return true;
-  }
-
-  // Fallback: aria-label patterns for zh-CN and en
-  return Boolean(
-    document.querySelector('button[aria-label*="停止"]') ||
-    document.querySelector('button[aria-label*="Stop"]') ||
-    document.querySelector('button[aria-label*="Cancel"]')
-  );
+  });
 }
 
 function findLatestMessageElement(role: "user" | "assistant"): Element | null {

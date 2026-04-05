@@ -11,6 +11,86 @@ function hashText(value) {
   }
   return `h${(hash >>> 0).toString(16)}`;
 }
+function isComposerTrulyCleared(currentText, expectedText) {
+  if (!currentText || currentText.trim() === "") {
+    return true;
+  }
+  if (stillContainsExpectedPayload(currentText, expectedText)) {
+    return false;
+  }
+  return true;
+}
+function stillContainsExpectedPayload(currentText, expectedText) {
+  if (!expectedText || !currentText) {
+    return false;
+  }
+  const normalizedCurrent = normalizeText(currentText);
+  const normalizedExpected = normalizeText(expectedText);
+  if (normalizedCurrent === normalizedExpected) {
+    return true;
+  }
+  let matchCount = 0;
+  const expectedWords = normalizedExpected.split(/\s+/).filter((w) => w.length > 0);
+  const currentWords = normalizedCurrent.split(/\s+/).filter((w) => w.length > 0);
+  for (const word of expectedWords) {
+    if (currentWords.some((cw) => cw.includes(word) || word.includes(cw))) {
+      matchCount++;
+    }
+  }
+  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
+  return similarity >= 0.5;
+}
+function isGenerationInProgressFromDoc() {
+  if (document.querySelector('button[data-testid="stop-button"]') || document.querySelector('button[data-testid="stop-generating-button"]')) {
+    return true;
+  }
+  return Boolean(
+    document.querySelector('button[aria-label*="\u505C\u6B62"]') || document.querySelector('button[aria-label*="Stop"]') || document.querySelector('button[aria-label*="Cancel"]')
+  );
+}
+function readComposerTextFromDoc(composer) {
+  if (!composer) {
+    return "";
+  }
+  if (isValueComposer(composer)) {
+    return normalizeText(composer.value || "");
+  }
+  return normalizeText(composer.textContent || "");
+}
+function findLatestUserMessageHash() {
+  const selectors = [
+    '[data-message-author-role="user"]',
+    'article [data-message-author-role="user"]',
+    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+    'main [data-message-author-role="user"]'
+  ];
+  for (const selector of selectors) {
+    const candidates = Array.from(document.querySelectorAll(selector)).filter(
+      (element) => normalizeText(element.textContent || "")
+    );
+    if (candidates.length > 0) {
+      const latest = candidates[candidates.length - 1];
+      const text = normalizeText(latest.textContent || "");
+      return text ? hashText(text) : null;
+    }
+  }
+  return null;
+}
+function checkAckSignals(input) {
+  const { baselineUserHash, composer, expectedHash, expectedText } = input;
+  const composerText = readComposerTextFromDoc(composer);
+  const latestUserHash = findLatestUserMessageHash();
+  if (latestUserHash && latestUserHash !== baselineUserHash && latestUserHash === expectedHash) {
+    return { ok: true, signal: "user_message_added" };
+  }
+  if (isGenerationInProgressFromDoc()) {
+    return { ok: true, signal: "generation_started" };
+  }
+  if (isComposerTrulyCleared(composerText, expectedText)) {
+    return { ok: true, signal: "composer_cleared" };
+  }
+  return null;
+}
 function findBestComposer(root) {
   const selectors = [
     '[contenteditable="true"][role="textbox"]',
@@ -306,6 +386,7 @@ var zhCN = {
     resume: "\u6062\u590D",
     stop: "\u505C\u6B62",
     clearTerminal: "\u6E05\u7A7A\u7EC8\u7AEF",
+    openHelp: "\u5E2E\u52A9",
     resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
     copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
     copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
@@ -332,7 +413,6 @@ var zhCN = {
     localeLabel: "\u8BED\u8A00",
     localeZh: "\u4E2D\u6587",
     localeEn: "English",
-    localeBilingual: "\u53CC\u8BED",
     helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002"
   }
 };
@@ -390,6 +470,7 @@ var en = {
     resume: "Resume",
     stop: "Stop",
     clearTerminal: "Clear terminal",
+    openHelp: "Help",
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
     copied: "Debug snapshot copied",
@@ -416,50 +497,10 @@ var en = {
     localeLabel: "Language",
     localeZh: "Chinese",
     localeEn: "English",
-    localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
   }
 };
-function toBilingual(zh, en2) {
-  return `${zh} ${en2}`;
-}
 function getOverlayCopy(locale) {
-  if (locale === "bilingual") {
-    const z = zhCN.overlay;
-    const e = en.overlay;
-    return {
-      bridgeTitle: toBilingual(z.bridgeTitle, e.bridgeTitle),
-      phaseReady: toBilingual(z.phaseReady, e.phaseReady),
-      phaseRunning: toBilingual(z.phaseRunning, e.phaseRunning),
-      phasePaused: toBilingual(z.phasePaused, e.phasePaused),
-      phaseStopped: toBilingual(z.phaseStopped, e.phaseStopped),
-      phaseError: toBilingual(z.phaseError, e.phaseError),
-      phaseIdle: toBilingual(z.phaseIdle, e.phaseIdle),
-      roleUnbound: toBilingual(z.roleUnbound, e.roleUnbound),
-      roleBoundA: toBilingual(z.roleBoundA, e.roleBoundA),
-      roleBoundB: toBilingual(z.roleBoundB, e.roleBoundB),
-      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
-      nextLabel: toBilingual(z.nextLabel, e.nextLabel),
-      stepLabel: toBilingual(z.stepLabel, e.stepLabel),
-      issueLabel: toBilingual(z.issueLabel, e.issueLabel),
-      starterLabel: toBilingual(z.starterLabel, e.starterLabel),
-      starterA: toBilingual(z.starterA, e.starterA),
-      starterB: toBilingual(z.starterB, e.starterB),
-      bindA: toBilingual(z.bindA, e.bindA),
-      bindB: toBilingual(z.bindB, e.bindB),
-      unbind: toBilingual(z.unbind, e.unbind),
-      start: toBilingual(z.start, e.start),
-      pause: toBilingual(z.pause, e.pause),
-      resume: toBilingual(z.resume, e.resume),
-      stop: toBilingual(z.stop, e.stop),
-      clear: toBilingual(z.clear, e.clear),
-      popup: toBilingual(z.popup, e.popup),
-      collapseExpand: e.collapseExpand,
-      collapseCollapse: e.collapseCollapse,
-      none: toBilingual(z.none, e.none),
-      idle: toBilingual(z.idle, e.idle)
-    };
-  }
   return locale === "en" ? en.overlay : zhCN.overlay;
 }
 function formatPhase(locale, phase) {
@@ -495,7 +536,7 @@ var UI_LOCALE_STORAGE_KEY = "chatgptBridgeUiLocale";
 function readUiLocale() {
   try {
     const raw = localStorage.getItem(UI_LOCALE_STORAGE_KEY);
-    if (raw === "zh-CN" || raw === "en" || raw === "bilingual") {
+    if (raw === "zh-CN" || raw === "en") {
       return raw;
     }
   } catch {
@@ -506,7 +547,7 @@ function observeUiLocale(callback) {
   const handler = (event) => {
     if (event.key === UI_LOCALE_STORAGE_KEY && event.newValue) {
       const value = event.newValue;
-      if (value === "zh-CN" || value === "en" || value === "bilingual") {
+      if (value === "zh-CN" || value === "en") {
         callback(value);
       }
     }
@@ -1115,76 +1156,55 @@ async function waitForSubmissionAcknowledgement({
   expectedText
 }) {
   const expectedHash = hashText(expectedText);
-  const immediate = checkAckSignals(baseline, composer, expectedHash, expectedText);
+  const input = {
+    baselineUserHash: baseline.userHash,
+    composer,
+    expectedHash,
+    expectedText
+  };
+  const immediate = checkAckSignals(input);
   if (immediate) {
     return immediate;
   }
+  const startTime = Date.now();
+  const pollingInterval = 200;
+  const maxPollingTime = 1e4;
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       observer.disconnect();
+      pollingHandle && clearInterval(pollingHandle);
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, 1e4);
+    }, maxPollingTime);
+    const checkAndResolve = (result) => {
+      if (result) {
+        clearTimeout(timeout);
+        observer.disconnect();
+        pollingHandle && clearInterval(pollingHandle);
+        resolve(result);
+      }
+    };
     const observer = new MutationObserver(() => {
       queueMicrotask(() => {
-        const result = checkAckSignals(baseline, composer, expectedHash, expectedText);
-        if (result) {
-          clearTimeout(timeout);
-          observer.disconnect();
-          resolve(result);
-        }
+        checkAndResolve(checkAckSignals(input));
       });
     });
     observer.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["aria-label", "disabled", "style", "class"]
+      attributeFilter: ["aria-label", "disabled", "style", "class", "data-testid"]
     });
-  });
-}
-function checkAckSignals(baseline, composer, expectedHash, expectedText) {
-  const composerText = readComposerText(composer);
-  const latestUserHash = readLatestUserHash();
-  if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
-    return { ok: true, signal: "user_message_added" };
-  }
-  if (isGenerationInProgress() && composerText !== expectedText) {
-    return { ok: true, signal: "generation_started" };
-  }
-  if (!composerText || composerText !== expectedText) {
-    return { ok: true, signal: "composer_cleared" };
-  }
-  return null;
-}
-function readLatestUserHash() {
-  const latest = findLatestMessageElement("user");
-  if (!latest) {
-    return null;
-  }
-  const text = normalizeText(latest.textContent || "");
-  return text ? hashText(text) : null;
-}
-function isGenerationInProgress() {
-  return Boolean(
-    document.querySelector('button[aria-label*="\u505C\u6B62"]') || document.querySelector('button[aria-label*="Stop"]')
-  );
-}
-function findLatestMessageElement(role) {
-  const selectors = [
-    `[data-message-author-role="${role}"]`,
-    `article [data-message-author-role="${role}"]`,
-    `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
-    `main [data-message-author-role='${role}']`
-  ];
-  for (const selector of selectors) {
-    const candidates = Array.from(document.querySelectorAll(selector)).filter(
-      (element) => normalizeText(element.textContent || "")
-    );
-    if (candidates.length > 0) {
-      return candidates[candidates.length - 1];
+    let pollingHandle = null;
+    if (typeof setInterval !== "undefined") {
+      pollingHandle = setInterval(() => {
+        if (Date.now() - startTime >= maxPollingTime) {
+          pollingHandle && clearInterval(pollingHandle);
+          return;
+        }
+        checkAndResolve(checkAckSignals(input));
+      }, pollingInterval);
     }
-  }
-  return null;
+  });
 }
 function requireOverlayElement(selector) {
   const element = overlay.querySelector(selector);

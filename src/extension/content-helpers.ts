@@ -67,6 +67,85 @@ export function stillContainsExpectedPayload(currentText: string, expectedText: 
   return similarity >= 0.5;
 }
 
+export function isGenerationInProgressFromDoc(): boolean {
+  if (
+    document.querySelector('button[data-testid="stop-button"]') ||
+    document.querySelector('button[data-testid="stop-generating-button"]')
+  ) {
+    return true;
+  }
+
+  return Boolean(
+    document.querySelector('button[aria-label*="停止"]') ||
+    document.querySelector('button[aria-label*="Stop"]') ||
+    document.querySelector('button[aria-label*="Cancel"]')
+  );
+}
+
+export function readComposerTextFromDoc(composer: Element | null | undefined): string {
+  if (!composer) {
+    return "";
+  }
+
+  if (isValueComposer(composer)) {
+    return normalizeText(composer.value || "");
+  }
+
+  return normalizeText(composer.textContent || "");
+}
+
+export function findLatestUserMessageHash(): string | null {
+  const selectors = [
+    '[data-message-author-role="user"]',
+    'article [data-message-author-role="user"]',
+    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+    'main [data-message-author-role="user"]'
+  ];
+
+  for (const selector of selectors) {
+    const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
+      normalizeText(element.textContent || "")
+    );
+    if (candidates.length > 0) {
+      const latest = candidates[candidates.length - 1];
+      const text = normalizeText(latest.textContent || "");
+      return text ? hashText(text) : null;
+    }
+  }
+
+  return null;
+}
+
+export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared";
+
+export interface CheckAckSignalsInput {
+  baselineUserHash: string | null;
+  composer: Element;
+  expectedHash: string;
+  expectedText: string;
+}
+
+export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal: AckSignal } | null {
+  const { baselineUserHash, composer, expectedHash, expectedText } = input;
+
+  const composerText = readComposerTextFromDoc(composer);
+  const latestUserHash = findLatestUserMessageHash();
+
+  if (latestUserHash && latestUserHash !== baselineUserHash && latestUserHash === expectedHash) {
+    return { ok: true, signal: "user_message_added" };
+  }
+
+  if (isGenerationInProgressFromDoc()) {
+    return { ok: true, signal: "generation_started" };
+  }
+
+  if (isComposerTrulyCleared(composerText, expectedText)) {
+    return { ok: true, signal: "composer_cleared" };
+  }
+
+  return null;
+}
+
 export function findBestComposer(root: ParentNode | null | undefined): Element | null {
   const selectors = [
     '[contenteditable="true"][role="textbox"]',
