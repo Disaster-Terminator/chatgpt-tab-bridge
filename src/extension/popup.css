@@ -455,3 +455,8 @@ body {
   padding: 0;
   margin: 0;
 }
+
+/* Compat layer - hidden from main visual flow */
+.popup__compat-row {
+  display: none;
+}

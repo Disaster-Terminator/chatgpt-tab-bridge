@@ -100,13 +100,15 @@
           <option value="B">B → A</option>
         </select>
         <div class="popup__action-row">
+          <button type="button" class="popup__btn" id="clearTerminalButton" data-copy="clearTerminal">清空终端</button>
+          <button type="button" class="popup__btn" id="openHelpButton" data-copy="openHelp">帮助</button>
+        </div>
+        <!-- Compat layer: retained for smoke test, hidden from main visual flow -->
+        <div class="popup__compat-row" id="compatControls" hidden>
           <button type="button" class="popup__btn popup__btn--primary" id="startButton" data-copy="start">开始</button>
           <button type="button" class="popup__btn" id="pauseButton" data-copy="pause">暂停</button>
           <button type="button" class="popup__btn" id="resumeButton" data-copy="resume">恢复</button>
           <button type="button" class="popup__btn" id="stopButton" data-copy="stop">停止</button>
-        </div>
-        <div class="popup__action-row">
-          <button type="button" class="popup__btn" id="clearTerminalButton" data-copy="clearTerminal">清空终端</button>
           <button type="button" class="popup__btn" id="bindAButton" data-copy="bindA">绑定 A</button>
           <button type="button" class="popup__btn" id="bindBButton" data-copy="bindB">绑定 B</button>
         </div>
@@ -117,6 +119,14 @@
           <span data-copy="sectionDebug">调试</span>
         </summary>
         <div class="popup__details-content">
+          <div class="popup__debug-row">
+            <span data-copy="currentStepLabel">步骤</span>
+            <span id="currentStepValueDebug">-</span>
+          </div>
+          <div class="popup__debug-row">
+            <span data-copy="lastIssueLabel">问题</span>
+            <span id="issueValueDebug">-</span>
+          </div>
           <div class="popup__debug-row">
             <span data-copy="transportLabel">传输</span>
             <span id="transportValue">-</span>

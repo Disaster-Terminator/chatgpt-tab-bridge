@@ -6,7 +6,7 @@ export const UI_LOCALE_STORAGE_KEY = "chatgptBridgeUiLocale";
 export function readUiLocale(): UiLocale {
   try {
     const raw = localStorage.getItem(UI_LOCALE_STORAGE_KEY);
-    if (raw === "zh-CN" || raw === "en" || raw === "bilingual") {
+    if (raw === "zh-CN" || raw === "en") {
       return raw;
     }
   } catch {
@@ -27,7 +27,7 @@ export function observeUiLocale(callback: (locale: UiLocale) => void): () => voi
   const handler = (event: StorageEvent) => {
     if (event.key === UI_LOCALE_STORAGE_KEY && event.newValue) {
       const value = event.newValue;
-      if (value === "zh-CN" || value === "en" || value === "bilingual") {
+      if (value === "zh-CN" || value === "en") {
         callback(value);
       }
     }

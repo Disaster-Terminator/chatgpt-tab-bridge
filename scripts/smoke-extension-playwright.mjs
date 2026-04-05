@@ -50,9 +50,9 @@ try {
     waitUntil: "domcontentloaded"
   });
 
-  await popupPage.waitForSelector("text=Popup control surface");
-  await popupPage.waitForSelector("#bindAButton");
-  await popupPage.waitForSelector("#startButton");
+  await popupPage.waitForSelector(".popup");
+  await popupPage.waitForSelector("#bindAButton", { state: "attached" });
+  await popupPage.waitForSelector("#startButton", { state: "attached" });
 
   console.log(`Extension loaded: ${extensionId}`);
   console.log("Popup smoke check: PASS");

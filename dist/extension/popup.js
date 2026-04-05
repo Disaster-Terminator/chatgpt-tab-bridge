@@ -119,6 +119,7 @@ var zhCN = {
     resume: "\u6062\u590D",
     stop: "\u505C\u6B62",
     clearTerminal: "\u6E05\u7A7A\u7EC8\u7AEF",
+    openHelp: "\u5E2E\u52A9",
     resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
     copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
     copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
@@ -145,7 +146,6 @@ var zhCN = {
     localeLabel: "\u8BED\u8A00",
     localeZh: "\u4E2D\u6587",
     localeEn: "English",
-    localeBilingual: "\u53CC\u8BED",
     helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002"
   }
 };
@@ -203,6 +203,7 @@ var en = {
     resume: "Resume",
     stop: "Stop",
     clearTerminal: "Clear terminal",
+    openHelp: "Help",
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
     copied: "Debug snapshot copied",
@@ -229,107 +230,13 @@ var en = {
     localeLabel: "Language",
     localeZh: "Chinese",
     localeEn: "English",
-    localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
   }
 };
-function toBilingual(zh, en2) {
-  return `${zh} ${en2}`;
-}
 function getOverlayCopy(locale) {
-  if (locale === "bilingual") {
-    const z = zhCN.overlay;
-    const e = en.overlay;
-    return {
-      bridgeTitle: toBilingual(z.bridgeTitle, e.bridgeTitle),
-      phaseReady: toBilingual(z.phaseReady, e.phaseReady),
-      phaseRunning: toBilingual(z.phaseRunning, e.phaseRunning),
-      phasePaused: toBilingual(z.phasePaused, e.phasePaused),
-      phaseStopped: toBilingual(z.phaseStopped, e.phaseStopped),
-      phaseError: toBilingual(z.phaseError, e.phaseError),
-      phaseIdle: toBilingual(z.phaseIdle, e.phaseIdle),
-      roleUnbound: toBilingual(z.roleUnbound, e.roleUnbound),
-      roleBoundA: toBilingual(z.roleBoundA, e.roleBoundA),
-      roleBoundB: toBilingual(z.roleBoundB, e.roleBoundB),
-      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
-      nextLabel: toBilingual(z.nextLabel, e.nextLabel),
-      stepLabel: toBilingual(z.stepLabel, e.stepLabel),
-      issueLabel: toBilingual(z.issueLabel, e.issueLabel),
-      starterLabel: toBilingual(z.starterLabel, e.starterLabel),
-      starterA: toBilingual(z.starterA, e.starterA),
-      starterB: toBilingual(z.starterB, e.starterB),
-      bindA: toBilingual(z.bindA, e.bindA),
-      bindB: toBilingual(z.bindB, e.bindB),
-      unbind: toBilingual(z.unbind, e.unbind),
-      start: toBilingual(z.start, e.start),
-      pause: toBilingual(z.pause, e.pause),
-      resume: toBilingual(z.resume, e.resume),
-      stop: toBilingual(z.stop, e.stop),
-      clear: toBilingual(z.clear, e.clear),
-      popup: toBilingual(z.popup, e.popup),
-      collapseExpand: e.collapseExpand,
-      collapseCollapse: e.collapseCollapse,
-      none: toBilingual(z.none, e.none),
-      idle: toBilingual(z.idle, e.idle)
-    };
-  }
   return locale === "en" ? en.overlay : zhCN.overlay;
 }
 function getPopupCopy(locale) {
-  if (locale === "bilingual") {
-    const z = zhCN.popup;
-    const e = en.popup;
-    return {
-      eyebrow: toBilingual(z.eyebrow, e.eyebrow),
-      title: toBilingual(z.title, e.title),
-      sectionGlobalStatus: toBilingual(z.sectionGlobalStatus, e.sectionGlobalStatus),
-      sectionSettings: toBilingual(z.sectionSettings, e.sectionSettings),
-      sectionFallback: toBilingual(z.sectionFallback, e.sectionFallback),
-      sectionDebug: toBilingual(z.sectionDebug, e.sectionDebug),
-      debugSummary: toBilingual(z.debugSummary, e.debugSummary),
-      labelStarter: toBilingual(z.labelStarter, e.labelStarter),
-      labelOverride: toBilingual(z.labelOverride, e.labelOverride),
-      labelEnableOverlay: toBilingual(z.labelEnableOverlay, e.labelEnableOverlay),
-      labelDefaultExpanded: toBilingual(z.labelDefaultExpanded, e.labelDefaultExpanded),
-      bindingA: toBilingual(z.bindingA, e.bindingA),
-      bindingB: toBilingual(z.bindingB, e.bindingB),
-      currentTab: toBilingual(z.currentTab, e.currentTab),
-      unbind: toBilingual(z.unbind, e.unbind),
-      start: toBilingual(z.start, e.start),
-      pause: toBilingual(z.pause, e.pause),
-      resume: toBilingual(z.resume, e.resume),
-      stop: toBilingual(z.stop, e.stop),
-      clearTerminal: toBilingual(z.clearTerminal, e.clearTerminal),
-      resetPosition: toBilingual(z.resetPosition, e.resetPosition),
-      copyDebug: toBilingual(z.copyDebug, e.copyDebug),
-      copied: toBilingual(z.copied, e.copied),
-      noActiveTab: toBilingual(z.noActiveTab, e.noActiveTab),
-      unsupportedTab: toBilingual(z.unsupportedTab, e.unsupportedTab),
-      tabBoundAs: (role) => toBilingual(z.tabBoundAs(role), e.tabBoundAs(role)),
-      tabEligible: (kind) => toBilingual(z.tabEligible(kind), e.tabEligible(kind)),
-      unbound: toBilingual(z.unbound, e.unbound),
-      none: toBilingual(z.none, e.none),
-      idle: toBilingual(z.idle, e.idle),
-      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
-      nextHopLabel: toBilingual(z.nextHopLabel, e.nextHopLabel),
-      currentStepLabel: toBilingual(z.currentStepLabel, e.currentStepLabel),
-      transportLabel: toBilingual(z.transportLabel, e.transportLabel),
-      selectorLabel: toBilingual(z.selectorLabel, e.selectorLabel),
-      lastIssueLabel: toBilingual(z.lastIssueLabel, e.lastIssueLabel),
-      threadLabel: toBilingual(z.threadLabel, e.threadLabel),
-      projectThreadLabel: toBilingual(z.projectThreadLabel, e.projectThreadLabel),
-      overrideNone: toBilingual(z.overrideNone, e.overrideNone),
-      overrideA: toBilingual(z.overrideA, e.overrideA),
-      overrideB: toBilingual(z.overrideB, e.overrideB),
-      starterA: toBilingual(z.starterA, e.starterA),
-      starterB: toBilingual(z.starterB, e.starterB),
-      localeLabel: toBilingual(z.localeLabel, e.localeLabel),
-      localeZh: toBilingual(z.localeZh, e.localeZh),
-      localeEn: toBilingual(z.localeEn, e.localeEn),
-      localeBilingual: toBilingual(z.localeBilingual, e.localeBilingual),
-      helpText: toBilingual(z.helpText, e.helpText)
-    };
-  }
   return locale === "en" ? en.popup : zhCN.popup;
 }
 function formatPhase(locale, phase) {
@@ -367,7 +274,7 @@ var UI_LOCALE_STORAGE_KEY = "chatgptBridgeUiLocale";
 function readUiLocale() {
   try {
     const raw = localStorage.getItem(UI_LOCALE_STORAGE_KEY);
-    if (raw === "zh-CN" || raw === "en" || raw === "bilingual") {
+    if (raw === "zh-CN" || raw === "en") {
       return raw;
     }
   } catch {
@@ -410,12 +317,15 @@ var elements = {
   stopButton: requireElement("#stopButton"),
   clearTerminalButton: requireElement("#clearTerminalButton"),
   copyDebugButton: requireElement("#copyDebugButton"),
+  openHelpButton: requireElement("#openHelpButton"),
   roundValue: requireElement("#roundValue"),
   nextHopValue: requireElement("#nextHopValue"),
   currentStepValue: requireElement("#currentStepValue"),
+  currentStepValueDebug: requireElement("#currentStepValueDebug"),
   transportValue: requireElement("#transportValue"),
   selectorValue: requireElement("#selectorValue"),
   issueValue: requireElement("#issueValue"),
+  issueValueDebug: requireElement("#issueValueDebug"),
   issueRow: requireElement("#issueRow")
 };
 var currentTabId = null;
@@ -475,15 +385,6 @@ function wireEvents() {
       tabId: currentTabId
     });
   });
-  elements.unbindCurrentButton.addEventListener("click", async () => {
-    if (!currentModel?.currentTab?.assignedRole) {
-      return;
-    }
-    await perform({
-      type: MESSAGE_TYPES.CLEAR_BINDING,
-      role: currentModel.currentTab.assignedRole
-    });
-  });
   elements.starterSelect.addEventListener("change", () => {
     void perform({
       type: MESSAGE_TYPES.SET_STARTER,
@@ -524,6 +425,9 @@ function wireEvents() {
   });
   elements.copyDebugButton.addEventListener("click", () => {
     void copyDebugSnapshot();
+  });
+  elements.openHelpButton.addEventListener("click", () => {
+    window.open("https://github.com/raystorm1/chatgpt-tab-bridge#readme", "_blank");
   });
   elements.overlayEnabledCheckbox.addEventListener("change", () => {
     void perform({
@@ -572,13 +476,16 @@ function render(model) {
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
+  elements.currentStepValueDebug.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
   if (display.lastIssue && display.lastIssue !== "None") {
     elements.issueRow.hidden = false;
     elements.issueValue.textContent = display.lastIssue;
+    elements.issueValueDebug.textContent = display.lastIssue;
   } else {
     elements.issueRow.hidden = true;
+    elements.issueValueDebug.textContent = copy.none;
   }
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
@@ -658,8 +565,8 @@ function buildDebugSnapshot(model, ackDebug) {
     "",
     `${formatPhase(currentLocale, state.phase)}`,
     tabStatus,
-    `A: ${summarizeBinding(state.bindings.A)}`,
-    `B: ${summarizeBinding(state.bindings.B)}`,
+    `A: ${summarizeBinding(copy, state.bindings.A)}`,
+    `B: ${summarizeBinding(copy, state.bindings.B)}`,
     `${copy.labelStarter}: ${state.starter}`,
     `${copy.roundLabel}: ${state.round}`,
     `${copy.nextHopLabel}: ${display.nextHop}`,

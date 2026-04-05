@@ -289,6 +289,10 @@ export interface GetAssistantSnapshotMessage extends MessageBase {
   type: "GET_ASSISTANT_SNAPSHOT";
 }
 
+export interface GetLastAckDebugMessage extends MessageBase {
+  type: "GET_LAST_ACK_DEBUG";
+}
+
 export interface SendRelayMessageRequest extends MessageBase {
   type: "SEND_RELAY_MESSAGE";
   text: string;
@@ -321,6 +325,7 @@ export type RuntimeMessage =
   | SetOverlayPositionMessage
   | ResetOverlayPositionMessage
   | GetAssistantSnapshotMessage
+  | GetLastAckDebugMessage
   | SendRelayMessageRequest
   | SyncOverlayStateMessage
   | RequestOpenPopupMessage;

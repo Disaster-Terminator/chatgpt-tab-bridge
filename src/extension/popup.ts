@@ -1,5 +1,5 @@
 import { MESSAGE_TYPES } from "./core/constants.ts";
-import { getPopupCopy, applyStaticCopy, formatPhase, type UiLocale } from "./copy/bridge-copy.ts";
+import { getPopupCopy, applyStaticCopy, formatPhase, type UiLocale, type PopupCopy } from "./copy/bridge-copy.ts";
 import { readUiLocale, writeUiLocale } from "./ui/preferences.ts";
 import type {
   BridgeRole,
@@ -52,12 +52,15 @@ interface PopupElements {
   stopButton: HTMLButtonElement;
   clearTerminalButton: HTMLButtonElement;
   copyDebugButton: HTMLButtonElement;
+  openHelpButton: HTMLButtonElement;
   roundValue: HTMLElement;
   nextHopValue: HTMLElement;
   currentStepValue: HTMLElement;
+  currentStepValueDebug: HTMLElement;
   transportValue: HTMLElement;
   selectorValue: HTMLElement;
   issueValue: HTMLElement;
+  issueValueDebug: HTMLElement;
   issueRow: HTMLElement;
 }
 
@@ -107,12 +110,15 @@ const elements: PopupElements = {
   stopButton: requireElement<HTMLButtonElement>("#stopButton"),
   clearTerminalButton: requireElement<HTMLButtonElement>("#clearTerminalButton"),
   copyDebugButton: requireElement<HTMLButtonElement>("#copyDebugButton"),
+  openHelpButton: requireElement<HTMLButtonElement>("#openHelpButton"),
   roundValue: requireElement<HTMLElement>("#roundValue"),
   nextHopValue: requireElement<HTMLElement>("#nextHopValue"),
   currentStepValue: requireElement<HTMLElement>("#currentStepValue"),
+  currentStepValueDebug: requireElement<HTMLElement>("#currentStepValueDebug"),
   transportValue: requireElement<HTMLElement>("#transportValue"),
   selectorValue: requireElement<HTMLElement>("#selectorValue"),
   issueValue: requireElement<HTMLElement>("#issueValue"),
+  issueValueDebug: requireElement<HTMLElement>("#issueValueDebug"),
   issueRow: requireElement<HTMLElement>("#issueRow")
 };
 
@@ -183,17 +189,6 @@ function wireEvents(): void {
     });
   });
 
-  elements.unbindCurrentButton.addEventListener("click", async () => {
-    if (!currentModel?.currentTab?.assignedRole) {
-      return;
-    }
-
-    await perform({
-      type: MESSAGE_TYPES.CLEAR_BINDING,
-      role: currentModel.currentTab.assignedRole
-    });
-  });
-
   elements.starterSelect.addEventListener("change", () => {
     void perform({
       type: MESSAGE_TYPES.SET_STARTER,
@@ -241,6 +236,10 @@ function wireEvents(): void {
 
   elements.copyDebugButton.addEventListener("click", () => {
     void copyDebugSnapshot();
+  });
+
+  elements.openHelpButton.addEventListener("click", () => {
+    window.open("https://github.com/raystorm1/chatgpt-tab-bridge#readme", "_blank");
   });
 
   elements.overlayEnabledCheckbox.addEventListener("change", () => {
@@ -295,14 +294,17 @@ function render(model: PopupModel): void {
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
+  elements.currentStepValueDebug.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
 
   if (display.lastIssue && display.lastIssue !== "None") {
     elements.issueRow.hidden = false;
     elements.issueValue.textContent = display.lastIssue;
+    elements.issueValueDebug.textContent = display.lastIssue;
   } else {
     elements.issueRow.hidden = true;
+    elements.issueValueDebug.textContent = copy.none;
   }
 
   elements.starterSelect.value = state.starter;
@@ -403,8 +405,8 @@ function buildDebugSnapshot(model: PopupModel, ackDebug: any): string {
     "",
     `${formatPhase(currentLocale, state.phase)}`,
     tabStatus,
-    `A: ${summarizeBinding(state.bindings.A)}`,
-    `B: ${summarizeBinding(state.bindings.B)}`,
+    `A: ${summarizeBinding(copy, state.bindings.A)}`,
+    `B: ${summarizeBinding(copy, state.bindings.B)}`,
     `${copy.labelStarter}: ${state.starter}`,
     `${copy.roundLabel}: ${state.round}`,
     `${copy.nextHopLabel}: ${display.nextHop}`,

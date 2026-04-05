@@ -1,4 +1,4 @@
-export type UiLocale = "zh-CN" | "en" | "bilingual";
+export type UiLocale = "zh-CN" | "en";
 
 export const DEFAULT_UI_LOCALE: UiLocale = "zh-CN";
 
@@ -37,7 +37,7 @@ interface OverlayCopy {
   idle: string;
 }
 
-interface PopupCopy {
+export interface PopupCopy {
   eyebrow: string;
   title: string;
   sectionGlobalStatus: string;
@@ -58,6 +58,7 @@ interface PopupCopy {
   resume: string;
   stop: string;
   clearTerminal: string;
+  openHelp: string;
   resetPosition: string;
   copyDebug: string;
   copied: string;
@@ -84,7 +85,6 @@ interface PopupCopy {
   localeLabel: string;
   localeZh: string;
   localeEn: string;
-  localeBilingual: string;
   helpText: string;
 }
 
@@ -142,6 +142,7 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     resume: "恢复",
     stop: "停止",
     clearTerminal: "清空终端",
+    openHelp: "帮助",
     resetPosition: "重置位置",
     copyDebug: "复制调试快照",
     copied: "调试快照已复制",
@@ -168,7 +169,6 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     localeLabel: "语言",
     localeZh: "中文",
     localeEn: "English",
-    localeBilingual: "双语",
     helpText: "覆盖仅在暂停时生效；清空终端可将已停止/错误状态重置为就绪。"
   }
 };
@@ -227,6 +227,7 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     resume: "Resume",
     stop: "Stop",
     clearTerminal: "Clear terminal",
+    openHelp: "Help",
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
     copied: "Debug snapshot copied",
@@ -253,114 +254,17 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     localeLabel: "Language",
     localeZh: "Chinese",
     localeEn: "English",
-    localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
   }
 };
 
-// ── Bilingual helper ───────────────────────────────────────────────
-
-function toBilingual(zh: string, en: string): string {
-  return `${zh} ${en}`;
-}
-
 // ── Public API ─────────────────────────────────────────────────────
 
 export function getOverlayCopy(locale: UiLocale): OverlayCopy {
-  if (locale === "bilingual") {
-    const z = zhCN.overlay;
-    const e = en.overlay;
-    return {
-      bridgeTitle: toBilingual(z.bridgeTitle, e.bridgeTitle),
-      phaseReady: toBilingual(z.phaseReady, e.phaseReady),
-      phaseRunning: toBilingual(z.phaseRunning, e.phaseRunning),
-      phasePaused: toBilingual(z.phasePaused, e.phasePaused),
-      phaseStopped: toBilingual(z.phaseStopped, e.phaseStopped),
-      phaseError: toBilingual(z.phaseError, e.phaseError),
-      phaseIdle: toBilingual(z.phaseIdle, e.phaseIdle),
-      roleUnbound: toBilingual(z.roleUnbound, e.roleUnbound),
-      roleBoundA: toBilingual(z.roleBoundA, e.roleBoundA),
-      roleBoundB: toBilingual(z.roleBoundB, e.roleBoundB),
-      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
-      nextLabel: toBilingual(z.nextLabel, e.nextLabel),
-      stepLabel: toBilingual(z.stepLabel, e.stepLabel),
-      issueLabel: toBilingual(z.issueLabel, e.issueLabel),
-      starterLabel: toBilingual(z.starterLabel, e.starterLabel),
-      starterA: toBilingual(z.starterA, e.starterA),
-      starterB: toBilingual(z.starterB, e.starterB),
-      bindA: toBilingual(z.bindA, e.bindA),
-      bindB: toBilingual(z.bindB, e.bindB),
-      unbind: toBilingual(z.unbind, e.unbind),
-      start: toBilingual(z.start, e.start),
-      pause: toBilingual(z.pause, e.pause),
-      resume: toBilingual(z.resume, e.resume),
-      stop: toBilingual(z.stop, e.stop),
-      clear: toBilingual(z.clear, e.clear),
-      popup: toBilingual(z.popup, e.popup),
-      collapseExpand: e.collapseExpand,
-      collapseCollapse: e.collapseCollapse,
-      none: toBilingual(z.none, e.none),
-      idle: toBilingual(z.idle, e.idle)
-    };
-  }
   return locale === "en" ? en.overlay : zhCN.overlay;
 }
 
 export function getPopupCopy(locale: UiLocale): PopupCopy {
-  if (locale === "bilingual") {
-    const z = zhCN.popup;
-    const e = en.popup;
-    return {
-      eyebrow: toBilingual(z.eyebrow, e.eyebrow),
-      title: toBilingual(z.title, e.title),
-      sectionGlobalStatus: toBilingual(z.sectionGlobalStatus, e.sectionGlobalStatus),
-      sectionSettings: toBilingual(z.sectionSettings, e.sectionSettings),
-      sectionFallback: toBilingual(z.sectionFallback, e.sectionFallback),
-      sectionDebug: toBilingual(z.sectionDebug, e.sectionDebug),
-      debugSummary: toBilingual(z.debugSummary, e.debugSummary),
-      labelStarter: toBilingual(z.labelStarter, e.labelStarter),
-      labelOverride: toBilingual(z.labelOverride, e.labelOverride),
-      labelEnableOverlay: toBilingual(z.labelEnableOverlay, e.labelEnableOverlay),
-      labelDefaultExpanded: toBilingual(z.labelDefaultExpanded, e.labelDefaultExpanded),
-      bindingA: toBilingual(z.bindingA, e.bindingA),
-      bindingB: toBilingual(z.bindingB, e.bindingB),
-      currentTab: toBilingual(z.currentTab, e.currentTab),
-      unbind: toBilingual(z.unbind, e.unbind),
-      start: toBilingual(z.start, e.start),
-      pause: toBilingual(z.pause, e.pause),
-      resume: toBilingual(z.resume, e.resume),
-      stop: toBilingual(z.stop, e.stop),
-      clearTerminal: toBilingual(z.clearTerminal, e.clearTerminal),
-      resetPosition: toBilingual(z.resetPosition, e.resetPosition),
-      copyDebug: toBilingual(z.copyDebug, e.copyDebug),
-      copied: toBilingual(z.copied, e.copied),
-      noActiveTab: toBilingual(z.noActiveTab, e.noActiveTab),
-      unsupportedTab: toBilingual(z.unsupportedTab, e.unsupportedTab),
-      tabBoundAs: (role: string) => toBilingual(z.tabBoundAs(role), e.tabBoundAs(role)),
-      tabEligible: (kind: string) => toBilingual(z.tabEligible(kind), e.tabEligible(kind)),
-      unbound: toBilingual(z.unbound, e.unbound),
-      none: toBilingual(z.none, e.none),
-      idle: toBilingual(z.idle, e.idle),
-      roundLabel: toBilingual(z.roundLabel, e.roundLabel),
-      nextHopLabel: toBilingual(z.nextHopLabel, e.nextHopLabel),
-      currentStepLabel: toBilingual(z.currentStepLabel, e.currentStepLabel),
-      transportLabel: toBilingual(z.transportLabel, e.transportLabel),
-      selectorLabel: toBilingual(z.selectorLabel, e.selectorLabel),
-      lastIssueLabel: toBilingual(z.lastIssueLabel, e.lastIssueLabel),
-      threadLabel: toBilingual(z.threadLabel, e.threadLabel),
-      projectThreadLabel: toBilingual(z.projectThreadLabel, e.projectThreadLabel),
-      overrideNone: toBilingual(z.overrideNone, e.overrideNone),
-      overrideA: toBilingual(z.overrideA, e.overrideA),
-      overrideB: toBilingual(z.overrideB, e.overrideB),
-      starterA: toBilingual(z.starterA, e.starterA),
-      starterB: toBilingual(z.starterB, e.starterB),
-      localeLabel: toBilingual(z.localeLabel, e.localeLabel),
-      localeZh: toBilingual(z.localeZh, e.localeZh),
-      localeEn: toBilingual(z.localeEn, e.localeEn),
-      localeBilingual: toBilingual(z.localeBilingual, e.localeBilingual),
-      helpText: toBilingual(z.helpText, e.helpText)
-    };
-  }
   return locale === "en" ? en.popup : zhCN.popup;
 }
 
