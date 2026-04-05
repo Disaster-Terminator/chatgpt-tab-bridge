@@ -1,17 +1,13 @@
 import {
   applyComposerText,
-  checkAckSignals,
   findBestComposer,
   findLatestUserMessageHash,
   findSendButton,
   hashText,
-  isComposerTrulyCleared,
   isGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
-  triggerComposerSend,
-  type AckSignal,
-  type CheckAckSignalsResult
+  triggerComposerSend
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
 import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
@@ -609,7 +605,7 @@ async function sendRelayMessage(text: string): Promise<{
   ok: boolean;
   mode?: string;
   applyMode?: string;
-  acknowledgement?: string;
+  dispatchAccepted?: boolean;
   error?: string | null;
 }> {
   try {
@@ -638,52 +634,18 @@ async function sendRelayMessage(text: string): Promise<{
         ok: false,
         mode: sendResult.mode,
         applyMode,
-        acknowledgement: "none",
+        dispatchAccepted: false,
         error: sendResult.error ?? "send_trigger_failed"
       };
     }
 
-     const acknowledgement = await waitForSubmissionAcknowledgement({
-       baseline: {
-         userHash: submissionBaseline.userHash,
-         generating: submissionBaseline.generating
-       },
-       composer,
-       expectedText: text
-     });
-
-     // Capture debug information about the last acknowledgement
-      lastAckDebug = {
-        ok: acknowledgement.ok,
-        signal: acknowledgement.ok ? acknowledgement.signal : null,
-        evidence: acknowledgement.ok && "evidence" in acknowledgement ? acknowledgement.evidence : null,
-        error: acknowledgement.ok ? null : ("error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged"),
-        timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
-        baseline: submissionBaseline,
-         after: {
-          latestUserHash: findLatestUserMessageHash(),
-          composerText: readComposerText(composer),
-          generating: isGenerationInProgressFromDoc()
-        },
-        timestamp: Date.now()
-      };
-
-     if (!acknowledgement.ok) {
-      const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
-      return {
-        ok: false,
-        mode: sendResult.mode,
-        applyMode,
-        acknowledgement: acknowledgement.signal,
-        error: acknowledgementError
-      };
-    }
-
+    // Dispatch-only semantics: success means the trigger was accepted,
+    // not that the message was submitted. Background handles verification.
     return {
       ok: true,
       mode: sendResult.mode,
       applyMode,
-      acknowledgement: acknowledgement.signal,
+      dispatchAccepted: true,
       error: null
     };
   } catch (error) {
@@ -772,83 +734,6 @@ async function waitForSendButton({
       attributes: true,
       attributeFilter: ["disabled", "aria-disabled", "style", "class"]
     });
-  });
-}
-
-async function waitForSubmissionAcknowledgement({
-  baseline,
-  composer,
-  expectedText
-}: {
-  baseline: { userHash: string | null; generating: boolean; sendButtonReady: boolean };
-  composer: Element;
-  expectedText: string;
-  postClickTimestamp?: number;
-}): Promise<
-  | { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" }
-  | { ok: false; error: "send_not_acknowledged"; signal: "none" }
-> {
-  const expectedHash = hashText(expectedText);
-  const postClickTimestamp = Date.now();
-
-  const input = {
-    baselineUserHash: baseline.userHash,
-    baselineGenerating: baseline.generating,
-    baselineSendButtonReady: baseline.sendButtonReady,
-    composer,
-    expectedHash,
-    expectedText,
-    postClickTimestamp
-  };
-
-  const immediate = checkAckSignals(input);
-  if (immediate && immediate.evidence !== "auxiliary_only") {
-    return immediate as { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" };
-  }
-
-  const startTime = Date.now();
-  const pollingInterval = 200;
-  const maxPollingTime = 10000;
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      observer.disconnect();
-      pollingHandle && clearInterval(pollingHandle);
-      resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, maxPollingTime);
-
-    const checkAndResolve = (result: CheckAckSignalsResult) => {
-      if (result && result.evidence !== "auxiliary_only") {
-        clearTimeout(timeout);
-        observer.disconnect();
-        pollingHandle && clearInterval(pollingHandle);
-        resolve(result as { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" });
-      }
-    };
-
-    const observer = new MutationObserver(() => {
-      queueMicrotask(() => {
-        checkAndResolve(checkAckSignals(input));
-      });
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["aria-label", "disabled", "style", "class", "data-testid"]
-    });
-
-    let pollingHandle: ReturnType<typeof setInterval> | null = null;
-    if (typeof setInterval !== "undefined") {
-      pollingHandle = setInterval(() => {
-        if (Date.now() - startTime >= maxPollingTime) {
-          pollingHandle && clearInterval(pollingHandle);
-          return;
-        }
-        checkAndResolve(checkAckSignals(input));
-      }, pollingInterval);
-    }
   });
 }
 

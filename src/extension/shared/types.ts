@@ -9,7 +9,9 @@ export type StopReason =
   | "duplicate_output"
   | "hop_timeout"
   | "binding_invalid"
-  | "starter_settle_timeout";
+  | "starter_settle_timeout"
+  | "target_settle_timeout"
+  | "submission_not_verified";
 
 export type ErrorReason =
   | "selector_failure"
@@ -216,25 +218,20 @@ export interface ExecutionReadiness {
 }
 
 export type RelaySendMode = "button" | "form_submit" | "button_missing" | "button_disabled";
-export type RelayAcknowledgement =
-  | "none"
-  | "user_message_added"
-  | "generation_started"
-  | "composer_cleared";
 
 export type RelayMessageResponse =
   | {
       ok: true;
       mode: RelaySendMode;
       applyMode: string;
-      acknowledgement: RelayAcknowledgement;
+      dispatchAccepted: true;
       error: null;
     }
   | {
       ok: false;
       mode?: RelaySendMode;
       applyMode?: string;
-      acknowledgement?: RelayAcknowledgement;
+      dispatchAccepted?: boolean;
       error: string;
     };
 

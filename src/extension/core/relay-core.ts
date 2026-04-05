@@ -177,3 +177,45 @@ export function guardReasonToStopReason(
 export function formatNextHop(sourceRole: BridgeRole): string {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
 }
+
+export interface SubmissionVerificationInput {
+  baselineUserHash: string | null;
+  baselineGenerating: boolean;
+  currentUserHash: string | null;
+  currentGenerating: boolean;
+  relayPayloadText: string;
+}
+
+export interface SubmissionVerificationResult {
+  verified: boolean;
+  reason: "user_hash_changed" | "generation_started" | "not_verified";
+}
+
+export function evaluateSubmissionVerification(input: SubmissionVerificationInput): SubmissionVerificationResult {
+  const {
+    baselineUserHash,
+    baselineGenerating,
+    currentUserHash,
+    currentGenerating,
+    relayPayloadText
+  } = input;
+
+  if (currentUserHash && currentUserHash !== baselineUserHash) {
+    return {
+      verified: true,
+      reason: "user_hash_changed"
+    };
+  }
+
+  if (!baselineGenerating && currentGenerating) {
+    return {
+      verified: true,
+      reason: "generation_started"
+    };
+  }
+
+  return {
+    verified: false,
+    reason: "not_verified"
+  };
+}

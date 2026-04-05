@@ -18,7 +18,8 @@ var STOP_REASONS = Object.freeze({
   HOP_TIMEOUT: "hop_timeout",
   BINDING_INVALID: "binding_invalid",
   STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
-  TARGET_SETTLE_TIMEOUT: "target_settle_timeout"
+  TARGET_SETTLE_TIMEOUT: "target_settle_timeout",
+  SUBMISSION_NOT_VERIFIED: "submission_not_verified"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",

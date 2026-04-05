@@ -83,7 +83,8 @@ var STOP_REASONS = Object.freeze({
   HOP_TIMEOUT: "hop_timeout",
   BINDING_INVALID: "binding_invalid",
   STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
-  TARGET_SETTLE_TIMEOUT: "target_settle_timeout"
+  TARGET_SETTLE_TIMEOUT: "target_settle_timeout",
+  SUBMISSION_NOT_VERIFIED: "submission_not_verified"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -594,6 +595,31 @@ function guardReasonToStopReason(reason) {
 }
 function formatNextHop(sourceRole) {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
+}
+function evaluateSubmissionVerification(input) {
+  const {
+    baselineUserHash,
+    baselineGenerating,
+    currentUserHash,
+    currentGenerating,
+    relayPayloadText
+  } = input;
+  if (currentUserHash && currentUserHash !== baselineUserHash) {
+    return {
+      verified: true,
+      reason: "user_hash_changed"
+    };
+  }
+  if (!baselineGenerating && currentGenerating) {
+    return {
+      verified: true,
+      reason: "generation_started"
+    };
+  }
+  return {
+    verified: false,
+    reason: "not_verified"
+  };
 }
 
 // core/popup-model.ts
@@ -1129,6 +1155,79 @@ async function runRelayLoop(token, settings) {
       await updateState({
         type: "runtime_error",
         reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${sendResult.error ?? "unknown"}`
+      });
+      return;
+    }
+    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
+    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
+    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `verifying ${targetRole} submission`,
+        sourceRole,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: "verifying",
+        selector: "pending"
+      }
+    });
+    const verificationTimeoutMs = 1e4;
+    const verificationPollIntervalMs = 500;
+    const verificationStartTime = Date.now();
+    let verificationPassed = false;
+    let verificationFailedReason = null;
+    while (Date.now() - verificationStartTime < verificationTimeoutMs) {
+      if (token !== activeLoopToken) {
+        return;
+      }
+      const currentState = await getState();
+      if (currentState.phase !== PHASES.RUNNING) {
+        return;
+      }
+      await sleep(verificationPollIntervalMs);
+      const activity = await requestThreadActivity(targetBinding.tabId);
+      if (!activity.ok) {
+        await updateState({
+          type: "set_runtime_activity",
+          activity: {
+            step: `verifying ${targetRole} submission`,
+            sourceRole,
+            targetRole,
+            pendingRound: currentState.round + 1,
+            transport: "verifying",
+            selector: "activity_check_failed"
+          }
+        });
+        continue;
+      }
+      const verificationResult = evaluateSubmissionVerification({
+        baselineUserHash,
+        baselineGenerating,
+        currentUserHash: activity.result.latestUserHash,
+        currentGenerating: activity.result.generating,
+        relayPayloadText: envelope
+      });
+      if (verificationResult.verified) {
+        verificationPassed = true;
+        break;
+      }
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `verifying ${targetRole} submission`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "verifying",
+          selector: verificationResult.reason
+        }
+      });
+    }
+    if (!verificationPassed) {
+      await updateState({
+        type: "stop_condition",
+        reason: STOP_REASONS.SUBMISSION_NOT_VERIFIED
       });
       return;
     }

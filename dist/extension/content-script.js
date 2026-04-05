@@ -11,35 +11,6 @@ function hashText(value) {
   }
   return `h${(hash >>> 0).toString(16)}`;
 }
-function isComposerTrulyCleared(currentText, expectedText) {
-  if (!currentText || currentText.trim() === "") {
-    return true;
-  }
-  if (stillContainsExpectedPayload(currentText, expectedText)) {
-    return false;
-  }
-  return true;
-}
-function stillContainsExpectedPayload(currentText, expectedText) {
-  if (!expectedText || !currentText) {
-    return false;
-  }
-  const normalizedCurrent = normalizeText(currentText);
-  const normalizedExpected = normalizeText(expectedText);
-  if (normalizedCurrent === normalizedExpected) {
-    return true;
-  }
-  let matchCount = 0;
-  const expectedWords = normalizedExpected.split(/\s+/).filter((w) => w.length > 0);
-  const currentWords = normalizedCurrent.split(/\s+/).filter((w) => w.length > 0);
-  for (const word of expectedWords) {
-    if (currentWords.some((cw) => cw.includes(word) || word.includes(cw))) {
-      matchCount++;
-    }
-  }
-  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
-  return similarity >= 0.5;
-}
 function isGenerationInProgressFromDoc() {
   if (document.querySelector('button[data-testid="stop-button"]') || document.querySelector('button[data-testid="stop-generating-button"]')) {
     return true;
@@ -47,15 +18,6 @@ function isGenerationInProgressFromDoc() {
   return Boolean(
     document.querySelector('button[aria-label*="\u505C\u6B62"]') || document.querySelector('button[aria-label*="Stop"]') || document.querySelector('button[aria-label*="Cancel"]')
   );
-}
-function readComposerTextFromDoc(composer) {
-  if (!composer) {
-    return "";
-  }
-  if (isValueComposer(composer)) {
-    return normalizeText(composer.value || "");
-  }
-  return normalizeText(composer.textContent || "");
 }
 function findLatestUserMessageHash() {
   const selectors = [
@@ -73,89 +35,6 @@ function findLatestUserMessageHash() {
       const text = normalizeText(latest.textContent || "");
       return text ? hashText(text) : null;
     }
-  }
-  return null;
-}
-function findLatestUserMessageText() {
-  const selectors = [
-    '[data-message-author-role="user"]',
-    'article [data-message-author-role="user"]',
-    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
-    'main [data-message-author-role="user"]'
-  ];
-  for (const selector of selectors) {
-    const candidates = Array.from(document.querySelectorAll(selector)).filter(
-      (element) => normalizeText(element.textContent || "")
-    );
-    if (candidates.length > 0) {
-      const latest = candidates[candidates.length - 1];
-      const text = normalizeText(latest.textContent || "");
-      return text || null;
-    }
-  }
-  return null;
-}
-function calculateTextOverlap(textA, textB) {
-  const normalizedA = normalizeText(textA);
-  const normalizedB = normalizeText(textB);
-  if (!normalizedA || !normalizedB) {
-    return 0;
-  }
-  const wordsA = normalizedA.split(/\s+/).filter((w) => w.length > 0);
-  const wordsB = normalizedB.split(/\s+/).filter((w) => w.length > 0);
-  if (wordsA.length === 0 || wordsB.length === 0) {
-    return 0;
-  }
-  let matchCount = 0;
-  for (const word of wordsA) {
-    if (wordsB.some((bw) => bw.includes(word) || word.includes(bw))) {
-      matchCount++;
-    }
-  }
-  return matchCount / Math.max(wordsA.length, wordsB.length);
-}
-function containsBridgeEnvelopePrefix(text) {
-  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
-}
-function showsPayloadAdoption(latestText, expectedText) {
-  if (containsBridgeEnvelopePrefix(latestText)) {
-    return true;
-  }
-  const overlap = calculateTextOverlap(latestText, expectedText);
-  if (overlap >= 0.5) {
-    return true;
-  }
-  return false;
-}
-function checkAckSignals(input) {
-  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
-  const composerText = readComposerTextFromDoc(composer);
-  const latestUserHash = findLatestUserMessageHash();
-  const latestUserText = findLatestUserMessageText();
-  const currentGenerating = isGenerationInProgressFromDoc();
-  const composerCleared = isComposerTrulyCleared(composerText, expectedText);
-  if (latestUserHash && latestUserHash !== baselineUserHash) {
-    if (latestUserText && showsPayloadAdoption(latestUserText, expectedText)) {
-      if (composerCleared) {
-        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
-      }
-      return { ok: true, signal: "user_message_added", evidence: "strong" };
-    }
-    if (latestUserHash === expectedHash) {
-      if (composerCleared) {
-        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
-      }
-      return { ok: true, signal: "user_message_added", evidence: "strong" };
-    }
-  }
-  if (!baselineGenerating && currentGenerating) {
-    if (composerCleared) {
-      return { ok: true, signal: "generation_started", evidence: "strong_with_auxiliary" };
-    }
-    return { ok: true, signal: "generation_started", evidence: "strong" };
-  }
-  if (composerCleared) {
-    return { ok: true, signal: "composer_cleared", evidence: "auxiliary_only" };
   }
   return null;
 }
@@ -353,7 +232,8 @@ var STOP_REASONS = Object.freeze({
   HOP_TIMEOUT: "hop_timeout",
   BINDING_INVALID: "binding_invalid",
   STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
-  TARGET_SETTLE_TIMEOUT: "target_settle_timeout"
+  TARGET_SETTLE_TIMEOUT: "target_settle_timeout",
+  SUBMISSION_NOT_VERIFIED: "submission_not_verified"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -1174,47 +1054,15 @@ async function sendRelayMessage(text) {
         ok: false,
         mode: sendResult.mode,
         applyMode,
-        acknowledgement: "none",
+        dispatchAccepted: false,
         error: sendResult.error ?? "send_trigger_failed"
-      };
-    }
-    const acknowledgement = await waitForSubmissionAcknowledgement({
-      baseline: {
-        userHash: submissionBaseline.userHash,
-        generating: submissionBaseline.generating
-      },
-      composer,
-      expectedText: text
-    });
-    lastAckDebug = {
-      ok: acknowledgement.ok,
-      signal: acknowledgement.ok ? acknowledgement.signal : null,
-      evidence: acknowledgement.ok && "evidence" in acknowledgement ? acknowledgement.evidence : null,
-      error: acknowledgement.ok ? null : "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged",
-      timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
-      baseline: submissionBaseline,
-      after: {
-        latestUserHash: findLatestUserMessageHash(),
-        composerText: readComposerText(composer),
-        generating: isGenerationInProgressFromDoc()
-      },
-      timestamp: Date.now()
-    };
-    if (!acknowledgement.ok) {
-      const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
-      return {
-        ok: false,
-        mode: sendResult.mode,
-        applyMode,
-        acknowledgement: acknowledgement.signal,
-        error: acknowledgementError
       };
     }
     return {
       ok: true,
       mode: sendResult.mode,
       applyMode,
-      acknowledgement: acknowledgement.signal,
+      dispatchAccepted: true,
       error: null
     };
   } catch (error) {
@@ -1282,66 +1130,6 @@ async function waitForSendButton({
       attributes: true,
       attributeFilter: ["disabled", "aria-disabled", "style", "class"]
     });
-  });
-}
-async function waitForSubmissionAcknowledgement({
-  baseline,
-  composer,
-  expectedText
-}) {
-  const expectedHash = hashText(expectedText);
-  const postClickTimestamp = Date.now();
-  const input = {
-    baselineUserHash: baseline.userHash,
-    baselineGenerating: baseline.generating,
-    baselineSendButtonReady: baseline.sendButtonReady,
-    composer,
-    expectedHash,
-    expectedText,
-    postClickTimestamp
-  };
-  const immediate = checkAckSignals(input);
-  if (immediate && immediate.evidence !== "auxiliary_only") {
-    return immediate;
-  }
-  const startTime = Date.now();
-  const pollingInterval = 200;
-  const maxPollingTime = 1e4;
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      observer.disconnect();
-      pollingHandle && clearInterval(pollingHandle);
-      resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, maxPollingTime);
-    const checkAndResolve = (result) => {
-      if (result && result.evidence !== "auxiliary_only") {
-        clearTimeout(timeout);
-        observer.disconnect();
-        pollingHandle && clearInterval(pollingHandle);
-        resolve(result);
-      }
-    };
-    const observer = new MutationObserver(() => {
-      queueMicrotask(() => {
-        checkAndResolve(checkAckSignals(input));
-      });
-    });
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["aria-label", "disabled", "style", "class", "data-testid"]
-    });
-    let pollingHandle = null;
-    if (typeof setInterval !== "undefined") {
-      pollingHandle = setInterval(() => {
-        if (Date.now() - startTime >= maxPollingTime) {
-          pollingHandle && clearInterval(pollingHandle);
-          return;
-        }
-        checkAndResolve(checkAckSignals(input));
-      }, pollingInterval);
-    }
   });
 }
 function requireOverlayElement(selector) {
