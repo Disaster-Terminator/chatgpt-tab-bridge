@@ -43,6 +43,10 @@
           <div class="popup__issue-row" id="issueRow" hidden>
             <span id="issueValue">-</span>
           </div>
+          <div class="popup__readiness-row" id="readinessRow" hidden>
+            <span class="popup__readiness-label" data-copy="readinessLabel">无法启动:</span>
+            <span class="popup__readiness-reason" id="readinessReason">-</span>
+          </div>
         </div>
         <div class="popup__binding-grid">
           <div class="popup__binding-card">
@@ -114,7 +118,7 @@
         </div>
       </section>
 
-      <details class="popup__details">
+      <details class="popup__details" open>
         <summary class="popup__details-summary">
           <span data-copy="sectionDebug">调试</span>
         </summary>

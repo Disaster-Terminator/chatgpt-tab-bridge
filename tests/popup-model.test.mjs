@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { importExtensionModule } from "./extension-test-harness.mjs";
 
 const { PHASES } = await importExtensionModule("core/constants");
-const { buildDisplay, deriveControls } = await importExtensionModule("core/popup-model");
+const { buildDisplay, deriveControls, computeReadiness } = await importExtensionModule("core/popup-model");
 const { createInitialState } = await importExtensionModule("core/state-machine");
 const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
 
@@ -23,7 +23,8 @@ test("ready enables start and starter, but not run-time controls", () => {
   const state = bind(bind(createInitialState(), "A", 1), "B", 2);
   state.phase = PHASES.READY;
 
-  const controls = deriveControls(state);
+  const readiness = computeReadiness(state, null);
+  const controls = deriveControls(state, readiness);
   assert.equal(controls.canStart, true);
   assert.equal(controls.canSetStarter, true);
   assert.equal(controls.canPause, false);
@@ -36,13 +37,15 @@ test("paused enables override and resume, running does not", () => {
   const state = bind(bind(createInitialState(), "A", 1), "B", 2);
 
   state.phase = PHASES.PAUSED;
-  let controls = deriveControls(state);
+  let readiness = computeReadiness(state, null);
+  let controls = deriveControls(state, readiness);
   assert.equal(controls.canResume, true);
   assert.equal(controls.canSetOverride, true);
   assert.equal(controls.canPause, false);
 
   state.phase = PHASES.RUNNING;
-  controls = deriveControls(state);
+  readiness = computeReadiness(state, null);
+  controls = deriveControls(state, readiness);
   assert.equal(controls.canPause, true);
   assert.equal(controls.canSetOverride, false);
   assert.equal(controls.canResume, false);
@@ -53,7 +56,8 @@ test("terminal clear gate blocks start until phase is cleared", () => {
   state.phase = PHASES.READY;
   state.requiresTerminalClear = true;
 
-  const controls = deriveControls(state);
+  const readiness = computeReadiness(state, null);
+  const controls = deriveControls(state, readiness);
   assert.equal(controls.canStart, false);
 });
 

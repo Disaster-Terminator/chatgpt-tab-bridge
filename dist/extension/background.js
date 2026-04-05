@@ -81,7 +81,8 @@ var STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
-  BINDING_INVALID: "binding_invalid"
+  BINDING_INVALID: "binding_invalid",
+  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -108,6 +109,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
@@ -594,15 +596,38 @@ function formatNextHop(sourceRole) {
 }
 
 // core/popup-model.ts
-function deriveControls(state) {
+function deriveControls(state, readiness) {
   return {
-    canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state),
+    canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
     canPause: state.phase === PHASES.RUNNING,
-    canResume: state.phase === PHASES.PAUSED && hasValidBindings(state),
+    canResume: state.phase === PHASES.PAUSED && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
     canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
     canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
-    canSetStarter: state.phase === PHASES.IDLE || state.phase === PHASES.READY,
-    canSetOverride: canWriteOverride(state)
+    canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY) && !readiness.preflightPending,
+    canSetOverride: canWriteOverride(state) && !readiness.preflightPending
+  };
+}
+function computeReadiness(state, sourceThreadActivity) {
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const starterRole = state.starter;
+  const checkRole = state.phase === PHASES.READY ? starterRole : sourceRole;
+  const isGenerating = sourceThreadActivity?.generating ?? false;
+  const starterReady = !isGenerating;
+  let blockReason = null;
+  if (state.phase === PHASES.RUNNING && state.runtimeActivity.step.startsWith("waiting starter")) {
+    blockReason = "preflight_pending";
+  } else if (!starterReady) {
+    blockReason = "starter_generating";
+  } else if (state.requiresTerminalClear) {
+    blockReason = "clear_terminal_required";
+  } else if (!hasValidBindings(state)) {
+    blockReason = "missing_binding";
+  }
+  return {
+    starterReady,
+    preflightPending: state.phase === PHASES.RUNNING && state.runtimeActivity.step.startsWith("waiting starter"),
+    blockReason,
+    sourceRole
   };
 }
 function buildDisplay(state) {
@@ -846,9 +871,12 @@ async function clearBinding(role) {
 async function startSession() {
   const next = await updateState({ type: "start" });
   if (next.phase === PHASES.RUNNING) {
-    startRelayLoop(next);
+    const started = await runStarterPreflight(next);
+    if (started) {
+      startRelayLoop(await getState());
+    }
   }
-  return next;
+  return getState();
 }
 async function pauseSession() {
   return updateState({ type: "pause" });
@@ -856,9 +884,56 @@ async function pauseSession() {
 async function resumeSession() {
   const next = await updateState({ type: "resume" });
   if (next.phase === PHASES.RUNNING) {
-    startRelayLoop(next);
+    const started = await runStarterPreflight(next);
+    if (started) {
+      startRelayLoop(await getState());
+    }
   }
-  return next;
+  return getState();
+}
+async function runStarterPreflight(state) {
+  const sourceRole = state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  if (!sourceBinding) {
+    return true;
+  }
+  const threadActivity = await requestThreadActivity(sourceBinding.tabId);
+  if (!threadActivity.ok) {
+    return true;
+  }
+  if (!threadActivity.result.generating) {
+    return true;
+  }
+  const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
+  const pollIntervalMs = state.settings?.pollIntervalMs ?? DEFAULT_SETTINGS.pollIntervalMs;
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    const currentState = await getState();
+    if (currentState.phase !== PHASES.RUNNING) {
+      return false;
+    }
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (!activity.ok || !activity.result.generating) {
+      return true;
+    }
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${sourceRole} settle`,
+        sourceRole,
+        targetRole: otherRole(sourceRole),
+        pendingRound: currentState.round + 1,
+        transport: "preflight",
+        selector: "starter_generating"
+      }
+    });
+    await sleep(pollIntervalMs);
+  }
+  await updateState({
+    type: "stop_condition",
+    reason: STOP_REASONS.STARTER_SETTLE_TIMEOUT
+  });
+  return false;
 }
 async function stopSession() {
   return updateState({ type: "stop", reason: STOP_REASONS.USER_STOP });
@@ -1058,6 +1133,18 @@ async function requestAssistantSnapshot(tabId) {
     };
   }
 }
+async function requestThreadActivity(tabId) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: MESSAGE_TYPES.GET_THREAD_ACTIVITY
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: getErrorMessage(error)
+    };
+  }
+}
 async function sendRelayMessage(tabId, text) {
   try {
     return await Promise.race([
@@ -1130,18 +1217,29 @@ async function getPopupModel(activeTabId) {
     urlInfo: parseChatGptThreadUrl(currentTab.url ?? ""),
     assignedRole: findRoleByTabId(state, currentTab.id ?? null)
   } : null;
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  let sourceThreadActivity = null;
+  if (sourceBinding) {
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (activity.ok) {
+      sourceThreadActivity = activity.result;
+    }
+  }
+  const readiness = computeReadiness(state, sourceThreadActivity);
   return {
     state,
     overlaySettings,
     currentTab: currentTabInfo,
-    controls: deriveControls(state),
-    display: buildDisplay(state)
+    controls: deriveControls(state, readiness),
+    display: buildDisplay(state),
+    readiness
   };
 }
 async function getOverlayModel(tabId) {
   const state = await getState();
   const overlaySettings = await getOverlaySettings();
-  return buildOverlaySnapshot(state, tabId, overlaySettings);
+  return await buildOverlaySnapshot(state, tabId, overlaySettings);
 }
 async function safeGetTab(tabId) {
   try {
@@ -1166,9 +1264,10 @@ async function broadcastOverlayState(state, previousState = null, broadcastAllCh
   await Promise.all(
     Array.from(tabIds).map(async (tabId) => {
       try {
+        const snapshot = await buildOverlaySnapshot(state, tabId, nextOverlaySettings);
         await chrome.tabs.sendMessage(tabId, {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
-          snapshot: buildOverlaySnapshot(state, tabId, nextOverlaySettings)
+          snapshot
         });
       } catch {
         return null;
@@ -1177,7 +1276,17 @@ async function broadcastOverlayState(state, previousState = null, broadcastAllCh
     })
   );
 }
-function buildOverlaySnapshot(state, tabId, overlaySettings) {
+async function buildOverlaySnapshot(state, tabId, overlaySettings) {
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  let sourceThreadActivity = null;
+  if (sourceBinding) {
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (activity.ok) {
+      sourceThreadActivity = activity.result;
+    }
+  }
+  const readiness = computeReadiness(state, sourceThreadActivity);
   return {
     phase: state.phase,
     round: state.round,
@@ -1185,9 +1294,10 @@ function buildOverlaySnapshot(state, tabId, overlaySettings) {
     requiresTerminalClear: state.requiresTerminalClear,
     assignedRole: findRoleByTabId(state, tabId),
     starter: state.starter,
-    controls: deriveControls(state),
+    controls: deriveControls(state, readiness),
     display: buildDisplay(state),
-    overlaySettings
+    overlaySettings,
+    readiness
   };
 }
 function findRoleByTabId(state, tabId) {

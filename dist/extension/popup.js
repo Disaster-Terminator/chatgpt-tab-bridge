@@ -16,7 +16,8 @@ var STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
-  BINDING_INVALID: "binding_invalid"
+  BINDING_INVALID: "binding_invalid",
+  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
 });
 var ERROR_REASONS = Object.freeze({
   SELECTOR_FAILURE: "selector_failure",
@@ -43,6 +44,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
@@ -148,7 +150,14 @@ var zhCN = {
     localeLabel: "\u8BED\u8A00",
     localeZh: "\u4E2D\u6587",
     localeEn: "English",
-    helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002"
+    helpText: "\u8986\u76D6\u4EC5\u5728\u6682\u505C\u65F6\u751F\u6548\uFF1B\u6E05\u7A7A\u7EC8\u7AEF\u53EF\u5C06\u5DF2\u505C\u6B62/\u9519\u8BEF\u72B6\u6001\u91CD\u7F6E\u4E3A\u5C31\u7EEA\u3002",
+    readinessLabel: "\u65E0\u6CD5\u542F\u52A8:",
+    blockReasons: {
+      starter_generating: "\u8D77\u59CB\u4FA7\u6B63\u5728\u751F\u6210\u4E2D",
+      clear_terminal_required: "\u9700\u8981\u6E05\u7A7A\u7EC8\u7AEF",
+      missing_binding: "\u7F3A\u5C11\u7ED1\u5B9A",
+      preflight_pending: "\u7B49\u5F85\u8D77\u59CB\u4FA7\u5C31\u7EEA"
+    }
   }
 };
 var en = {
@@ -234,7 +243,14 @@ var en = {
     localeLabel: "Language",
     localeZh: "Chinese",
     localeEn: "English",
-    helpText: "Override only applies while paused; Clear returns stopped/error to ready."
+    helpText: "Override only applies while paused; Clear returns stopped/error to ready.",
+    readinessLabel: "Cannot start:",
+    blockReasons: {
+      starter_generating: "Starter is still generating",
+      clear_terminal_required: "Terminal must be cleared",
+      missing_binding: "Missing binding",
+      preflight_pending: "Waiting for starter to settle"
+    }
   }
 };
 function getOverlayCopy(locale) {
@@ -331,7 +347,9 @@ var elements = {
   issueValue: requireElement("#issueValue"),
   issueValueDebug: requireElement("#issueValueDebug"),
   issueRow: requireElement("#issueRow"),
-  copyFeedback: requireElement("#copyFeedback")
+  copyFeedback: requireElement("#copyFeedback"),
+  readinessRow: requireElement("#readinessRow"),
+  readinessReason: requireElement("#readinessReason")
 };
 var currentTabId = null;
 var currentModel = null;
@@ -472,7 +490,7 @@ async function perform(message) {
 }
 function render(model) {
   const copy = getPopupCopy(currentLocale);
-  const { state, currentTab, controls, display, overlaySettings } = model;
+  const { state, currentTab, controls, display, overlaySettings, readiness } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
   elements.phaseBadge.dataset.phase = state.phase;
@@ -517,6 +535,13 @@ function render(model) {
   elements.clearTerminalButton.disabled = !controls.canClearTerminal;
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
+  if (readiness.blockReason) {
+    elements.readinessRow.hidden = false;
+    const reasonKey = readiness.blockReason;
+    elements.readinessReason.textContent = copy.blockReasons?.[reasonKey] || copy.none;
+  } else {
+    elements.readinessRow.hidden = true;
+  }
   const starterOptions = elements.starterSelect.options;
   starterOptions[0].textContent = copy.starterA;
   starterOptions[1].textContent = copy.starterB;

@@ -8,7 +8,8 @@ export type StopReason =
   | "max_rounds_reached"
   | "duplicate_output"
   | "hop_timeout"
-  | "binding_invalid";
+  | "binding_invalid"
+  | "starter_settle_timeout";
 
 export type ErrorReason =
   | "selector_failure"
@@ -35,6 +36,8 @@ export type MessageType =
   | "SET_OVERLAY_POSITION"
   | "RESET_OVERLAY_POSITION"
   | "GET_ASSISTANT_SNAPSHOT"
+  | "GET_THREAD_ACTIVITY"
+  | "GET_LAST_ACK_DEBUG"
   | "SEND_RELAY_MESSAGE"
   | "SYNC_OVERLAY_STATE"
   | "REQUEST_OPEN_POPUP";
@@ -162,6 +165,7 @@ export interface PopupModel {
   currentTab: PopupCurrentTab | null;
   controls: PopupControls;
   display: RuntimeDisplay;
+  readiness: ExecutionReadiness;
 }
 
 export interface OverlayModel {
@@ -174,6 +178,7 @@ export interface OverlayModel {
   controls: PopupControls;
   display: RuntimeDisplay;
   overlaySettings: OverlaySettings;
+  readiness: ExecutionReadiness;
 }
 
 export interface AssistantSnapshot {
@@ -184,6 +189,31 @@ export interface AssistantSnapshot {
 export type AssistantSnapshotResponse =
   | { ok: true; result: AssistantSnapshot }
   | { ok: false; error: string };
+
+export interface ThreadActivity {
+  generating: boolean;
+  latestAssistantHash: string | null;
+  latestUserHash: string | null;
+  composerText: string;
+  sendButtonReady: boolean;
+}
+
+export type ThreadActivityResponse =
+  | { ok: true; result: ThreadActivity }
+  | { ok: false; error: string };
+
+export type BlockReason =
+  | "starter_generating"
+  | "clear_terminal_required"
+  | "missing_binding"
+  | "preflight_pending";
+
+export interface ExecutionReadiness {
+  starterReady: boolean;
+  preflightPending: boolean;
+  blockReason: BlockReason | null;
+  sourceRole: BridgeRole | null;
+}
 
 export type RelaySendMode = "button" | "form_submit" | "button_missing" | "button_disabled";
 export type RelayAcknowledgement =
@@ -289,6 +319,10 @@ export interface GetAssistantSnapshotMessage extends MessageBase {
   type: "GET_ASSISTANT_SNAPSHOT";
 }
 
+export interface GetThreadActivityMessage extends MessageBase {
+  type: "GET_THREAD_ACTIVITY";
+}
+
 export interface GetLastAckDebugMessage extends MessageBase {
   type: "GET_LAST_ACK_DEBUG";
 }
@@ -325,6 +359,7 @@ export type RuntimeMessage =
   | SetOverlayPositionMessage
   | ResetOverlayPositionMessage
   | GetAssistantSnapshotMessage
+  | GetThreadActivityMessage
   | GetLastAckDebugMessage
   | SendRelayMessageRequest
   | SyncOverlayStateMessage

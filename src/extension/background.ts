@@ -31,7 +31,7 @@ import {
   hashText,
   normalizeAssistantText
 } from "./core/relay-core.ts";
-import { buildDisplay, deriveControls } from "./core/popup-model.ts";
+import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
@@ -54,7 +54,8 @@ import type {
   RuntimeResponse,
   RuntimeSettings,
   RuntimeState,
-  StopReason
+  StopReason,
+  ThreadActivityResponse
 } from "./shared/types.js";
 
 type OverlaySettingsResult = {
@@ -336,9 +337,12 @@ async function clearBinding(role: BridgeRole | null | undefined): Promise<Runtim
 async function startSession(): Promise<RuntimeState> {
   const next = await updateState({ type: "start" });
   if (next.phase === PHASES.RUNNING) {
-    startRelayLoop(next);
+    const started = await runStarterPreflight(next);
+    if (started) {
+      startRelayLoop(await getState());
+    }
   }
-  return next;
+  return getState();
 }
 
 async function pauseSession(): Promise<RuntimeState> {
@@ -348,9 +352,67 @@ async function pauseSession(): Promise<RuntimeState> {
 async function resumeSession(): Promise<RuntimeState> {
   const next = await updateState({ type: "resume" });
   if (next.phase === PHASES.RUNNING) {
-    startRelayLoop(next);
+    const started = await runStarterPreflight(next);
+    if (started) {
+      startRelayLoop(await getState());
+    }
   }
-  return next;
+  return getState();
+}
+
+async function runStarterPreflight(state: RuntimeState): Promise<boolean> {
+  const sourceRole = state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  
+  if (!sourceBinding) {
+    return true;
+  }
+
+  const threadActivity = await requestThreadActivity(sourceBinding.tabId);
+  if (!threadActivity.ok) {
+    return true;
+  }
+
+  if (!threadActivity.result.generating) {
+    return true;
+  }
+
+  const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
+  const pollIntervalMs = state.settings?.pollIntervalMs ?? DEFAULT_SETTINGS.pollIntervalMs;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    const currentState = await getState();
+    if (currentState.phase !== PHASES.RUNNING) {
+      return false;
+    }
+
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (!activity.ok || !activity.result.generating) {
+      return true;
+    }
+
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${sourceRole} settle`,
+        sourceRole,
+        targetRole: otherRole(sourceRole),
+        pendingRound: currentState.round + 1,
+        transport: "preflight",
+        selector: "starter_generating"
+      }
+    });
+
+    await sleep(pollIntervalMs);
+  }
+
+  await updateState({
+    type: "stop_condition",
+    reason: STOP_REASONS.STARTER_SETTLE_TIMEOUT
+  });
+
+  return false;
 }
 
 async function stopSession(): Promise<RuntimeState> {
@@ -583,6 +645,19 @@ async function requestAssistantSnapshot(tabId: number): Promise<AssistantSnapsho
   }
 }
 
+async function requestThreadActivity(tabId: number): Promise<ThreadActivityResponse> {
+  try {
+    return await chrome.tabs.sendMessage<ThreadActivityResponse>(tabId, {
+      type: MESSAGE_TYPES.GET_THREAD_ACTIVITY
+    });
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: getErrorMessage(error)
+    };
+  }
+}
+
 async function sendRelayMessage(tabId: number, text: string): Promise<RelayMessageResponse> {
   try {
     return await Promise.race([
@@ -666,19 +741,33 @@ async function getPopupModel(activeTabId: number | null): Promise<PopupModel> {
       }
     : null;
 
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  let sourceThreadActivity = null;
+  
+  if (sourceBinding) {
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (activity.ok) {
+      sourceThreadActivity = activity.result;
+    }
+  }
+
+  const readiness = computeReadiness(state, sourceThreadActivity);
+
   return {
     state,
     overlaySettings,
     currentTab: currentTabInfo,
-    controls: deriveControls(state),
-    display: buildDisplay(state)
+    controls: deriveControls(state, readiness),
+    display: buildDisplay(state),
+    readiness
   };
 }
 
 async function getOverlayModel(tabId: number | null): Promise<OverlayModel> {
   const state = await getState();
   const overlaySettings = await getOverlaySettings();
-  return buildOverlaySnapshot(state, tabId, overlaySettings);
+  return await buildOverlaySnapshot(state, tabId, overlaySettings);
 }
 
 async function safeGetTab(tabId: number): Promise<ChromeTab | null> {
@@ -712,9 +801,10 @@ async function broadcastOverlayState(
   await Promise.all(
     Array.from(tabIds).map(async (tabId): Promise<null> => {
       try {
+        const snapshot = await buildOverlaySnapshot(state, tabId, nextOverlaySettings);
         await chrome.tabs.sendMessage(tabId, {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
-          snapshot: buildOverlaySnapshot(state, tabId, nextOverlaySettings)
+          snapshot
         });
       } catch {
         return null;
@@ -724,11 +814,24 @@ async function broadcastOverlayState(
   );
 }
 
-function buildOverlaySnapshot(
+async function buildOverlaySnapshot(
   state: RuntimeState,
   tabId: number | null,
   overlaySettings: OverlaySettings
-): OverlayModel {
+): Promise<OverlayModel> {
+  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceBinding = state.bindings[sourceRole];
+  let sourceThreadActivity = null;
+  
+  if (sourceBinding) {
+    const activity = await requestThreadActivity(sourceBinding.tabId);
+    if (activity.ok) {
+      sourceThreadActivity = activity.result;
+    }
+  }
+
+  const readiness = computeReadiness(state, sourceThreadActivity);
+
   return {
     phase: state.phase,
     round: state.round,
@@ -736,9 +839,10 @@ function buildOverlaySnapshot(
     requiresTerminalClear: state.requiresTerminalClear,
     assignedRole: findRoleByTabId(state, tabId),
     starter: state.starter,
-    controls: deriveControls(state),
+    controls: deriveControls(state, readiness),
     display: buildDisplay(state),
-    overlaySettings
+    overlaySettings,
+    readiness
   };
 }
 

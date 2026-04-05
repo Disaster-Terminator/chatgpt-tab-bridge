@@ -22,7 +22,8 @@ export const STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
-  BINDING_INVALID: "binding_invalid"
+  BINDING_INVALID: "binding_invalid",
+  STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
 });
 
 export const ERROR_REASONS = Object.freeze({
@@ -51,6 +52,7 @@ export const MESSAGE_TYPES = Object.freeze({
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",

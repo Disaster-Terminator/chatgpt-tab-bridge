@@ -63,6 +63,8 @@ interface PopupElements {
   issueValueDebug: HTMLElement;
   issueRow: HTMLElement;
   copyFeedback: HTMLElement;
+  readinessRow: HTMLElement;
+  readinessReason: HTMLElement;
 }
 
 type PopupActionMessage =
@@ -121,7 +123,9 @@ const elements: PopupElements = {
   issueValue: requireElement<HTMLElement>("#issueValue"),
   issueValueDebug: requireElement<HTMLElement>("#issueValueDebug"),
   issueRow: requireElement<HTMLElement>("#issueRow"),
-  copyFeedback: requireElement<HTMLElement>("#copyFeedback")
+  copyFeedback: requireElement<HTMLElement>("#copyFeedback"),
+  readinessRow: requireElement<HTMLElement>("#readinessRow"),
+  readinessReason: requireElement<HTMLElement>("#readinessReason")
 };
 
 let currentTabId: number | null = null;
@@ -287,7 +291,7 @@ async function perform(message: PopupActionMessage): Promise<void> {
 
 function render(model: PopupModel): void {
   const copy = getPopupCopy(currentLocale);
-  const { state, currentTab, controls, display, overlaySettings } = model;
+  const { state, currentTab, controls, display, overlaySettings, readiness } = model;
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
   elements.phaseBadge.dataset.phase = state.phase;
@@ -340,6 +344,14 @@ function render(model: PopupModel): void {
   elements.clearTerminalButton.disabled = !controls.canClearTerminal;
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
+
+  if (readiness.blockReason) {
+    elements.readinessRow.hidden = false;
+    const reasonKey = readiness.blockReason;
+    elements.readinessReason.textContent = copy.blockReasons?.[reasonKey] || copy.none;
+  } else {
+    elements.readinessRow.hidden = true;
+  }
 
   const starterOptions = elements.starterSelect.options;
   starterOptions[0].textContent = copy.starterA;

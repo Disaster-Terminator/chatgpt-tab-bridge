@@ -19,7 +19,9 @@ import type {
   PopupControls,
   RuntimeDisplay,
   RuntimeMessage,
-  RuntimeResponse
+  RuntimeResponse,
+  ThreadActivityResponse,
+  ExecutionReadiness
 } from "./shared/types.js";
 import type { ChromePort } from "./shared/globals";
 
@@ -55,6 +57,12 @@ let overlaySnapshot: OverlayModel = {
     enabled: true,
     collapsed: false,
     position: null
+  },
+  readiness: {
+    starterReady: true,
+    preflightPending: false,
+    blockReason: null,
+    sourceRole: "A"
   }
 };
 
@@ -74,6 +82,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({
         ok: false,
         error: error instanceof Error ? error.message : "assistant_snapshot_failed"
+      });
+    }
+    return true;
+  }
+
+  if (message?.type === MESSAGE_TYPES.GET_THREAD_ACTIVITY) {
+    try {
+      sendResponse(readThreadActivity());
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "thread_activity_failed"
       });
     }
     return true;
@@ -558,6 +578,31 @@ function readAssistantSnapshot():
   };
 }
 
+function readThreadActivity():
+  | { ok: true; result: { generating: boolean; latestAssistantHash: string | null; latestUserHash: string | null; composerText: string; sendButtonReady: boolean } }
+  | { ok: false; error: string } {
+  const generating = isGenerationInProgressFromDoc();
+  const latestUserHash = findLatestUserMessageHash();
+  const composer = findBestComposer(document);
+  const composerText = readComposerText(composer);
+  const sendButton = composer ? findSendButton(document, composer) : null;
+  const sendButtonReady = sendButton !== null && !sendButton.disabled;
+
+  const latestAssistant = findLatestAssistantElement();
+  const latestAssistantHash = latestAssistant ? hashText(normalizeText(latestAssistant.textContent || "")) : null;
+
+  return {
+    ok: true,
+    result: {
+      generating,
+      latestAssistantHash,
+      latestUserHash,
+      composerText,
+      sendButtonReady
+    }
+  };
+}
+
 async function sendRelayMessage(text: string): Promise<{
   ok: boolean;
   mode?: string;
@@ -755,7 +800,7 @@ async function waitForSubmissionAcknowledgement({
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
     }, maxPollingTime);
 
-    const checkAndResolve = (result: { ok: true; signal: string } | null) => {
+    const checkAndResolve = (result: { ok: true; signal: "user_message_added" | "generation_started" | "composer_cleared" } | { ok: false; error: "send_not_acknowledged"; signal: "none" } | null) => {
       if (result) {
         clearTimeout(timeout);
         observer.disconnect();
