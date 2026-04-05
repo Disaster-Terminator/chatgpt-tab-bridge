@@ -77,13 +77,14 @@ function findLatestUserMessageHash() {
   return null;
 }
 function checkAckSignals(input) {
-  const { baselineUserHash, composer, expectedHash, expectedText } = input;
+  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
   if (latestUserHash && latestUserHash !== baselineUserHash && latestUserHash === expectedHash) {
     return { ok: true, signal: "user_message_added" };
   }
-  if (isGenerationInProgressFromDoc()) {
+  const currentGenerating = isGenerationInProgressFromDoc();
+  if (currentGenerating && baselineGenerating !== true) {
     return { ok: true, signal: "generation_started" };
   }
   if (isComposerTrulyCleared(composerText, expectedText)) {
@@ -1110,7 +1111,10 @@ async function sendRelayMessage(text) {
       };
     }
     const acknowledgement = await waitForSubmissionAcknowledgement({
-      baseline: submissionBaseline,
+      baseline: {
+        userHash: submissionBaseline.userHash,
+        generating: submissionBaseline.generating
+      },
       composer,
       expectedText: text
     });
@@ -1215,6 +1219,7 @@ async function waitForSubmissionAcknowledgement({
   const expectedHash = hashText(expectedText);
   const input = {
     baselineUserHash: baseline.userHash,
+    baselineGenerating: baseline.generating,
     composer,
     expectedHash,
     expectedText

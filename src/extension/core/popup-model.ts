@@ -41,7 +41,10 @@ export function computeReadiness(
   
   return {
     starterReady,
-    preflightPending: state.phase === PHASES.RUNNING && state.runtimeActivity.step.startsWith("waiting starter"),
+    preflightPending: state.phase === PHASES.RUNNING && (
+      state.runtimeActivity.step.startsWith("waiting starter") ||
+      state.runtimeActivity.step.match(/^waiting [AB] settle$/) !== null
+    ),
     blockReason,
     sourceRole
   };

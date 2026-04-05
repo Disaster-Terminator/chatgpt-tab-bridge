@@ -119,6 +119,7 @@ export function findLatestUserMessageHash(): string | null {
 export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared";
 
 export interface CheckAckSignalsInput {
+  baselineGenerating?: boolean;
   baselineUserHash: string | null;
   composer: Element;
   expectedHash: string;
@@ -126,7 +127,7 @@ export interface CheckAckSignalsInput {
 }
 
 export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal: AckSignal } | null {
-  const { baselineUserHash, composer, expectedHash, expectedText } = input;
+  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
 
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
@@ -135,7 +136,9 @@ export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal
     return { ok: true, signal: "user_message_added" };
   }
 
-  if (isGenerationInProgressFromDoc()) {
+  const currentGenerating = isGenerationInProgressFromDoc();
+  if (currentGenerating && baselineGenerating !== true) {
+    // Only ack if this is a NEW generation (false → true transition)
     return { ok: true, signal: "generation_started" };
   }
 

@@ -642,7 +642,10 @@ async function sendRelayMessage(text: string): Promise<{
     }
 
      const acknowledgement = await waitForSubmissionAcknowledgement({
-       baseline: submissionBaseline,
+       baseline: {
+         userHash: submissionBaseline.userHash,
+         generating: submissionBaseline.generating
+       },
        composer,
        expectedText: text
      });
@@ -768,7 +771,7 @@ async function waitForSubmissionAcknowledgement({
   composer,
   expectedText
 }: {
-  baseline: { userHash: string | null };
+  baseline: { userHash: string | null; generating: boolean };
   composer: Element;
   expectedText: string;
 }): Promise<
@@ -779,6 +782,7 @@ async function waitForSubmissionAcknowledgement({
 
   const input = {
     baselineUserHash: baseline.userHash,
+    baselineGenerating: baseline.generating,
     composer,
     expectedHash,
     expectedText
