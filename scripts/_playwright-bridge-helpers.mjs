@@ -280,19 +280,6 @@ export async function expectValueChanged(page, selector, predicate) {
 }
 
 /**
- * Wait for user to manually navigate to supported thread URLs.
- * Note: Actual waiting is handled by runner scripts (user presses Enter).
- * This function is a placeholder for future polling if needed.
- * @param {import("playwright").Page} page
- * @param {string} label - Label for diagnostics
- */
-export async function waitForManualThreadUrl(page, label) {
-  // Manual mode: runner waits for Enter key, then assertSupportedThreadUrl validates
-  // This function is kept for API compatibility but does nothing here
-  // The actual URL validation happens in the runner via assertSupportedThreadUrl
-}
-
-/**
  * Bootstrap an anonymous ChatGPT thread with a prompt.
  * Tries anonymous bootstrap first, only fails on actual error.
  * @param {import("playwright").Page} page
@@ -468,14 +455,16 @@ export async function waitForAssistantReply(page, seedLabel) {
 /**
  * Wait for URL to become a supported thread URL.
  * Uses canonical parser for consistent semantics.
+ * Note: Diagnostics already dumped in waitUntilSupportedThreadUrl on timeout.
  * @param {import("playwright").Page} page
  */
 export async function waitForSupportedThreadUrl(page) {
   try {
     // Use polling helper to wait for URL transition
+    // Diagnostics are dumped inside waitUntilSupportedThreadUrl on timeout
     await waitUntilSupportedThreadUrl(page, 20000);
   } catch (error) {
-    await dumpBootstrapDiagnostics(page, "thread-url");
+    // Don't dump again - already done in waitUntilSupportedThreadUrl
     const url = page.url();
     const parsed = parseChatGptThreadUrl(url);
     throw new Error(
