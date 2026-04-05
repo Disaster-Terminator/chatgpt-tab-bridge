@@ -20,6 +20,53 @@ export function hashText(value: unknown): string {
   return `h${(hash >>> 0).toString(16)}`;
 }
 
+/**
+ * Tightened composer_cleared detection - only if truly cleared, not just different.
+ * Avoid false positives from minor normalization, line folding, or DOM reordering.
+ */
+export function isComposerTrulyCleared(currentText: string, expectedText: string): boolean {
+  if (!currentText || currentText.trim() === "") {
+    return true;
+  }
+
+  if (stillContainsExpectedPayload(currentText, expectedText)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check if composer still contains significant parts of the expected payload.
+ * Use normalized comparison to avoid false negatives from minor normalization.
+ * Returns true if significant payload remains (NOT cleared).
+ */
+export function stillContainsExpectedPayload(currentText: string, expectedText: string): boolean {
+  if (!expectedText || !currentText) {
+    return false;
+  }
+
+  const normalizedCurrent = normalizeText(currentText);
+  const normalizedExpected = normalizeText(expectedText);
+
+  if (normalizedCurrent === normalizedExpected) {
+    return true;
+  }
+
+  let matchCount = 0;
+  const expectedWords = normalizedExpected.split(/\s+/).filter(w => w.length > 0);
+  const currentWords = normalizedCurrent.split(/\s+/).filter(w => w.length > 0);
+
+  for (const word of expectedWords) {
+    if (currentWords.some(cw => cw.includes(word) || word.includes(cw))) {
+      matchCount++;
+    }
+  }
+
+  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
+  return similarity >= 0.5;
+}
+
 export function findBestComposer(root: ParentNode | null | undefined): Element | null {
   const selectors = [
     '[contenteditable="true"][role="textbox"]',

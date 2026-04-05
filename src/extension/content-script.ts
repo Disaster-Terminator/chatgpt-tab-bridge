@@ -3,6 +3,7 @@ import {
   findBestComposer,
   findSendButton,
   hashText,
+  isComposerTrulyCleared,
   normalizeText,
   readComposerText,
   triggerComposerSend
@@ -771,35 +772,100 @@ function checkAckSignals(
   const composerText = readComposerText(composer);
   const latestUserHash = readLatestUserHash();
 
+  // P0-4: Strong signal - user message hash matches expected
   if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
     return { ok: true, signal: "user_message_added" };
   }
 
-  if (isGenerationInProgress() && composerText !== expectedText) {
+  // P0-2: Decouple generation_started from composerText changes
+  // P0-3: Expanded isGenerationInProgress() handles this
+  if (isGenerationInProgress()) {
     return { ok: true, signal: "generation_started" };
   }
 
-  if (!composerText || composerText !== expectedText) {
+  // P0-1: Tighten composer_cleared - only if truly cleared, not just different
+  // P0-4: Require strong signal, not weak string difference
+  if (isComposerTrulyCleared(composerText, expectedText)) {
     return { ok: true, signal: "composer_cleared" };
   }
 
   return null;
 }
 
-function readLatestUserHash(): string | null {
-  const latest = findLatestMessageElement("user");
-  if (!latest) {
-    return null;
+/**
+ * P0-1: Tightened composer_cleared detection
+ * Only return true if composer is truly empty or no longer contains significant payload.
+ * Avoid false positives from minor normalization, line folding, or DOM reordering.
+ */
+function isComposerTrulyCleared(currentText: string, expectedText: string): boolean {
+  // Empty or whitespace-only is truly cleared
+  if (!currentText || currentText.trim() === "") {
+    return true;
   }
 
-  const text = normalizeText(latest.textContent || "");
-  return text ? hashText(text) : null;
+  // If not empty, check if it still contains the expected payload
+  // If it still contains significant parts of the bridge message, it's NOT cleared
+  if (stillContainsExpectedPayload(currentText, expectedText)) {
+    return false;
+  }
+
+  // It's cleared - no significant payload remaining
+  return true;
 }
 
+/**
+ * P0-1: Check if composer still contains significant parts of the expected payload.
+ * Use normalized comparison to avoid false negatives from minor normalization.
+ * Returns true if significant payload remains (NOT cleared).
+ */
+function stillContainsExpectedPayload(currentText: string, expectedText: string): boolean {
+  if (!expectedText || !currentText) {
+    return false;
+  }
+
+  // Normalize both for comparison
+  const normalizedCurrent = normalizeText(currentText);
+  const normalizedExpected = normalizeText(expectedText);
+
+  // If exact match after normalization, not cleared
+  if (normalizedCurrent === normalizedExpected) {
+    return true;
+  }
+
+  // Check if significant portion remains (at least 50% of expected text is still present)
+  // This handles cases where minor normalization occurred but content wasn't actually sent
+  let matchCount = 0;
+  const expectedWords = normalizedExpected.split(/\s+/).filter(w => w.length > 0);
+  const currentWords = normalizedCurrent.split(/\s+/).filter(w => w.length > 0);
+
+  for (const word of expectedWords) {
+    if (currentWords.some(cw => cw.includes(word) || word.includes(cw))) {
+      matchCount++;
+    }
+  }
+
+  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
+  return similarity >= 0.5;
+}
+
+/**
+ * P0-3: Expanded generation detection
+ * Prioritizes data-testid="stop-button", falls back to aria-label patterns.
+ */
 function isGenerationInProgress(): boolean {
+  // Primary: data-testid="stop-button" (most reliable, language-agnostic)
+  if (
+    document.querySelector('button[data-testid="stop-button"]') ||
+    document.querySelector('button[data-testid="stop-generating-button"]')
+  ) {
+    return true;
+  }
+
+  // Fallback: aria-label patterns for zh-CN and en
   return Boolean(
     document.querySelector('button[aria-label*="停止"]') ||
-      document.querySelector('button[aria-label*="Stop"]')
+    document.querySelector('button[aria-label*="Stop"]') ||
+    document.querySelector('button[aria-label*="Cancel"]')
   );
 }
 
