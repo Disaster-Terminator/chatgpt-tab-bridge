@@ -38,7 +38,6 @@ interface PopupElements {
   currentTabStatus: HTMLElement;
   bindAButton: HTMLButtonElement;
   bindBButton: HTMLButtonElement;
-  unbindCurrentButton: HTMLButtonElement;
   bindingA: HTMLElement;
   bindingB: HTMLElement;
   localeSelect: HTMLSelectElement;
@@ -59,6 +58,7 @@ interface PopupElements {
   transportValue: HTMLElement;
   selectorValue: HTMLElement;
   issueValue: HTMLElement;
+  issueRow: HTMLElement;
 }
 
 type PopupActionMessage =
@@ -93,7 +93,6 @@ const elements: PopupElements = {
   currentTabStatus: requireElement<HTMLElement>("#currentTabStatus"),
   bindAButton: requireElement<HTMLButtonElement>("#bindAButton"),
   bindBButton: requireElement<HTMLButtonElement>("#bindBButton"),
-  unbindCurrentButton: requireElement<HTMLButtonElement>("#unbindCurrentButton"),
   bindingA: requireElement<HTMLElement>("#bindingA"),
   bindingB: requireElement<HTMLElement>("#bindingB"),
   localeSelect: requireElement<HTMLSelectElement>("#localeSelect"),
@@ -113,7 +112,8 @@ const elements: PopupElements = {
   currentStepValue: requireElement<HTMLElement>("#currentStepValue"),
   transportValue: requireElement<HTMLElement>("#transportValue"),
   selectorValue: requireElement<HTMLElement>("#selectorValue"),
-  issueValue: requireElement<HTMLElement>("#issueValue")
+  issueValue: requireElement<HTMLElement>("#issueValue"),
+  issueRow: requireElement<HTMLElement>("#issueRow")
 };
 
 let currentTabId: number | null = null;
@@ -290,18 +290,34 @@ function render(model: PopupModel): void {
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
   elements.phaseBadge.dataset.phase = state.phase;
-  elements.bindingA.textContent = summarizeBinding(state.bindings.A);
-  elements.bindingB.textContent = summarizeBinding(state.bindings.B);
+  elements.bindingA.textContent = summarizeBinding(copy, state.bindings.A);
+  elements.bindingB.textContent = summarizeBinding(copy, state.bindings.B);
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
-  elements.issueValue.textContent = display.lastIssue || copy.none;
+
+  if (display.lastIssue && display.lastIssue !== "None") {
+    elements.issueRow.hidden = false;
+    elements.issueValue.textContent = display.lastIssue;
+  } else {
+    elements.issueRow.hidden = true;
+  }
+
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
-  elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
   elements.localeSelect.value = currentLocale;
+
+  const toggle = elements.overlayEnabledCheckbox.closest<HTMLElement>(".popup__toggle");
+  if (toggle) {
+    toggle.dataset.checked = String(elements.overlayEnabledCheckbox.checked);
+  }
+
+  const expandedToggle = elements.defaultExpandedCheckbox.closest<HTMLElement>(".popup__toggle");
+  if (expandedToggle) {
+    expandedToggle.dataset.checked = String(elements.defaultExpandedCheckbox.checked);
+  }
 
   if (!currentTab) {
     elements.currentTabStatus.textContent = copy.noActiveTab;
@@ -313,9 +329,6 @@ function render(model: PopupModel): void {
       : copy.tabEligible(currentTab.urlInfo.kind);
   }
 
-  elements.bindAButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
-  elements.bindBButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
-  elements.unbindCurrentButton.disabled = !currentTab?.assignedRole || !canChangeBindings;
   elements.startButton.disabled = !controls.canStart;
   elements.pauseButton.disabled = !controls.canPause;
   elements.resumeButton.disabled = !controls.canResume;

@@ -607,13 +607,21 @@ function deriveControls(state) {
 }
 function buildDisplay(state) {
   const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const normalStopReasons = /* @__PURE__ */ new Set([
+    STOP_REASONS.STOP_MARKER,
+    STOP_REASONS.USER_STOP,
+    STOP_REASONS.MAX_ROUNDS,
+    STOP_REASONS.DUPLICATE_OUTPUT
+  ]);
+  const isNormalStop = state.lastStopReason && normalStopReasons.has(state.lastStopReason);
+  const displayStopReason = isNormalStop ? null : state.lastStopReason;
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
     currentStep: state.runtimeActivity?.step ?? "idle",
     lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
     transport: state.runtimeActivity?.transport ?? null,
     selector: state.runtimeActivity?.selector ?? null,
-    lastIssue: state.lastError || state.lastStopReason || "None"
+    lastIssue: state.lastError || displayStopReason || "None"
   };
 }
 

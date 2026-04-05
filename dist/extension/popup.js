@@ -86,7 +86,7 @@ var zhCN = {
     starterB: "B \u8D77\u59CB",
     bindA: "\u7ED1\u5B9A A",
     bindB: "\u7ED1\u5B9A B",
-    unbind: "\u89E3\u7ED1",
+    unbind: "\u7A7A\u95F2",
     start: "\u5F00\u59CB",
     pause: "\u6682\u505C",
     resume: "\u6062\u590D",
@@ -100,11 +100,9 @@ var zhCN = {
   },
   popup: {
     eyebrow: "ChatGPT \u4E2D\u7EE7",
-    title: "\u63A7\u5236\u9762\u677F",
-    sectionCurrentTab: "\u5F53\u524D\u6807\u7B7E\u9875",
-    sectionBindings: "\u7ED1\u5B9A",
-    sectionOverlay: "\u60AC\u6D6E\u7A97",
-    sectionRunControls: "\u8FD0\u884C\u63A7\u5236",
+    title: "\u8BBE\u7F6E",
+    sectionGlobalStatus: "\u5168\u5C40\u72B6\u6001",
+    sectionSettings: "\u8BBE\u7F6E",
     sectionFallback: "\u5907\u7528\u64CD\u4F5C",
     sectionDebug: "\u8C03\u8BD5",
     debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
@@ -112,8 +110,9 @@ var zhCN = {
     labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
     labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
     labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
-    bindA: "\u7ED1\u5B9A A",
-    bindB: "\u7ED1\u5B9A B",
+    bindingA: "\u7ED1\u5B9A A",
+    bindingB: "\u7ED1\u5B9A B",
+    currentTab: "\u5F53\u524D\u6807\u7B7E\u9875",
     unbind: "\u89E3\u7ED1",
     start: "\u5F00\u59CB",
     pause: "\u6682\u505C",
@@ -171,7 +170,7 @@ var en = {
     starterB: "B starts",
     bindA: "Bind A",
     bindB: "Bind B",
-    unbind: "Unbind",
+    unbind: "Idle",
     start: "Start",
     pause: "Pause",
     resume: "Resume",
@@ -185,11 +184,9 @@ var en = {
   },
   popup: {
     eyebrow: "ChatGPT Bridge",
-    title: "Popup control surface",
-    sectionCurrentTab: "Current tab",
-    sectionBindings: "Bindings",
-    sectionOverlay: "Overlay",
-    sectionRunControls: "Run controls",
+    title: "Settings",
+    sectionGlobalStatus: "Global status",
+    sectionSettings: "Settings",
     sectionFallback: "Fallback",
     sectionDebug: "Debug",
     debugSummary: "Debug info",
@@ -197,9 +194,10 @@ var en = {
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
     labelDefaultExpanded: "Default expanded overlay",
-    bindA: "Bind A",
-    bindB: "Bind B",
-    unbind: "Unbind current tab",
+    bindingA: "Binding A",
+    bindingB: "Binding B",
+    currentTab: "Current tab",
+    unbind: "Unbind",
     start: "Start",
     pause: "Pause",
     resume: "Resume",
@@ -284,10 +282,8 @@ function getPopupCopy(locale) {
     return {
       eyebrow: toBilingual(z.eyebrow, e.eyebrow),
       title: toBilingual(z.title, e.title),
-      sectionCurrentTab: toBilingual(z.sectionCurrentTab, e.sectionCurrentTab),
-      sectionBindings: toBilingual(z.sectionBindings, e.sectionBindings),
-      sectionOverlay: toBilingual(z.sectionOverlay, e.sectionOverlay),
-      sectionRunControls: toBilingual(z.sectionRunControls, e.sectionRunControls),
+      sectionGlobalStatus: toBilingual(z.sectionGlobalStatus, e.sectionGlobalStatus),
+      sectionSettings: toBilingual(z.sectionSettings, e.sectionSettings),
       sectionFallback: toBilingual(z.sectionFallback, e.sectionFallback),
       sectionDebug: toBilingual(z.sectionDebug, e.sectionDebug),
       debugSummary: toBilingual(z.debugSummary, e.debugSummary),
@@ -295,8 +291,9 @@ function getPopupCopy(locale) {
       labelOverride: toBilingual(z.labelOverride, e.labelOverride),
       labelEnableOverlay: toBilingual(z.labelEnableOverlay, e.labelEnableOverlay),
       labelDefaultExpanded: toBilingual(z.labelDefaultExpanded, e.labelDefaultExpanded),
-      bindA: toBilingual(z.bindA, e.bindA),
-      bindB: toBilingual(z.bindB, e.bindB),
+      bindingA: toBilingual(z.bindingA, e.bindingA),
+      bindingB: toBilingual(z.bindingB, e.bindingB),
+      currentTab: toBilingual(z.currentTab, e.currentTab),
       unbind: toBilingual(z.unbind, e.unbind),
       start: toBilingual(z.start, e.start),
       pause: toBilingual(z.pause, e.pause),
@@ -399,7 +396,6 @@ var elements = {
   currentTabStatus: requireElement("#currentTabStatus"),
   bindAButton: requireElement("#bindAButton"),
   bindBButton: requireElement("#bindBButton"),
-  unbindCurrentButton: requireElement("#unbindCurrentButton"),
   bindingA: requireElement("#bindingA"),
   bindingB: requireElement("#bindingB"),
   localeSelect: requireElement("#localeSelect"),
@@ -419,7 +415,8 @@ var elements = {
   currentStepValue: requireElement("#currentStepValue"),
   transportValue: requireElement("#transportValue"),
   selectorValue: requireElement("#selectorValue"),
-  issueValue: requireElement("#issueValue")
+  issueValue: requireElement("#issueValue"),
+  issueRow: requireElement("#issueRow")
 };
 var currentTabId = null;
 var currentModel = null;
@@ -570,18 +567,30 @@ function render(model) {
   const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
   elements.phaseBadge.dataset.phase = state.phase;
-  elements.bindingA.textContent = summarizeBinding(state.bindings.A);
-  elements.bindingB.textContent = summarizeBinding(state.bindings.B);
+  elements.bindingA.textContent = summarizeBinding(copy, state.bindings.A);
+  elements.bindingB.textContent = summarizeBinding(copy, state.bindings.B);
   elements.roundValue.textContent = String(state.round);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
-  elements.issueValue.textContent = display.lastIssue || copy.none;
+  if (display.lastIssue && display.lastIssue !== "None") {
+    elements.issueRow.hidden = false;
+    elements.issueValue.textContent = display.lastIssue;
+  } else {
+    elements.issueRow.hidden = true;
+  }
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
-  elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
   elements.localeSelect.value = currentLocale;
+  const toggle = elements.overlayEnabledCheckbox.closest(".popup__toggle");
+  if (toggle) {
+    toggle.dataset.checked = String(elements.overlayEnabledCheckbox.checked);
+  }
+  const expandedToggle = elements.defaultExpandedCheckbox.closest(".popup__toggle");
+  if (expandedToggle) {
+    expandedToggle.dataset.checked = String(elements.defaultExpandedCheckbox.checked);
+  }
   if (!currentTab) {
     elements.currentTabStatus.textContent = copy.noActiveTab;
   } else if (!currentTab.urlInfo.supported) {
@@ -589,9 +598,6 @@ function render(model) {
   } else {
     elements.currentTabStatus.textContent = currentTab.assignedRole ? copy.tabBoundAs(currentTab.assignedRole) : copy.tabEligible(currentTab.urlInfo.kind);
   }
-  elements.bindAButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
-  elements.bindBButton.disabled = !currentTab?.urlInfo?.supported || !canChangeBindings;
-  elements.unbindCurrentButton.disabled = !currentTab?.assignedRole || !canChangeBindings;
   elements.startButton.disabled = !controls.canStart;
   elements.pauseButton.disabled = !controls.canPause;
   elements.resumeButton.disabled = !controls.canResume;

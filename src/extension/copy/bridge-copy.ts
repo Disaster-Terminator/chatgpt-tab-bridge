@@ -40,10 +40,8 @@ interface OverlayCopy {
 interface PopupCopy {
   eyebrow: string;
   title: string;
-  sectionCurrentTab: string;
-  sectionBindings: string;
-  sectionOverlay: string;
-  sectionRunControls: string;
+  sectionGlobalStatus: string;
+  sectionSettings: string;
   sectionFallback: string;
   sectionDebug: string;
   debugSummary: string;
@@ -51,8 +49,9 @@ interface PopupCopy {
   labelOverride: string;
   labelEnableOverlay: string;
   labelDefaultExpanded: string;
-  bindA: string;
-  bindB: string;
+  bindingA: string;
+  bindingB: string;
+  currentTab: string;
   unbind: string;
   start: string;
   pause: string;
@@ -75,6 +74,8 @@ interface PopupCopy {
   transportLabel: string;
   selectorLabel: string;
   lastIssueLabel: string;
+  threadLabel: string;
+  projectThreadLabel: string;
   overrideNone: string;
   overrideA: string;
   overrideB: string;
@@ -108,7 +109,7 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     starterB: "B 起始",
     bindA: "绑定 A",
     bindB: "绑定 B",
-    unbind: "解绑",
+    unbind: "空闲",
     start: "开始",
     pause: "暂停",
     resume: "恢复",
@@ -122,11 +123,9 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
   },
   popup: {
     eyebrow: "ChatGPT 中继",
-    title: "控制面板",
-    sectionCurrentTab: "当前标签页",
-    sectionBindings: "绑定",
-    sectionOverlay: "悬浮窗",
-    sectionRunControls: "运行控制",
+    title: "设置",
+    sectionGlobalStatus: "全局状态",
+    sectionSettings: "设置",
     sectionFallback: "备用操作",
     sectionDebug: "调试",
     debugSummary: "调试信息",
@@ -134,8 +133,9 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     labelOverride: "暂停时下一跳覆盖",
     labelEnableOverlay: "启用悬浮窗",
     labelDefaultExpanded: "默认展开悬浮窗",
-    bindA: "绑定 A",
-    bindB: "绑定 B",
+    bindingA: "绑定 A",
+    bindingB: "绑定 B",
+    currentTab: "当前标签页",
     unbind: "解绑",
     start: "开始",
     pause: "暂停",
@@ -158,6 +158,8 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     transportLabel: "传输",
     selectorLabel: "选择器",
     lastIssueLabel: "最后问题",
+    threadLabel: "线程",
+    projectThreadLabel: "项目线程",
     overrideNone: "不覆盖",
     overrideA: "A → B",
     overrideB: "B → A",
@@ -192,7 +194,7 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     starterB: "B starts",
     bindA: "Bind A",
     bindB: "Bind B",
-    unbind: "Unbind",
+    unbind: "Idle",
     start: "Start",
     pause: "Pause",
     resume: "Resume",
@@ -206,11 +208,9 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
   },
   popup: {
     eyebrow: "ChatGPT Bridge",
-    title: "Popup control surface",
-    sectionCurrentTab: "Current tab",
-    sectionBindings: "Bindings",
-    sectionOverlay: "Overlay",
-    sectionRunControls: "Run controls",
+    title: "Settings",
+    sectionGlobalStatus: "Global status",
+    sectionSettings: "Settings",
     sectionFallback: "Fallback",
     sectionDebug: "Debug",
     debugSummary: "Debug info",
@@ -218,9 +218,10 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
     labelDefaultExpanded: "Default expanded overlay",
-    bindA: "Bind A",
-    bindB: "Bind B",
-    unbind: "Unbind current tab",
+    bindingA: "Binding A",
+    bindingB: "Binding B",
+    currentTab: "Current tab",
+    unbind: "Unbind",
     start: "Start",
     pause: "Pause",
     resume: "Resume",
@@ -242,13 +243,15 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     transportLabel: "Transport",
     selectorLabel: "Selector",
     lastIssueLabel: "Last issue",
+    threadLabel: "thread",
+    projectThreadLabel: "project thread",
     overrideNone: "No override",
     overrideA: "A → B",
     overrideB: "B → A",
     starterA: "A starts",
     starterB: "B starts",
     localeLabel: "Language",
-    localeZh: "中文",
+    localeZh: "Chinese",
     localeEn: "English",
     localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
@@ -310,10 +313,8 @@ export function getPopupCopy(locale: UiLocale): PopupCopy {
     return {
       eyebrow: toBilingual(z.eyebrow, e.eyebrow),
       title: toBilingual(z.title, e.title),
-      sectionCurrentTab: toBilingual(z.sectionCurrentTab, e.sectionCurrentTab),
-      sectionBindings: toBilingual(z.sectionBindings, e.sectionBindings),
-      sectionOverlay: toBilingual(z.sectionOverlay, e.sectionOverlay),
-      sectionRunControls: toBilingual(z.sectionRunControls, e.sectionRunControls),
+      sectionGlobalStatus: toBilingual(z.sectionGlobalStatus, e.sectionGlobalStatus),
+      sectionSettings: toBilingual(z.sectionSettings, e.sectionSettings),
       sectionFallback: toBilingual(z.sectionFallback, e.sectionFallback),
       sectionDebug: toBilingual(z.sectionDebug, e.sectionDebug),
       debugSummary: toBilingual(z.debugSummary, e.debugSummary),
@@ -321,8 +322,9 @@ export function getPopupCopy(locale: UiLocale): PopupCopy {
       labelOverride: toBilingual(z.labelOverride, e.labelOverride),
       labelEnableOverlay: toBilingual(z.labelEnableOverlay, e.labelEnableOverlay),
       labelDefaultExpanded: toBilingual(z.labelDefaultExpanded, e.labelDefaultExpanded),
-      bindA: toBilingual(z.bindA, e.bindA),
-      bindB: toBilingual(z.bindB, e.bindB),
+      bindingA: toBilingual(z.bindingA, e.bindingA),
+      bindingB: toBilingual(z.bindingB, e.bindingB),
+      currentTab: toBilingual(z.currentTab, e.currentTab),
       unbind: toBilingual(z.unbind, e.unbind),
       start: toBilingual(z.start, e.start),
       pause: toBilingual(z.pause, e.pause),
@@ -345,6 +347,8 @@ export function getPopupCopy(locale: UiLocale): PopupCopy {
       transportLabel: toBilingual(z.transportLabel, e.transportLabel),
       selectorLabel: toBilingual(z.selectorLabel, e.selectorLabel),
       lastIssueLabel: toBilingual(z.lastIssueLabel, e.lastIssueLabel),
+      threadLabel: toBilingual(z.threadLabel, e.threadLabel),
+      projectThreadLabel: toBilingual(z.projectThreadLabel, e.projectThreadLabel),
       overrideNone: toBilingual(z.overrideNone, e.overrideNone),
       overrideA: toBilingual(z.overrideA, e.overrideA),
       overrideB: toBilingual(z.overrideB, e.overrideB),
@@ -402,9 +406,10 @@ export function formatIssueLine(locale: UiLocale, issue: string | null): string 
 export function applyStaticCopy(root: HTMLElement | Document, locale: UiLocale): void {
   const c = getPopupCopy(locale);
   root.querySelectorAll<HTMLElement>("[data-copy]").forEach((el) => {
-    const key = el.dataset.copy;
-    if (!key) return;
-    const value = (c as unknown as Record<string, unknown>)[key];
+    const rawKey = el.dataset.copy;
+    if (!rawKey) return;
+    const key = rawKey as keyof typeof c;
+    const value = c[key];
     if (typeof value === "string") {
       el.textContent = value;
     }

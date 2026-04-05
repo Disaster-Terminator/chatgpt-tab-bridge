@@ -11,101 +11,123 @@
       <header class="popup__header">
         <div>
           <p class="popup__eyebrow" data-copy="eyebrow">ChatGPT Bridge</p>
-          <h1 class="popup__title" data-copy="title">Popup control surface</h1>
+          <h1 class="popup__title" data-copy="title">设置</h1>
+          <p class="popup__subtitle">总览、设置与调试入口</p>
         </div>
-        <div class="popup__badge" id="phaseBadge">idle</div>
+        <span class="popup__badge" id="phaseBadge" data-phase="idle">idle</span>
       </header>
 
       <section class="popup__section">
-        <h2 data-copy="sectionCurrentTab">Current tab</h2>
-        <p id="currentTabStatus">Checking current tab…</p>
-        <div class="popup__actions">
-          <button type="button" id="bindAButton" data-copy="bindA">Bind current tab as A</button>
-          <button type="button" id="bindBButton" data-copy="bindB">Bind current tab as B</button>
-          <button type="button" id="unbindCurrentButton" data-copy="unbind">Unbind current tab</button>
+        <div class="popup__section-header">
+          <div>
+            <p class="popup__section-label" data-copy="sectionGlobalStatus">全局状态</p>
+            <h2 class="popup__section-title">Bridge</h2>
+            <p class="popup__section-hint">仅负责全局概览与低频控制。</p>
+          </div>
+        </div>
+        <div class="popup__row">
+          <div class="popup__meta">
+            <span data-copy="roundLabel">轮次</span>
+            <strong id="roundValue">0</strong>
+            <span class="popup__dot"></span>
+            <span data-copy="nextHopLabel">下一跳</span>
+            <strong id="nextHopValue">A → B</strong>
+          </div>
+        </div>
+        <div class="popup__step-card">
+          <div class="popup__step-header">
+            <span class="popup__step-dot"></span>
+            <span data-copy="currentStepLabel">步骤</span>
+          </div>
+          <p class="popup__step-value" id="currentStepValue">idle</p>
+          <div class="popup__issue-row" id="issueRow" hidden>
+            <span id="issueValue">-</span>
+          </div>
+        </div>
+        <div class="popup__binding-grid">
+          <div class="popup__binding-card">
+            <p class="popup__binding-label" data-copy="bindingA">绑定 A</p>
+            <p class="popup__binding-value" id="bindingA">未绑定</p>
+          </div>
+          <div class="popup__binding-card">
+            <p class="popup__binding-label" data-copy="bindingB">绑定 B</p>
+            <p class="popup__binding-value" id="bindingB">未绑定</p>
+          </div>
+        </div>
+        <div class="popup__current-tab-card">
+          <p class="popup__binding-label" data-copy="currentTab">当前标签页</p>
+          <p class="popup__binding-value" id="currentTabStatus">-</p>
         </div>
       </section>
 
       <section class="popup__section">
-        <h2 data-copy="sectionBindings">Bindings</h2>
-        <div class="popup__binding">
-          <strong>A</strong>
-          <span id="bindingA">Unbound</span>
-        </div>
-        <div class="popup__binding">
-          <strong>B</strong>
-          <span id="bindingB">Unbound</span>
-        </div>
-      </section>
-
-      <section class="popup__section">
-        <h2 data-copy="sectionOverlay">Overlay</h2>
-        <label class="popup__label" for="localeSelect"><span data-copy="localeLabel">Language</span></label>
-        <select id="localeSelect">
+        <p class="popup__section-label" data-copy="sectionSettings">设置</p>
+        <label class="popup__label" for="localeSelect">语言</label>
+        <select class="popup__select" id="localeSelect">
           <option value="zh-CN">中文</option>
           <option value="en">English</option>
         </select>
-        <label class="popup__toggle">
-          <input type="checkbox" id="overlayEnabledCheckbox" />
-          <span data-copy="labelEnableOverlay">Enable overlay</span>
-        </label>
-        <div class="popup__actions popup__actions--stack">
-          <button type="button" id="resetOverlayPositionButton" data-copy="resetPosition">Reset position</button>
+        <div class="popup__toggle-row">
+          <span data-copy="labelEnableOverlay">启用悬浮窗</span>
+          <label class="popup__toggle" data-checked="true">
+            <input type="checkbox" class="popup__toggle-input" id="overlayEnabledCheckbox" checked />
+            <span class="popup__toggle-knob"></span>
+          </label>
+        </div>
+        <div class="popup__toggle-row">
+          <span data-copy="labelDefaultExpanded">默认展开</span>
+          <label class="popup__toggle" data-checked="true">
+            <input type="checkbox" class="popup__toggle-input" id="defaultExpandedCheckbox" checked />
+            <span class="popup__toggle-knob"></span>
+          </label>
+        </div>
+        <div class="popup__action-row">
+          <button type="button" class="popup__btn" id="resetOverlayPositionButton" data-copy="resetPosition">重置悬浮窗位置</button>
         </div>
       </section>
 
       <section class="popup__section">
-        <h2 data-copy="sectionRunControls">Run controls</h2>
-        <label class="popup__label" for="starterSelect"><span data-copy="labelStarter">Starter side</span></label>
-        <select id="starterSelect">
-          <option value="A">A starts</option>
-          <option value="B">B starts</option>
+        <p class="popup__section-label" data-copy="sectionFallback">备用操作</p>
+        <label class="popup__label" for="starterSelect">起始侧</label>
+        <select class="popup__select" id="starterSelect">
+          <option value="A">A 起始</option>
+          <option value="B">B 起始</option>
         </select>
-
-        <label class="popup__label" for="overrideSelect"><span data-copy="labelOverride">Paused next hop override</span></label>
-        <select id="overrideSelect">
-          <option value="">No override</option>
-          <option value="A">A -> B</option>
-          <option value="B">B -> A</option>
+        <label class="popup__label" for="overrideSelect">暂停态下一跳覆盖</label>
+        <select class="popup__select" id="overrideSelect">
+          <option value="">不覆盖</option>
+          <option value="A">A → B</option>
+          <option value="B">B → A</option>
         </select>
-
-        <div class="popup__actions popup__actions--stack">
-          <button type="button" id="startButton" data-copy="start">Start</button>
-          <button type="button" id="pauseButton" data-copy="pause">Pause</button>
-          <button type="button" id="resumeButton" data-copy="resume">Resume</button>
-          <button type="button" id="stopButton" data-copy="stop">Stop</button>
-          <button type="button" id="clearTerminalButton" data-copy="clearTerminal">Clear terminal</button>
+        <div class="popup__action-row">
+          <button type="button" class="popup__btn popup__btn--primary" id="startButton" data-copy="start">开始</button>
+          <button type="button" class="popup__btn" id="pauseButton" data-copy="pause">暂停</button>
+          <button type="button" class="popup__btn" id="resumeButton" data-copy="resume">恢复</button>
+          <button type="button" class="popup__btn" id="stopButton" data-copy="stop">停止</button>
+        </div>
+        <div class="popup__action-row">
+          <button type="button" class="popup__btn" id="clearTerminalButton" data-copy="clearTerminal">清空终端</button>
+          <button type="button" class="popup__btn" id="bindAButton" data-copy="bindA">绑定 A</button>
+          <button type="button" class="popup__btn" id="bindBButton" data-copy="bindB">绑定 B</button>
         </div>
       </section>
 
-      <section class="popup__section">
-        <h2 data-copy="sectionDebug">Debug</h2>
-        <div class="popup__meta">
-          <span data-copy="roundLabel">Round</span>
-          <strong id="roundValue">0</strong>
+      <details class="popup__details">
+        <summary class="popup__details-summary">
+          <span data-copy="sectionDebug">调试</span>
+        </summary>
+        <div class="popup__details-content">
+          <div class="popup__debug-row">
+            <span data-copy="transportLabel">传输</span>
+            <span id="transportValue">-</span>
+          </div>
+          <div class="popup__debug-row">
+            <span data-copy="selectorLabel">选择器</span>
+            <span id="selectorValue">-</span>
+          </div>
+          <button type="button" class="popup__btn" id="copyDebugButton" data-copy="copyDebug">复制调试快照</button>
         </div>
-        <div class="popup__meta">
-          <span data-copy="nextHopLabel">Next hop</span>
-          <strong id="nextHopValue">A -> B</strong>
-        </div>
-        <div class="popup__meta">
-          <span data-copy="currentStepLabel">Current step</span>
-          <strong id="currentStepValue">idle</strong>
-        </div>
-        <div class="popup__meta">
-          <span data-copy="transportLabel">Transport</span>
-          <strong id="transportValue">None</strong>
-        </div>
-        <div class="popup__meta">
-          <span data-copy="selectorLabel">Selector</span>
-          <strong id="selectorValue">None</strong>
-        </div>
-        <div class="popup__meta">
-          <span data-copy="lastIssueLabel">Last issue</span>
-          <strong id="issueValue">None</strong>
-        </div>
-        <button type="button" id="copyDebugButton" data-copy="copyDebug">Copy debug snapshot</button>
-      </section>
+      </details>
     </main>
     <script type="module" src="popup.mjs"></script>
   </body>

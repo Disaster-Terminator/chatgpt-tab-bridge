@@ -135,28 +135,17 @@ function connectKeepAlivePort(): ChromePort {
 
 function bindOverlayEvents(): void {
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='A']").addEventListener("click", () => {
-    void dispatchOverlayAction({
-      type: MESSAGE_TYPES.SET_BINDING,
-      role: "A"
-    });
+    const action = overlaySnapshot.assignedRole === "A"
+      ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "A" as const }
+      : { type: MESSAGE_TYPES.SET_BINDING, role: "A" as const, tabId: void 0 };
+    void dispatchOverlayAction(action);
   });
 
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='B']").addEventListener("click", () => {
-    void dispatchOverlayAction({
-      type: MESSAGE_TYPES.SET_BINDING,
-      role: "B"
-    });
-  });
-
-  requireOverlayElement<HTMLButtonElement>("[data-action='unbind']").addEventListener("click", () => {
-    if (!overlaySnapshot.assignedRole) {
-      return;
-    }
-
-    void dispatchOverlayAction({
-      type: MESSAGE_TYPES.CLEAR_BINDING,
-      role: overlaySnapshot.assignedRole
-    });
+    const action = overlaySnapshot.assignedRole === "B"
+      ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "B" as const }
+      : { type: MESSAGE_TYPES.SET_BINDING, role: "B" as const, tabId: void 0 };
+    void dispatchOverlayAction(action);
   });
 
   requireOverlayElement<HTMLButtonElement>("[data-action='open-popup']").addEventListener("click", () => {
@@ -172,15 +161,36 @@ function bindOverlayEvents(): void {
     });
   });
 
+  overlay.querySelectorAll<HTMLButtonElement>("[data-starter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const starter = btn.dataset.starter as "A" | "B";
+      if (starter && starter !== overlaySnapshot.starter) {
+        void dispatchOverlayAction({
+          type: MESSAGE_TYPES.SET_STARTER,
+          role: starter
+        });
+      }
+    });
+  });
+
   requireOverlayElement<HTMLButtonElement>("[data-action='start']").addEventListener("click", () => {
     void dispatchOverlayAction({ type: MESSAGE_TYPES.START_SESSION });
   });
-  requireOverlayElement<HTMLButtonElement>("[data-action='pause']").addEventListener("click", () => {
-    void dispatchOverlayAction({ type: MESSAGE_TYPES.PAUSE_SESSION });
-  });
-  requireOverlayElement<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => {
-    void dispatchOverlayAction({ type: MESSAGE_TYPES.RESUME_SESSION });
-  });
+  
+  const pauseBtn = overlay.querySelector<HTMLButtonElement>("[data-action='pause']");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.PAUSE_SESSION });
+    });
+  }
+  
+  const resumeBtn = overlay.querySelector<HTMLButtonElement>("[data-action='resume']");
+  if (resumeBtn) {
+    resumeBtn.addEventListener("click", () => {
+      void dispatchOverlayAction({ type: MESSAGE_TYPES.RESUME_SESSION });
+    });
+  }
+  
   requireOverlayElement<HTMLButtonElement>("[data-action='stop']").addEventListener("click", () => {
     void dispatchOverlayAction({ type: MESSAGE_TYPES.STOP_SESSION });
   });
@@ -226,50 +236,114 @@ function createOverlay(): HTMLElement {
   node.className = "chatgpt-bridge-overlay";
   node.dataset.extensionId = chrome.runtime.id;
   node.innerHTML = `
-      <div class="chatgpt-bridge-overlay__header" data-drag-handle="true">
-        <div class="chatgpt-bridge-overlay__title">${c.bridgeTitle}</div>
+    <div class="chatgpt-bridge-overlay__header" data-drag-handle="true">
+      <div class="chatgpt-bridge-overlay__header-left">
+        <div class="chatgpt-bridge-overlay__title">
+          <svg class="chatgpt-bridge-overlay__title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          <span>${c.bridgeTitle}</span>
+        </div>
+        <div class="chatgpt-bridge-overlay__role-row">
+          <span class="chatgpt-bridge-overlay__role-dot" data-slot="role-dot"></span>
+          <span data-slot="role">${c.roleUnbound}</span>
+        </div>
+      </div>
+      <div class="chatgpt-bridge-overlay__header-right">
         <span class="chatgpt-bridge-overlay__phase-badge" data-slot="phase-badge" data-phase="idle">${c.phaseIdle}</span>
         <button type="button" class="chatgpt-bridge-overlay__collapse" data-action="toggle-collapse" aria-label="${c.collapseExpand}">${c.collapseCollapse}</button>
       </div>
-      <div class="chatgpt-bridge-overlay__body">
-      <div class="chatgpt-bridge-overlay__role-row">
-        <div class="chatgpt-bridge-overlay__role" data-slot="role">${c.roleUnbound}</div>
-      </div>
-      <div class="chatgpt-bridge-overlay__stats">
-        <div class="chatgpt-bridge-overlay__stat">
+    </div>
+    <div class="chatgpt-bridge-overlay__collapsed-row">
+      <span data-slot="collapsed-role">${c.roleUnbound}</span>
+      <span data-slot="collapsed-info">R<span data-slot="round">0</span> · <span data-slot="next-hop">A → B</span></span>
+    </div>
+    <div class="chatgpt-bridge-overlay__body">
+      <div class="chatgpt-bridge-overlay__status-panel">
+        <div class="chatgpt-bridge-overlay__round-next">
           <span>${c.roundLabel}</span>
-          <strong data-slot="round">0</strong>
-        </div>
-        <div class="chatgpt-bridge-overlay__stat">
+          <span class="chatgpt-bridge-overlay__value" data-slot="round">0</span>
+          <span class="chatgpt-bridge-overlay__dot"></span>
           <span>${c.nextLabel}</span>
-          <strong data-slot="next-hop">A -> B</strong>
+          <span class="chatgpt-bridge-overlay__value" data-slot="next-hop">A → B</span>
+        </div>
+        <div class="chatgpt-bridge-overlay__step-card">
+          <div class="chatgpt-bridge-overlay__step-header">
+            <span class="chatgpt-bridge-overlay__step-dot"></span>
+            <span>${c.stepLabel}</span>
+          </div>
+          <div class="chatgpt-bridge-overlay__step-value" data-slot="step">${c.idle}</div>
+        </div>
+        <div class="chatgpt-bridge-overlay__issue-row" data-slot="issue-row" hidden>
+          <span data-slot="issue">${c.issueLabel}: ${c.none}</span>
         </div>
       </div>
-      <div class="chatgpt-bridge-overlay__step-band" data-slot="step-band">${c.stepLabel}: ${c.idle}</div>
-      <div class="chatgpt-bridge-overlay__issue-row" data-slot="issue-row" hidden>
-        <span data-slot="issue">${c.issueLabel}: ${c.none}</span>
+      <div class="chatgpt-bridge-overlay__starter-card">
+        <div class="chatgpt-bridge-overlay__starter-header">
+          <span class="chatgpt-bridge-overlay__starter-label">${c.starterLabel}</span>
+          <span class="chatgpt-bridge-overlay__starter-hint">A / B</span>
+        </div>
+        <div class="chatgpt-bridge-overlay__starter-seg">
+          <div class="chatgpt-bridge-overlay__starter-slider" data-pos="A"></div>
+          <div class="chatgpt-bridge-overlay__starter-options">
+            <button type="button" class="chatgpt-bridge-overlay__starter-option" data-starter="A" data-active="true">A</button>
+            <button type="button" class="chatgpt-bridge-overlay__starter-option" data-starter="B">B</button>
+          </div>
+        </div>
       </div>
-      <div class="chatgpt-bridge-overlay__starter-row" data-slot="starter-row">
-        <span>${c.starterLabel}:</span>
-        <strong data-slot="starter">${c.starterA}</strong>
+      <div class="chatgpt-bridge-overlay__control-container">
+        <div class="chatgpt-bridge-overlay__control-group">
+          <span class="chatgpt-bridge-overlay__control-label">${c.bindA + " / " + c.bindB}</span>
+          <div class="chatgpt-bridge-overlay__binding-row">
+            <button type="button" class="chatgpt-bridge-overlay__binding-btn" data-bind-role="A">
+              <svg class="chatgpt-bridge-overlay__binding-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+              </svg>
+              <span>A</span>
+              <span class="chatgpt-bridge-overlay__binding-status">${c.unbind}</span>
+            </button>
+            <button type="button" class="chatgpt-bridge-overlay__binding-btn" data-bind-role="B">
+              <svg class="chatgpt-bridge-overlay__binding-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+              </svg>
+              <span>B</span>
+              <span class="chatgpt-bridge-overlay__binding-status">${c.unbind}</span>
+            </button>
+          </div>
+        </div>
+        <div class="chatgpt-bridge-overlay__control-group">
+          <span class="chatgpt-bridge-overlay__control-label">Session</span>
+          <div class="chatgpt-bridge-overlay__session-toolbar">
+            <button type="button" class="chatgpt-bridge-overlay__session-primary" data-action="start">${c.start}</button>
+            <button type="button" class="chatgpt-bridge-overlay__session-pause" data-action="pause" style="display:none">${c.pause}</button>
+            <button type="button" class="chatgpt-bridge-overlay__session-resume" data-action="resume" style="display:none">${c.resume}</button>
+            <button type="button" class="chatgpt-bridge-overlay__session-stop" data-action="stop">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="chatgpt-bridge-overlay__control-group">
+          <span class="chatgpt-bridge-overlay__control-label">Utility</span>
+          <div class="chatgpt-bridge-overlay__utility-toolbar">
+            <button type="button" class="chatgpt-bridge-overlay__utility-btn" data-action="clear-terminal">${c.clear}</button>
+            <button type="button" class="chatgpt-bridge-overlay__utility-btn" data-action="open-popup">
+              <svg class="chatgpt-bridge-overlay__utility-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <path d="M3 9h18"/>
+              </svg>
+              ${c.popup}
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--binding">
-        <button type="button" data-bind-role="A">${c.bindA}</button>
-        <button type="button" data-bind-role="B">${c.bindB}</button>
-        <button type="button" data-action="unbind">${c.unbind}</button>
-      </div>
-      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--session">
-        <button type="button" data-action="start">${c.start}</button>
-        <button type="button" data-action="pause">${c.pause}</button>
-        <button type="button" data-action="resume">${c.resume}</button>
-        <button type="button" data-action="stop">${c.stop}</button>
-      </div>
-      <div class="chatgpt-bridge-overlay__actions chatgpt-bridge-overlay__actions--aux">
-        <button type="button" data-action="clear-terminal">${c.clear}</button>
-        <button type="button" class="chatgpt-bridge-overlay__link" data-action="open-popup">${c.popup}</button>
-      </div>
-      </div>
-    `;
+    </div>
+  `;
   document.documentElement.appendChild(node);
   return node;
 }
@@ -281,13 +355,22 @@ function renderOverlay(): void {
 
   requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
 
+  const roleDot = requireOverlayElement<HTMLElement>("[data-slot='role-dot']");
+  if (overlaySnapshot.assignedRole) {
+    roleDot.dataset.role = overlaySnapshot.assignedRole;
+    roleDot.style.background = "rgba(201, 179, 122, 0.7)";
+  } else {
+    delete roleDot.dataset.role;
+    roleDot.style.background = "";
+  }
+
   const phaseBadge = requireOverlayElement<HTMLElement>("[data-slot='phase-badge']");
   phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
   phaseBadge.dataset.phase = overlaySnapshot.phase;
 
   requireOverlayElement("[data-slot='round']").textContent = String(overlaySnapshot.round);
   requireOverlayElement("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
-  requireOverlayElement("[data-slot='step-band']").textContent = formatStepLine(overlayLocale, display?.currentStep);
+  requireOverlayElement("[data-slot='step']").textContent = display?.currentStep || c.idle;
 
   const issueRow = requireOverlayElement<HTMLElement>("[data-slot='issue-row']");
   const issueText = display?.lastIssue;
@@ -298,23 +381,71 @@ function renderOverlay(): void {
     requireOverlayElement("[data-slot='issue']").textContent = formatIssueLine(overlayLocale, issueText);
   }
 
-  requireOverlayElement("[data-slot='starter']").textContent = formatStarter(overlayLocale, overlaySnapshot.starter);
+  const starterBtns = overlay.querySelectorAll<HTMLButtonElement>("[data-starter]");
+  starterBtns.forEach((btn) => {
+    const isActive = btn.dataset.starter === overlaySnapshot.starter;
+    btn.dataset.active = String(isActive);
+  });
+
+  const slider = requireOverlayElement<HTMLElement>(".chatgpt-bridge-overlay__starter-slider");
+  slider.dataset.pos = overlaySnapshot.starter;
+
+  const bindingBtns = overlay.querySelectorAll<HTMLButtonElement>("[data-bind-role]");
+  bindingBtns.forEach((btn) => {
+    const role = btn.dataset.bindRole as "A" | "B";
+    const isActive = overlaySnapshot.assignedRole === role;
+    btn.dataset.active = String(isActive);
+    const statusEl = btn.querySelector(".chatgpt-bridge-overlay__binding-status");
+    if (statusEl) {
+      statusEl.textContent = isActive
+        ? (role === "A" ? c.roleBoundA : c.roleBoundB)
+        : c.unbind;
+    }
+  });
+
+  const startBtn = overlay.querySelector<HTMLButtonElement>("[data-action='start']");
+  const pauseBtn = overlay.querySelector<HTMLButtonElement>("[data-action='pause']");
+  const resumeBtn = overlay.querySelector<HTMLButtonElement>("[data-action='resume']");
+  const stopBtn = overlay.querySelector<HTMLButtonElement>("[data-action='stop']");
+
+  if (overlaySnapshot.phase === "running") {
+    if (startBtn) startBtn.style.display = "none";
+    if (pauseBtn) pauseBtn.style.display = "";
+    if (resumeBtn) resumeBtn.style.display = "none";
+    if (stopBtn) stopBtn.style.display = "";
+  } else if (overlaySnapshot.phase === "paused") {
+    if (startBtn) startBtn.style.display = "none";
+    if (pauseBtn) pauseBtn.style.display = "none";
+    if (resumeBtn) resumeBtn.style.display = "";
+    if (stopBtn) stopBtn.style.display = "";
+  } else {
+    if (startBtn) startBtn.style.display = "";
+    if (pauseBtn) pauseBtn.style.display = "none";
+    if (resumeBtn) resumeBtn.style.display = "none";
+    if (stopBtn) stopBtn.style.display = "none";
+  }
+
+  if (startBtn) startBtn.disabled = !controls?.canStart;
+  if (pauseBtn) pauseBtn.disabled = !controls?.canPause;
+  if (resumeBtn) resumeBtn.disabled = !controls?.canResume;
+  if (stopBtn) stopBtn.disabled = !controls?.canStop;
 
   overlay.classList.toggle("chatgpt-bridge-overlay--terminal", Boolean(overlaySnapshot.requiresTerminalClear));
   overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed));
   overlay.hidden = overlaySettings?.enabled === false;
   applyOverlayPosition(overlaySettings?.position ?? null);
+
+  requireOverlayElement<HTMLButtonElement>("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
+  requireOverlayElement<HTMLButtonElement>("[data-action='toggle-collapse']").textContent =
+    overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
+
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='A']").disabled = !canChangeBindings;
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='B']").disabled = !canChangeBindings;
-  requireOverlayElement<HTMLButtonElement>("[data-action='unbind']").disabled =
-    !overlaySnapshot.assignedRole || !canChangeBindings;
-  requireOverlayElement<HTMLButtonElement>("[data-action='start']").disabled = !controls?.canStart;
-  requireOverlayElement<HTMLButtonElement>("[data-action='pause']").disabled = !controls?.canPause;
-  requireOverlayElement<HTMLButtonElement>("[data-action='resume']").disabled = !controls?.canResume;
-  requireOverlayElement<HTMLButtonElement>("[data-action='stop']").disabled = !controls?.canStop;
-  requireOverlayElement<HTMLButtonElement>("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
-  requireOverlayElement<HTMLButtonElement>(".chatgpt-bridge-overlay__collapse").textContent =
-    overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
+
+  const collapsedRole = overlay.querySelector("[data-slot='collapsed-role']");
+  if (collapsedRole) {
+    collapsedRole.textContent = overlaySnapshot.assignedRole ? `Bound as ${overlaySnapshot.assignedRole}` : c.roleUnbound;
+  }
 }
 
 function applyOverlayPosition(position: { x: number; y: number } | null): void {
