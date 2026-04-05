@@ -4,7 +4,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "test:smoke": "node scripts/smoke-extension-playwright.mjs",
-    "test:semi": "node scripts/semi-bridge-playwright.mjs"
+    "test:semi": "node scripts/semi-bridge-playwright.mjs",
+    "test:e2e": "node scripts/e2e-bridge-playwright.mjs"
   },
   "dependencies": {
     "@openai/codex": "^0.118.0",
