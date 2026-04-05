@@ -102,6 +102,40 @@ async function runScenario(name, scenarioFn) {
         diagContent += `\nOverlay B state capture failed: ${e.message}`;
       }
 
+      // P0-5: Add target thread activity diagnostics
+      try {
+        const targetActivity = await env.pageB.evaluate(() => {
+          const result = { generating: false, sendButtonReady: false, userMessages: 0, assistantMessages: 0 };
+          
+          // Check for stop button (generating)
+          const stopButton = document.querySelector('button[data-testid="stop-button"]') || 
+                            document.querySelector('button[data-testid="stop-generating-button"]');
+          result.generating = !!stopButton;
+          
+          // Check send button
+          const sendButton = document.querySelector('button[data-testid="send-button"]') ||
+                           document.querySelector('button[type="submit"]');
+          result.sendButtonReady = sendButton && !sendButton.disabled;
+          
+          // Count messages
+          result.userMessages = document.querySelectorAll('[data-message-author-role="user"]').length;
+          result.assistantMessages = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+          
+          return result;
+        });
+        diagContent += `\nTarget Thread Activity:\n${JSON.stringify(targetActivity, null, 2)}\n`;
+      } catch (e) {
+        diagContent += `\nTarget thread activity capture failed: ${e.message}`;
+      }
+
+      // P0-5: Add Ack Debug info from popup
+      try {
+        const ackDebugText = await env.popupPage.locator("#lastIssue").innerText().catch(() => "N/A");
+        diagContent += `\nAck Debug (lastIssue): ${ackDebugText}\n`;
+      } catch (e) {
+        diagContent += `\nAck Debug capture failed: ${e.message}`;
+      }
+
       // Screenshots
       try {
         if (env.pageA) {
@@ -212,19 +246,44 @@ async function cleanupEnv(env) {
 async function runHappyPath(env) {
   const { pageA, pageB, popupPage } = env;
   
+  // P0-5: Capture comprehensive initial state for proof of real submission
   const initialRound = await popupPage.locator("#roundValue").innerText();
   
-  const initialTargetUserHash = await pageB.evaluate(() => {
-    const userMsg = document.querySelector('[data-message-author-role="user"]');
-    if (!userMsg) return null;
-    const text = userMsg.textContent?.trim() || "";
-    if (!text) return null;
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
+  const initialTargetState = await pageB.evaluate(() => {
+    const result = { userText: null, userHash: null, assistantHash: null, bridgeContext: false };
+    
+    // Get latest user message
+    const userMessages = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+    if (userMessages.length > 0) {
+      const latestUser = userMessages[userMessages.length - 1];
+      result.userText = latestUser.textContent?.trim() || "";
+      if (result.userText) {
+        let hash = 2166136261;
+        for (let i = 0; i < result.userText.length; i++) {
+          hash ^= result.userText.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        result.userHash = "h" + (hash >>> 0).toString(16);
+        result.bridgeContext = result.userText.includes("[BRIDGE_CONTEXT]") || result.userText.includes("[来自");
+      }
     }
-    return "h" + (hash >>> 0).toString(16);
+    
+    // Get latest assistant message for activity evidence
+    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    if (assistantMessages.length > 0) {
+      const latestAssistant = assistantMessages[assistantMessages.length - 1];
+      const assistantText = latestAssistant.textContent?.trim() || "";
+      if (assistantText) {
+        let hash = 2166136261;
+        for (let i = 0; i < assistantText.length; i++) {
+          hash ^= assistantText.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        result.assistantHash = "h" + (hash >>> 0).toString(16);
+      }
+    }
+    
+    return result;
   });
 
   await expectOverlayActionEnabled(pageA, "start");
@@ -238,32 +297,70 @@ async function runHappyPath(env) {
     overrideSelectEnabled: false
   });
 
-  await sleep(8000);
+  // P0-5: Wait for real first-hop submission proof
+  // Not just round change - need compound evidence
+  await sleep(10000);
 
   const newRound = await popupPage.locator("#roundValue").innerText();
   
-  const newTargetUserHash = await pageB.evaluate(() => {
-    const userMsg = document.querySelector('[data-message-author-role="user"]');
-    if (!userMsg) return null;
-    const text = userMsg.textContent?.trim() || "";
-    if (!text) return null;
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
+  const newTargetState = await pageB.evaluate(() => {
+    const result = { userText: null, userHash: null, assistantHash: null, bridgeContext: false };
+    
+    const userMessages = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+    if (userMessages.length > 0) {
+      const latestUser = userMessages[userMessages.length - 1];
+      result.userText = latestUser.textContent?.trim() || "";
+      if (result.userText) {
+        let hash = 2166136261;
+        for (let i = 0; i < result.userText.length; i++) {
+          hash ^= result.userText.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        result.userHash = "h" + (hash >>> 0).toString(16);
+        result.bridgeContext = result.userText.includes("[BRIDGE_CONTEXT]") || result.userText.includes("[来自");
+      }
     }
-    return "h" + (hash >>> 0).toString(16);
+    
+    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    if (assistantMessages.length > 0) {
+      const latestAssistant = assistantMessages[assistantMessages.length - 1];
+      const assistantText = latestAssistant.textContent?.trim() || "";
+      if (assistantText) {
+        let hash = 2166136261;
+        for (let i = 0; i < assistantText.length; i++) {
+          hash ^= assistantText.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        result.assistantHash = "h" + (hash >>> 0).toString(16);
+      }
+    }
+    
+    return result;
   });
 
+  // P0-5: Compound success criteria - not just round OR message, but both for real proof
   const roundChanged = newRound !== initialRound && parseInt(newRound, 10) > parseInt(initialRound, 10);
-  const targetReceivedMessage = newTargetUserHash !== null && newTargetUserHash !== initialTargetUserHash;
+  const userMessageChanged = newTargetState.userHash !== null && newTargetState.userHash !== initialTargetState.userHash;
+  const payloadAdoption = newTargetState.bridgeContext || (
+    newTargetState.userText && initialTargetState.userText &&
+    calculateOverlap(newTargetState.userText, initialTargetState.userText) >= 0.3
+  );
+  const assistantActivity = newTargetState.assistantHash !== null && newTargetState.assistantHash !== initialTargetState.assistantHash;
 
-  if (!roundChanged && !targetReceivedMessage) {
+  // P0-5: Strong proof requires either:
+  // 1. bridge context (unambiguous relay marker)
+  // 2. OR (user message changed AND (round changed OR assistant activity))
+  const realSubmission = newTargetState.bridgeContext || 
+    (userMessageChanged && (roundChanged || assistantActivity));
+
+  if (!realSubmission) {
+    const popupState = await readPopupState(popupPage).catch(() => ({}));
     throw new Error(
-      `First hop did not complete successfully. ` +
-      `Round: ${initialRound} -> ${newRound}, ` +
-      `Target user hash: ${initialTargetUserHash} -> ${newTargetUserHash}. ` +
-      `Expected round increase or target receiving a message.`
+      `First hop did not prove real submission.\n` +
+      `Initial: round=${initialRound}, userHash=${initialTargetState.userHash}, assistantHash=${initialTargetState.assistantHash}, bridgeCtx=${initialTargetState.bridgeContext}\n` +
+      `After: round=${newRound}, userHash=${newTargetState.userHash}, assistantHash=${newTargetState.assistantHash}, bridgeCtx=${newTargetState.bridgeContext}\n` +
+      `Round changed: ${roundChanged}, User changed: ${userMessageChanged}, Payload adopted: ${payloadAdoption}, Assistant active: ${assistantActivity}\n` +
+      `Popup state: ${JSON.stringify(popupState)}`
     );
   }
 
@@ -308,6 +405,19 @@ async function runHappyPath(env) {
   });
 
   return { success: true };
+}
+
+// Helper for text overlap calculation
+function calculateOverlap(textA, textB) {
+  if (!textA || !textB) return 0;
+  const wordsA = textA.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  const wordsB = textB.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  if (wordsA.length === 0 || wordsB.length === 0) return 0;
+  let matches = 0;
+  for (const w of wordsA) {
+    if (wordsB.some(bw => bw.includes(w) || w.includes(bw))) matches++;
+  }
+  return matches / Math.max(wordsA.length, wordsB.length);
 }
 
 async function runStarterBusyBeforeStart(env) {

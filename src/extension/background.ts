@@ -427,10 +427,19 @@ async function runTargetPreflight(
 
   const threadActivity = await requestThreadActivity(targetBinding.tabId);
   if (!threadActivity.ok) {
-    return true;
-  }
-
-  if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
+    const sourceRole = otherRole(targetRole);
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${targetRole} ready`,
+        sourceRole,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: "preflight",
+        selector: "activity_check_failed"
+      }
+    });
+  } else if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
     return true;
   }
 
@@ -451,14 +460,38 @@ async function runTargetPreflight(
 
     const activity = await requestThreadActivity(targetBinding.tabId);
     if (!activity.ok) {
-      return true;
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "activity_check_failed"
+        }
+      });
+      await sleep(pollIntervalMs);
+      continue;
     }
 
     if (!activity.result.generating && activity.result.sendButtonReady) {
       return true;
     }
 
-    if (!activity.result.generating && !activity.result.sendButtonReady) {
+    if (activity.result.generating) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "target_generating"
+        }
+      });
+    } else if (!activity.result.sendButtonReady) {
       await updateState({
         type: "set_runtime_activity",
         activity: {
@@ -732,6 +765,8 @@ async function requestThreadActivity(tabId: number): Promise<ThreadActivityRespo
   }
 }
 
+const SEND_MESSAGE_TIMEOUT_MS = 8000;
+
 async function sendRelayMessage(tabId: number, text: string): Promise<RelayMessageResponse> {
   try {
     return await Promise.race([
@@ -739,7 +774,7 @@ async function sendRelayMessage(tabId: number, text: string): Promise<RelayMessa
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
       }),
-      sleep(15000).then<RelayMessageResponse>(() => ({
+      sleep(SEND_MESSAGE_TIMEOUT_MS).then<RelayMessageResponse>(() => ({
         ok: false,
         error: "send_message_timeout"
       }))

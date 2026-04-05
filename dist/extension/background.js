@@ -942,9 +942,19 @@ async function runTargetPreflight(targetRole, targetBinding, state, token) {
   }
   const threadActivity = await requestThreadActivity(targetBinding.tabId);
   if (!threadActivity.ok) {
-    return true;
-  }
-  if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
+    const sourceRole2 = otherRole(targetRole);
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${targetRole} ready`,
+        sourceRole: sourceRole2,
+        targetRole,
+        pendingRound: state.round + 1,
+        transport: "preflight",
+        selector: "activity_check_failed"
+      }
+    });
+  } else if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
     return true;
   }
   const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
@@ -961,12 +971,36 @@ async function runTargetPreflight(targetRole, targetBinding, state, token) {
     }
     const activity = await requestThreadActivity(targetBinding.tabId);
     if (!activity.ok) {
-      return true;
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "activity_check_failed"
+        }
+      });
+      await sleep(pollIntervalMs);
+      continue;
     }
     if (!activity.result.generating && activity.result.sendButtonReady) {
       return true;
     }
-    if (!activity.result.generating && !activity.result.sendButtonReady) {
+    if (activity.result.generating) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} ready`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.round + 1,
+          transport: "preflight",
+          selector: "target_generating"
+        }
+      });
+    } else if (!activity.result.sendButtonReady) {
       await updateState({
         type: "set_runtime_activity",
         activity: {
@@ -1201,6 +1235,7 @@ async function requestThreadActivity(tabId) {
     };
   }
 }
+var SEND_MESSAGE_TIMEOUT_MS = 8e3;
 async function sendRelayMessage(tabId, text) {
   try {
     return await Promise.race([
@@ -1208,7 +1243,7 @@ async function sendRelayMessage(tabId, text) {
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
       }),
-      sleep(15e3).then(() => ({
+      sleep(SEND_MESSAGE_TIMEOUT_MS).then(() => ({
         ok: false,
         error: "send_message_timeout"
       }))

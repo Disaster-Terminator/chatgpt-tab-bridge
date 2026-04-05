@@ -116,7 +116,7 @@ export function findLatestUserMessageHash(): string | null {
   return null;
 }
 
-export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared" | "send_button_appeared";
+export type AckSignal = "user_message_added" | "generation_started" | "composer_cleared";
 
 export interface CheckAckSignalsInput {
   baselineGenerating?: boolean;
@@ -127,16 +127,100 @@ export interface CheckAckSignalsInput {
   expectedText: string;
 }
 
+/**
+ * Find the text content of the latest user message in the conversation.
+ * Used for payload correlation verification instead of exact hash match.
+ */
+export function findLatestUserMessageText(): string | null {
+  const selectors = [
+    '[data-message-author-role="user"]',
+    'article [data-message-author-role="user"]',
+    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+    'main [data-message-author-role="user"]'
+  ];
+
+  for (const selector of selectors) {
+    const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
+      normalizeText(element.textContent || "")
+    );
+    if (candidates.length > 0) {
+      const latest = candidates[candidates.length - 1];
+      const text = normalizeText(latest.textContent || "");
+      return text || null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Calculate the word overlap ratio between two texts.
+ * Returns a value between 0 and 1.
+ */
+export function calculateTextOverlap(textA: string, textB: string): number {
+  const normalizedA = normalizeText(textA);
+  const normalizedB = normalizeText(textB);
+
+  if (!normalizedA || !normalizedB) {
+    return 0;
+  }
+
+  const wordsA = normalizedA.split(/\s+/).filter(w => w.length > 0);
+  const wordsB = normalizedB.split(/\s+/).filter(w => w.length > 0);
+
+  if (wordsA.length === 0 || wordsB.length === 0) {
+    return 0;
+  }
+
+  let matchCount = 0;
+  for (const word of wordsA) {
+    if (wordsB.some(bw => bw.includes(word) || word.includes(bw))) {
+      matchCount++;
+    }
+  }
+
+  return matchCount / Math.max(wordsA.length, wordsB.length);
+}
+
+/**
+ * Check if the latest user message contains the bridge envelope prefix.
+ * This is a stable indicator that the message was relayed by our bridge.
+ */
+function containsBridgeEnvelopePrefix(text: string): boolean {
+  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[来自");
+}
+
+/**
+ * Check if the latest user message shows payload adoption.
+ * This checks if the expected text is present in any form in the latest user message.
+ */
+function showsPayloadAdoption(latestText: string, expectedText: string): boolean {
+  // Check for bridge envelope prefix
+  if (containsBridgeEnvelopePrefix(latestText)) {
+    return true;
+  }
+
+  // Check for significant text overlap (>= 50%)
+  const overlap = calculateTextOverlap(latestText, expectedText);
+  if (overlap >= 0.5) {
+    return true;
+  }
+
+  return false;
+}
+
 export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal: AckSignal } | null {
   const { baselineGenerating, baselineUserHash, baselineSendButtonReady = false, composer, expectedHash, expectedText } = input;
 
   const composerText = readComposerTextFromDoc(composer);
   const latestUserHash = findLatestUserMessageHash();
+  const latestUserText = findLatestUserMessageText();
   const currentGenerating = isGenerationInProgressFromDoc();
-  const sendButton = findSendButton(document, composer);
-  const currentSendButtonReady = sendButton !== null && !sendButton.disabled;
 
   if (latestUserHash && latestUserHash !== baselineUserHash) {
+    if (latestUserText && showsPayloadAdoption(latestUserText, expectedText)) {
+      return { ok: true, signal: "user_message_added" };
+    }
     if (latestUserHash === expectedHash) {
       return { ok: true, signal: "user_message_added" };
     }
@@ -144,14 +228,6 @@ export function checkAckSignals(input: CheckAckSignalsInput): { ok: true; signal
 
   if (!baselineGenerating && currentGenerating) {
     return { ok: true, signal: "generation_started" };
-  }
-
-  if (baselineGenerating && !currentGenerating) {
-    return { ok: true, signal: "generation_started" };
-  }
-
-  if (!baselineSendButtonReady && currentSendButtonReady) {
-    return { ok: true, signal: "send_button_appeared" };
   }
 
   if (isComposerTrulyCleared(composerText, expectedText)) {
