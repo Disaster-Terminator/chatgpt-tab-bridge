@@ -281,23 +281,15 @@ export async function expectValueChanged(page, selector, predicate) {
 
 /**
  * Wait for user to manually navigate to supported thread URLs.
- * Uses canonical parser pattern for browser context.
+ * Note: Actual waiting is handled by runner scripts (user presses Enter).
+ * This function is a placeholder for future polling if needed.
  * @param {import("playwright").Page} page
  * @param {string} label - Label for diagnostics
  */
 export async function waitForManualThreadUrl(page, label) {
-  try {
-    await page.waitForFunction(() => {
-      // Pattern that aligns with canonical parser
-      return /\/c\/[^/?#]+/.test(window.location.href) || 
-             /\/g\/[^/]+\/c\/[^/?#]+/.test(window.location.href);
-    }, {
-      timeout: 0 // No timeout - wait indefinitely
-    });
-  } catch (error) {
-    // timeout of 0 means we wait forever until user navigates
-    // This should not throw
-  }
+  // Manual mode: runner waits for Enter key, then assertSupportedThreadUrl validates
+  // This function is kept for API compatibility but does nothing here
+  // The actual URL validation happens in the runner via assertSupportedThreadUrl
 }
 
 /**
@@ -358,12 +350,8 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
       await page.waitForTimeout(1500);
     }
 
-    // Wait for supported URL using canonical parser validation
-    const url = page.url();
-    const parsed = parseChatGptThreadUrl(url);
-    if (!parsed.supported) {
-      throw new Error(`URL did not transition to supported thread format: ${url}`);
-    }
+    // Wait for supported URL to transition - use polling helper
+    await waitUntilSupportedThreadUrl(page, 20000);
     
     return; // Success!
     
@@ -484,21 +472,8 @@ export async function waitForAssistantReply(page, seedLabel) {
  */
 export async function waitForSupportedThreadUrl(page) {
   try {
-    await page.waitForFunction(() => {
-      // Use dynamic import to get the parser in browser context
-      // For now, we check the URL pattern that matches canonical parser
-      return /^https:\/\/chatgpt\.com\/c\/|^https:\/\/chatgpt\.com\/g\//.test(window.location.href);
-    }, {
-      timeout: 20000
-    });
-    
-    // Additional validation using canonical parser after URL pattern matches
-    const url = page.url();
-    const parsed = parseChatGptThreadUrl(url);
-    
-    if (!parsed.supported) {
-      throw new Error(`URL ${url} is not supported by canonical parser`);
-    }
+    // Use polling helper to wait for URL transition
+    await waitUntilSupportedThreadUrl(page, 20000);
   } catch (error) {
     await dumpBootstrapDiagnostics(page, "thread-url");
     const url = page.url();
@@ -623,6 +598,37 @@ export async function assertSupportedThreadUrl(page, label) {
       `or provide existing thread URLs via --url-a and --url-b.`
     );
   }
+}
+
+/**
+ * Wait until URL becomes a supported thread URL using canonical parser polling.
+ * @param {import("playwright").Page} page
+ * @param {number} timeoutMs - Timeout in milliseconds
+ * @returns {Promise<void>}
+ */
+export async function waitUntilSupportedThreadUrl(page, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  
+  while (Date.now() - startedAt < timeoutMs) {
+    const url = page.url();
+    const parsed = parseChatGptThreadUrl(url);
+    
+    if (parsed.supported) {
+      return; // Success
+    }
+    
+    await sleep(500); // Poll every 500ms
+  }
+  
+  // Timeout - final check and throw
+  await dumpBootstrapDiagnostics(page, "thread-url");
+  const url = page.url();
+  const parsed = parseChatGptThreadUrl(url);
+  throw new Error(
+    `URL did not transition to supported thread URL within ${timeoutMs}ms. ` +
+    `Current URL: ${url} (${parsed.reason}). ` +
+    `Root page cannot be bound directly. Provide existing thread URLs via --url-a and --url-b.`
+  );
 }
 
 /**
