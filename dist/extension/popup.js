@@ -123,6 +123,8 @@ var zhCN = {
     resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
     copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
     copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
+    copiedDebugSnapshot: "\u5DF2\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
+    failedToCopyDebugSnapshot: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167\u5931\u8D25",
     noActiveTab: "\u65E0\u53EF\u7528\u6D3B\u52A8\u6807\u7B7E\u9875\u3002",
     unsupportedTab: "\u5F53\u524D\u6807\u7B7E\u9875\u4E0D\u662F\u652F\u6301\u7684 ChatGPT \u7EBF\u7A0B\u3002",
     tabBoundAs: (role) => `\u5F53\u524D\u6807\u7B7E\u9875\u5DF2\u7ED1\u5B9A\u4E3A ${role}\u3002`,
@@ -207,6 +209,8 @@ var en = {
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
     copied: "Debug snapshot copied",
+    copiedDebugSnapshot: "Copied debug snapshot",
+    failedToCopyDebugSnapshot: "Failed to copy debug snapshot",
     noActiveTab: "No active tab available.",
     unsupportedTab: "Current tab is not a supported ChatGPT thread.",
     tabBoundAs: (role) => `Current tab is bound as ${role}.`,
@@ -326,7 +330,8 @@ var elements = {
   selectorValue: requireElement("#selectorValue"),
   issueValue: requireElement("#issueValue"),
   issueValueDebug: requireElement("#issueValueDebug"),
-  issueRow: requireElement("#issueRow")
+  issueRow: requireElement("#issueRow"),
+  copyFeedback: requireElement("#copyFeedback")
 };
 var currentTabId = null;
 var currentModel = null;
@@ -520,14 +525,24 @@ function render(model) {
   overrideOptions[1].textContent = copy.overrideA;
   overrideOptions[2].textContent = copy.overrideB;
 }
+function showCopyFeedback(message, isSuccess) {
+  const feedback = elements.copyFeedback;
+  feedback.textContent = message;
+  feedback.className = "popup__copy-feedback";
+  feedback.classList.add(isSuccess ? "popup__copy-feedback--success" : "popup__copy-feedback--error");
+  feedback.hidden = false;
+  setTimeout(() => {
+    feedback.hidden = true;
+  }, 1800);
+}
 async function copyDebugSnapshot() {
   const latestModel = await refresh() ?? currentModel;
   if (!latestModel) {
-    elements.issueValue.textContent = "No data available";
+    showCopyFeedback("No data available", false);
     return;
   }
   if (!currentTabId) {
-    elements.issueValue.textContent = getPopupCopy(currentLocale).unsupportedTab;
+    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
     return;
   }
   let ackDebug = null;
@@ -542,7 +557,7 @@ async function copyDebugSnapshot() {
   const payload = buildDebugSnapshot(latestModel, ackDebug);
   try {
     await navigator.clipboard.writeText(payload);
-    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
   } catch {
     const fallback = document.createElement("textarea");
     fallback.value = payload;
@@ -553,7 +568,7 @@ async function copyDebugSnapshot() {
     fallback.select();
     document.execCommand("copy");
     fallback.remove();
-    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
   }
 }
 function buildDebugSnapshot(model, ackDebug) {

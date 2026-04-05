@@ -62,6 +62,8 @@ export interface PopupCopy {
   resetPosition: string;
   copyDebug: string;
   copied: string;
+  copiedDebugSnapshot: string;
+  failedToCopyDebugSnapshot: string;
   noActiveTab: string;
   unsupportedTab: string;
   tabBoundAs: (role: string) => string;
@@ -146,6 +148,8 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     resetPosition: "重置位置",
     copyDebug: "复制调试快照",
     copied: "调试快照已复制",
+    copiedDebugSnapshot: "已复制调试快照",
+    failedToCopyDebugSnapshot: "复制调试快照失败",
     noActiveTab: "无可用活动标签页。",
     unsupportedTab: "当前标签页不是支持的 ChatGPT 线程。",
     tabBoundAs: (role: string) => `当前标签页已绑定为 ${role}。`,
@@ -231,6 +235,8 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
     copied: "Debug snapshot copied",
+    copiedDebugSnapshot: "Copied debug snapshot",
+    failedToCopyDebugSnapshot: "Failed to copy debug snapshot",
     noActiveTab: "No active tab available.",
     unsupportedTab: "Current tab is not a supported ChatGPT thread.",
     tabBoundAs: (role: string) => `Current tab is bound as ${role}.`,

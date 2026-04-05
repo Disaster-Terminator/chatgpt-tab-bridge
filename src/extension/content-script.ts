@@ -5,6 +5,7 @@ import {
   findSendButton,
   hashText,
   isComposerTrulyCleared,
+  isGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
   triggerComposerSend
@@ -607,11 +608,11 @@ async function sendRelayMessage(text: string): Promise<{
        error: acknowledgement.ok ? null : ("error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged"),
        timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
        baseline: submissionBaseline,
-       after: {
-         latestUserHash: readLatestUserHash(),
-         composerText: readComposerText(composer),
-         generating: isGenerationInProgress()
-       },
+        after: {
+          latestUserHash: readLatestUserHash(),
+          composerText: readComposerText(composer),
+          generating: isGenerationInProgressFromDoc()
+        },
        timestamp: Date.now()
      };
 
@@ -669,7 +670,7 @@ function captureSubmissionBaseline(expectedText: string): {
 } {
   return {
     composerText: readComposerText(findBestComposer(document)),
-    generating: isGenerationInProgress(),
+    generating: isGenerationInProgressFromDoc(),
     userHash: readLatestUserHash(),
     expectedHash: hashText(expectedText)
   };

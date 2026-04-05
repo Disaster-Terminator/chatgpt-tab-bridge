@@ -62,6 +62,7 @@ interface PopupElements {
   issueValue: HTMLElement;
   issueValueDebug: HTMLElement;
   issueRow: HTMLElement;
+  copyFeedback: HTMLElement;
 }
 
 type PopupActionMessage =
@@ -119,7 +120,8 @@ const elements: PopupElements = {
   selectorValue: requireElement<HTMLElement>("#selectorValue"),
   issueValue: requireElement<HTMLElement>("#issueValue"),
   issueValueDebug: requireElement<HTMLElement>("#issueValueDebug"),
-  issueRow: requireElement<HTMLElement>("#issueRow")
+  issueRow: requireElement<HTMLElement>("#issueRow"),
+  copyFeedback: requireElement<HTMLElement>("#copyFeedback")
 };
 
 let currentTabId: number | null = null;
@@ -349,15 +351,28 @@ function render(model: PopupModel): void {
   overrideOptions[2].textContent = copy.overrideB;
 }
 
+function showCopyFeedback(message: string, isSuccess: boolean): void {
+  const feedback = elements.copyFeedback;
+  feedback.textContent = message;
+  feedback.className = "popup__copy-feedback";
+  feedback.classList.add(isSuccess ? "popup__copy-feedback--success" : "popup__copy-feedback--error");
+  feedback.hidden = false;
+
+  // Auto-hide after 1.8 seconds
+  setTimeout(() => {
+    feedback.hidden = true;
+  }, 1800);
+}
+
 async function copyDebugSnapshot(): Promise<void> {
   const latestModel = (await refresh()) ?? currentModel;
   if (!latestModel) {
-    elements.issueValue.textContent = "No data available";
+    showCopyFeedback("No data available", false);
     return;
   }
 
   if (!currentTabId) {
-    elements.issueValue.textContent = getPopupCopy(currentLocale).unsupportedTab;
+    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
     return;
   }
 
@@ -375,7 +390,7 @@ async function copyDebugSnapshot(): Promise<void> {
 
   try {
     await navigator.clipboard.writeText(payload);
-    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
   } catch {
     const fallback = document.createElement("textarea");
     fallback.value = payload;
@@ -386,7 +401,7 @@ async function copyDebugSnapshot(): Promise<void> {
     fallback.select();
     document.execCommand("copy");
     fallback.remove();
-    elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
   }
 }
 
