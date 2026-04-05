@@ -2,6 +2,7 @@ import {
   applyComposerText,
   checkAckSignals,
   findBestComposer,
+  findLatestUserMessageHash,
   findSendButton,
   hashText,
   isComposerTrulyCleared,
@@ -609,7 +610,7 @@ async function sendRelayMessage(text: string): Promise<{
        timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
        baseline: submissionBaseline,
         after: {
-          latestUserHash: readLatestUserHash(),
+          latestUserHash: findLatestUserMessageHash(),
           composerText: readComposerText(composer),
           generating: isGenerationInProgressFromDoc()
         },
@@ -671,7 +672,7 @@ function captureSubmissionBaseline(expectedText: string): {
   return {
     composerText: readComposerText(findBestComposer(document)),
     generating: isGenerationInProgressFromDoc(),
-    userHash: readLatestUserHash(),
+    userHash: findLatestUserMessageHash(),
     expectedHash: hashText(expectedText)
   };
 }
