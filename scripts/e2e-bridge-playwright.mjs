@@ -408,33 +408,27 @@ async function runSourceBusyBeforeHop(env) {
 
   await sleep(3000);
 
-  // PHASE 1: Must enter waiting/settle/preflight FIRST (if hop was in progress)
-  // Wait a short time and check if we're in a waiting state
+  // PHASE 1: Must enter waiting/settle/preflight FIRST
+  // This is the core assertion: if source is busy during hop, we MUST see waiting phase
   let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
   
-  // MUST see waiting/preflight/settling first - NOT allowed to go directly to running/paused/stopped
-  // If we see terminal states immediately without any waiting, it means the hop didn't even start
-  // which is still a valid scenario (busy source prevented hop), but we need to be explicit
-  const sawWaitingPhase = ["waiting", "preflight", "settling"].includes(phase);
-  const isTerminal = ["running", "paused", "stopped", "error"].includes(phase);
-  
-  // If directly in terminal state without waiting, that's okay IF the hop was blocked
-  // But we should document this behavior
-  if (!sawWaitingPhase && isTerminal) {
-    console.log(`  Note: Source busy blocked hop - went directly to ${phase} without waiting phase`);
-  } else if (!sawWaitingPhase && !isTerminal) {
-    // Unexpected intermediate state
-    throw new Error(`Unexpected phase during busy source: ${phase}`);
-  }
+  // MUST see waiting/preflight/settling - NOT allowed to go directly to running/paused/stopped
+  // The scenario name "source-busy-before-hop" implies hop was attempted and source was busy
+  // If we don't see waiting phase, the test fails - this is a strict requirement
+  assert.ok(
+    ["waiting", "preflight", "settling"].includes(phase),
+    `Expected waiting/preflight/settling in phase 1 when source is busy during hop, got: ${phase}. ` +
+    `This scenario expects the hop to enter waiting phase due to busy source.`
+  );
 
-  // PHASE 2: Wait longer to see final state after potential settle
+  // PHASE 2: Wait longer to see final state after waiting/settle completes
   await sleep(5000);
   phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
   
-  // Should eventually be running or a terminal state
+  // Should eventually be running or a terminal state (after waiting settles)
   assert.ok(
     ["running", "paused", "stopped", "error"].includes(phase),
-    `Expected running/paused/stopped/error after busy source settle, got: ${phase}`
+    `Expected running/paused/stopped/error after waiting phase settled, got: ${phase}`
   );
 
   // Stop
