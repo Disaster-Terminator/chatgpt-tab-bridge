@@ -43,6 +43,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -135,6 +136,8 @@ var zhCN = {
     transportLabel: "\u4F20\u8F93",
     selectorLabel: "\u9009\u62E9\u5668",
     lastIssueLabel: "\u6700\u540E\u95EE\u9898",
+    threadLabel: "\u7EBF\u7A0B",
+    projectThreadLabel: "\u9879\u76EE\u7EBF\u7A0B",
     overrideNone: "\u4E0D\u8986\u76D6",
     overrideA: "A \u2192 B",
     overrideB: "B \u2192 A",
@@ -218,13 +221,15 @@ var en = {
     transportLabel: "Transport",
     selectorLabel: "Selector",
     lastIssueLabel: "Last issue",
+    threadLabel: "thread",
+    projectThreadLabel: "project thread",
     overrideNone: "No override",
     overrideA: "A \u2192 B",
     overrideB: "B \u2192 A",
     starterA: "A starts",
     starterB: "B starts",
     localeLabel: "Language",
-    localeZh: "\u4E2D\u6587",
+    localeZh: "Chinese",
     localeEn: "English",
     localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
@@ -314,6 +319,8 @@ function getPopupCopy(locale) {
       transportLabel: toBilingual(z.transportLabel, e.transportLabel),
       selectorLabel: toBilingual(z.selectorLabel, e.selectorLabel),
       lastIssueLabel: toBilingual(z.lastIssueLabel, e.lastIssueLabel),
+      threadLabel: toBilingual(z.threadLabel, e.threadLabel),
+      projectThreadLabel: toBilingual(z.projectThreadLabel, e.projectThreadLabel),
       overrideNone: toBilingual(z.overrideNone, e.overrideNone),
       overrideA: toBilingual(z.overrideA, e.overrideA),
       overrideB: toBilingual(z.overrideB, e.overrideB),
@@ -348,8 +355,9 @@ function formatPhase(locale, phase) {
 function applyStaticCopy(root, locale) {
   const c = getPopupCopy(locale);
   root.querySelectorAll("[data-copy]").forEach((el) => {
-    const key = el.dataset.copy;
-    if (!key) return;
+    const rawKey = el.dataset.copy;
+    if (!rawKey) return;
+    const key = rawKey;
     const value = c[key];
     if (typeof value === "string") {
       el.textContent = value;
@@ -378,6 +386,14 @@ function writeUiLocale(locale) {
 
 // popup.ts
 var REFRESH_INTERVAL_MS = 1e3;
+function withTimeout(promise, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise(
+      (_, reject) => setTimeout(() => reject(new Error("Operation timed out")), timeoutMs)
+    )
+  ]);
+}
 var elements = {
   phaseBadge: requireElement("#phaseBadge"),
   currentTabStatus: requireElement("#currentTabStatus"),
@@ -561,7 +577,7 @@ function render(model) {
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
-  elements.issueValue.textContent = state.lastError || state.lastStopReason || copy.none;
+  elements.issueValue.textContent = display.lastIssue || copy.none;
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
@@ -594,9 +610,23 @@ function render(model) {
 async function copyDebugSnapshot() {
   const latestModel = await refresh() ?? currentModel;
   if (!latestModel) {
+    elements.issueValue.textContent = "No data available";
     return;
   }
-  const payload = buildDebugSnapshot(latestModel);
+  if (!currentTabId) {
+    elements.issueValue.textContent = getPopupCopy(currentLocale).unsupportedTab;
+    return;
+  }
+  let ackDebug = null;
+  try {
+    ackDebug = await withTimeout(
+      chrome.tabs.sendMessage(currentTabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
+      5e3
+    );
+  } catch (error) {
+    console.warn("Failed to fetch ack debug:", error);
+  }
+  const payload = buildDebugSnapshot(latestModel, ackDebug);
   try {
     await navigator.clipboard.writeText(payload);
     elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
@@ -613,11 +643,11 @@ async function copyDebugSnapshot() {
     elements.issueValue.textContent = getPopupCopy(currentLocale).copied;
   }
 }
-function buildDebugSnapshot(model) {
+function buildDebugSnapshot(model, ackDebug) {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
   const tabStatus = currentTab?.assignedRole ? copy.tabBoundAs(currentTab.assignedRole) : currentTab?.urlInfo?.supported ? copy.tabEligible(currentTab.urlInfo.kind) : copy.unsupportedTab;
-  return [
+  const lines = [
     copy.title,
     "",
     `${formatPhase(currentLocale, state.phase)}`,
@@ -630,14 +660,34 @@ function buildDebugSnapshot(model) {
     `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
     `${copy.transportLabel}: ${display.transport || copy.none}`,
     `${copy.selectorLabel}: ${display.selector || copy.none}`,
-    `${copy.lastIssueLabel}: ${state.lastError || state.lastStopReason || copy.none}`
-  ].join("\n");
-}
-function summarizeBinding(binding) {
-  if (!binding) {
-    return "Unbound";
+    `${copy.lastIssueLabel}: ${display.lastIssue || copy.none}`
+  ];
+  if (ackDebug) {
+    lines.push(
+      "",
+      "Ack Debug:",
+      `  Timestamp: ${new Date(ackDebug.timestamp).toISOString()}`,
+      `  Expected (hash): ${ackDebug?.baseline?.expectedHash || "N/A"}`,
+      `  Baseline:`,
+      `    userHash: ${ackDebug?.baseline?.userHash || "N/A"}`,
+      `    composerText: ${ackDebug?.baseline?.composerText ? ackDebug.baseline.composerText.substring(0, 60) + (ackDebug.baseline.composerText.length > 60 ? "..." : "") : "N/A"}`,
+      `    generating: ${ackDebug?.baseline?.generating ?? "N/A"}`,
+      `  After:`,
+      `    latestUserHash: ${ackDebug?.after?.latestUserHash || "N/A"}`,
+      `    composerText: ${ackDebug?.after?.composerText ? ackDebug.after.composerText.substring(0, 60) + (ackDebug.after.composerText.length > 60 ? "..." : "") : "N/A"}`,
+      `    generating: ${ackDebug?.after?.generating ?? "N/A"}`,
+      `  Signal: ${ackDebug?.signal || "none"}`,
+      `  Timed out: ${ackDebug?.timedOut ?? false}`,
+      `  Error: ${ackDebug?.error || "none"}`
+    );
   }
-  const label = binding.urlInfo?.kind === "project" ? "project thread" : "thread";
+  return lines.join("\n");
+}
+function summarizeBinding(copy, binding) {
+  if (!binding) {
+    return copy.unbound;
+  }
+  const label = binding.urlInfo?.kind === "project" ? copy.projectThreadLabel : copy.threadLabel;
   return `${binding.title || label} (#${binding.tabId})`;
 }
 async function sendMessage(message) {
@@ -652,7 +702,9 @@ function startAutoRefresh() {
     return;
   }
   refreshTimerId = window.setInterval(() => {
-    void refresh();
+    void refresh().catch((error) => {
+      console.error("Refresh failed:", error);
+    });
   }, REFRESH_INTERVAL_MS);
   window.addEventListener("beforeunload", () => {
     if (refreshTimerId !== null) {

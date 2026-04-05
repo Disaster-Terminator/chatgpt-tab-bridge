@@ -230,6 +230,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
+  GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -322,6 +323,8 @@ var zhCN = {
     transportLabel: "\u4F20\u8F93",
     selectorLabel: "\u9009\u62E9\u5668",
     lastIssueLabel: "\u6700\u540E\u95EE\u9898",
+    threadLabel: "\u7EBF\u7A0B",
+    projectThreadLabel: "\u9879\u76EE\u7EBF\u7A0B",
     overrideNone: "\u4E0D\u8986\u76D6",
     overrideA: "A \u2192 B",
     overrideB: "B \u2192 A",
@@ -405,13 +408,15 @@ var en = {
     transportLabel: "Transport",
     selectorLabel: "Selector",
     lastIssueLabel: "Last issue",
+    threadLabel: "thread",
+    projectThreadLabel: "project thread",
     overrideNone: "No override",
     overrideA: "A \u2192 B",
     overrideB: "B \u2192 A",
     starterA: "A starts",
     starterB: "B starts",
     localeLabel: "Language",
-    localeZh: "\u4E2D\u6587",
+    localeZh: "Chinese",
     localeEn: "English",
     localeBilingual: "Bilingual",
     helpText: "Override only applies while paused; Clear returns stopped/error to ready."
@@ -556,6 +561,7 @@ var overlaySnapshot = {
     position: null
   }
 };
+var lastAckDebug = null;
 var overlayLocale = readUiLocale();
 observeUiLocale((locale) => {
   overlayLocale = locale;
@@ -580,6 +586,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         error: error instanceof Error ? error.message : "send_relay_message_failed"
       });
     });
+    return true;
+  }
+  if (message?.type === MESSAGE_TYPES.GET_LAST_ACK_DEBUG) {
+    sendResponse(lastAckDebug ?? { ok: false, error: "no_ack_debug" });
     return true;
   }
   if (message?.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
@@ -902,6 +912,19 @@ async function sendRelayMessage(text) {
       composer,
       expectedText: text
     });
+    lastAckDebug = {
+      ok: acknowledgement.ok,
+      signal: acknowledgement.ok ? acknowledgement.signal : null,
+      error: acknowledgement.ok ? null : "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged",
+      timedOut: !acknowledgement.ok && acknowledgement.signal === "none",
+      baseline: submissionBaseline,
+      after: {
+        latestUserHash: readLatestUserHash(),
+        composerText: readComposerText(composer),
+        generating: isGenerationInProgress()
+      },
+      timestamp: Date.now()
+    };
     if (!acknowledgement.ok) {
       const acknowledgementError = "error" in acknowledgement ? acknowledgement.error : "send_not_acknowledged";
       return {
@@ -988,7 +1011,7 @@ async function waitForSubmissionAcknowledgement({
   expectedText
 }) {
   const expectedHash = hashText(expectedText);
-  const immediate = checkAckSignals(baseline, composer, expectedHash);
+  const immediate = checkAckSignals(baseline, composer, expectedHash, expectedText);
   if (immediate) {
     return immediate;
   }
@@ -996,10 +1019,10 @@ async function waitForSubmissionAcknowledgement({
     const timeout = setTimeout(() => {
       observer.disconnect();
       resolve({ ok: false, error: "send_not_acknowledged", signal: "none" });
-    }, 5e3);
+    }, 1e4);
     const observer = new MutationObserver(() => {
       queueMicrotask(() => {
-        const result = checkAckSignals(baseline, composer, expectedHash);
+        const result = checkAckSignals(baseline, composer, expectedHash, expectedText);
         if (result) {
           clearTimeout(timeout);
           observer.disconnect();
@@ -1011,21 +1034,20 @@ async function waitForSubmissionAcknowledgement({
       childList: true,
       subtree: true,
       attributes: true,
-      characterData: true,
       attributeFilter: ["aria-label", "disabled", "style", "class"]
     });
   });
 }
-function checkAckSignals(baseline, composer, expectedHash) {
+function checkAckSignals(baseline, composer, expectedHash, expectedText) {
   const composerText = readComposerText(composer);
   const latestUserHash = readLatestUserHash();
   if (latestUserHash && latestUserHash !== baseline.userHash && latestUserHash === expectedHash) {
     return { ok: true, signal: "user_message_added" };
   }
-  if (isGenerationInProgress() && composerText !== expectedHash) {
+  if (isGenerationInProgress() && composerText !== expectedText) {
     return { ok: true, signal: "generation_started" };
   }
-  if (!composerText || composerText !== expectedHash) {
+  if (!composerText || composerText !== expectedText) {
     return { ok: true, signal: "composer_cleared" };
   }
   return null;

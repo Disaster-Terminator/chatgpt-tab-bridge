@@ -13,22 +13,21 @@
           <p class="popup__eyebrow" data-copy="eyebrow">ChatGPT Bridge</p>
           <h1 class="popup__title" data-copy="title">Popup control surface</h1>
         </div>
+        <div class="popup__badge" id="phaseBadge">idle</div>
       </header>
 
-      <section class="popup__section popup__section--status">
-        <div class="popup__status-row">
-          <div class="popup__badge" id="phaseBadge" data-phase="idle">idle</div>
-          <div class="popup__status-meta">
-            <div class="popup__meta">
-              <span data-copy="roundLabel">Round</span>
-              <strong id="roundValue">0</strong>
-            </div>
-            <div class="popup__meta">
-              <span data-copy="nextHopLabel">Next hop</span>
-              <strong id="nextHopValue">A -> B</strong>
-            </div>
-          </div>
+      <section class="popup__section">
+        <h2 data-copy="sectionCurrentTab">Current tab</h2>
+        <p id="currentTabStatus">Checking current tab…</p>
+        <div class="popup__actions">
+          <button type="button" id="bindAButton" data-copy="bindA">Bind current tab as A</button>
+          <button type="button" id="bindBButton" data-copy="bindB">Bind current tab as B</button>
+          <button type="button" id="unbindCurrentButton" data-copy="unbind">Unbind current tab</button>
         </div>
+      </section>
+
+      <section class="popup__section">
+        <h2 data-copy="sectionBindings">Bindings</h2>
         <div class="popup__binding">
           <strong>A</strong>
           <span id="bindingA">Unbound</span>
@@ -37,83 +36,75 @@
           <strong>B</strong>
           <span id="bindingB">Unbound</span>
         </div>
-        <p id="currentTabStatus">Checking current tab…</p>
-        <label class="popup__label" for="starterSelect"><span data-copy="labelStarter">Starter side</span></label>
-        <select id="starterSelect">
-          <option value="A">A starts</option>
-          <option value="B">B starts</option>
-        </select>
-        <div class="popup__actions popup__actions--binding">
-          <button type="button" id="bindAButton" data-copy="bindA">Bind current tab as A</button>
-          <button type="button" id="bindBButton" data-copy="bindB">Bind current tab as B</button>
-          <button type="button" id="unbindCurrentButton" data-copy="unbind">Unbind current tab</button>
-        </div>
-        <div class="popup__actions popup__actions--session">
-          <button type="button" id="startButton" data-copy="start">Start</button>
-          <button type="button" id="pauseButton" data-copy="pause">Pause</button>
-          <button type="button" id="resumeButton" data-copy="resume">Resume</button>
-          <button type="button" id="stopButton" data-copy="stop">Stop</button>
-        </div>
       </section>
 
-      <section class="popup__section popup__section--settings">
+      <section class="popup__section">
         <h2 data-copy="sectionOverlay">Overlay</h2>
         <label class="popup__label" for="localeSelect"><span data-copy="localeLabel">Language</span></label>
         <select id="localeSelect">
           <option value="zh-CN">中文</option>
           <option value="en">English</option>
-          <option value="bilingual">双语</option>
         </select>
         <label class="popup__toggle">
           <input type="checkbox" id="overlayEnabledCheckbox" />
           <span data-copy="labelEnableOverlay">Enable overlay</span>
-        </label>
-        <label class="popup__toggle">
-          <input type="checkbox" id="defaultExpandedCheckbox" />
-          <span data-copy="labelDefaultExpanded">Default expanded overlay</span>
         </label>
         <div class="popup__actions popup__actions--stack">
           <button type="button" id="resetOverlayPositionButton" data-copy="resetPosition">Reset position</button>
         </div>
       </section>
 
-      <section class="popup__section popup__section--fallback">
-        <h2 data-copy="sectionFallback">Fallback</h2>
+      <section class="popup__section">
+        <h2 data-copy="sectionRunControls">Run controls</h2>
+        <label class="popup__label" for="starterSelect"><span data-copy="labelStarter">Starter side</span></label>
+        <select id="starterSelect">
+          <option value="A">A starts</option>
+          <option value="B">B starts</option>
+        </select>
+
         <label class="popup__label" for="overrideSelect"><span data-copy="labelOverride">Paused next hop override</span></label>
         <select id="overrideSelect">
           <option value="">No override</option>
           <option value="A">A -> B</option>
           <option value="B">B -> A</option>
         </select>
+
         <div class="popup__actions popup__actions--stack">
+          <button type="button" id="startButton" data-copy="start">Start</button>
+          <button type="button" id="pauseButton" data-copy="pause">Pause</button>
+          <button type="button" id="resumeButton" data-copy="resume">Resume</button>
+          <button type="button" id="stopButton" data-copy="stop">Stop</button>
           <button type="button" id="clearTerminalButton" data-copy="clearTerminal">Clear terminal</button>
         </div>
-        <p class="popup__help" data-copy="helpText">Override only applies while paused; Clear returns stopped/error to ready.</p>
       </section>
 
-      <section class="popup__section popup__section--debug">
-        <details class="popup__details">
-          <summary class="popup__details-summary" data-copy="sectionDebug">Debug</summary>
-          <div class="popup__details-content">
-            <div class="popup__meta">
-              <span data-copy="currentStepLabel">Current step</span>
-              <strong id="currentStepValue">idle</strong>
-            </div>
-            <div class="popup__meta">
-              <span data-copy="transportLabel">Transport</span>
-              <strong id="transportValue">None</strong>
-            </div>
-            <div class="popup__meta">
-              <span data-copy="selectorLabel">Selector</span>
-              <strong id="selectorValue">None</strong>
-            </div>
-            <div class="popup__meta">
-              <span data-copy="lastIssueLabel">Last issue</span>
-              <strong id="issueValue">None</strong>
-            </div>
-            <button type="button" id="copyDebugButton" data-copy="copyDebug">Copy debug snapshot</button>
-          </div>
-        </details>
+      <section class="popup__section">
+        <h2 data-copy="sectionDebug">Debug</h2>
+        <div class="popup__meta">
+          <span data-copy="roundLabel">Round</span>
+          <strong id="roundValue">0</strong>
+        </div>
+        <div class="popup__meta">
+          <span data-copy="nextHopLabel">Next hop</span>
+          <strong id="nextHopValue">A -> B</strong>
+        </div>
+        <div class="popup__meta">
+          <span data-copy="currentStepLabel">Current step</span>
+          <strong id="currentStepValue">idle</strong>
+        </div>
+        <div class="popup__meta">
+          <span data-copy="transportLabel">Transport</span>
+          <strong id="transportValue">None</strong>
+        </div>
+        <div class="popup__meta">
+          <span data-copy="selectorLabel">Selector</span>
+          <strong id="selectorValue">None</strong>
+        </div>
+        <div class="popup__meta">
+          <span data-copy="lastIssueLabel">Last issue</span>
+          <strong id="issueValue">None</strong>
+        </div>
+        <button type="button" id="copyDebugButton" data-copy="copyDebug">Copy debug snapshot</button>
       </section>
     </main>
     <script type="module" src="popup.js"></script>
