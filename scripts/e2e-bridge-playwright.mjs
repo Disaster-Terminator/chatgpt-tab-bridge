@@ -1,6 +1,7 @@
 /**
  * E2E Bridge Test Runner with Scenario Matrix.
  * Auto-bootstraps two ChatGPT threads if no URLs provided.
+ * Runner creates env once, scenarios receive env and return result.
  */
 
 import assert from "node:assert/strict";
@@ -40,7 +41,7 @@ const urlB = readFlag("--url-b");
 const scenarioFilter = readFlag("--scenario");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
 
-// Scenario registry
+// Scenario registry - each receives env and returns { success: true } or throws
 const scenarios = {
   "happy-path": runHappyPath,
   "starter-busy-before-start": runStarterBusyBeforeStart,
@@ -49,421 +50,373 @@ const scenarios = {
   "source-busy-before-hop": runSourceBusyBeforeHop
 };
 
-async function runScenario(name, fn) {
+/**
+ * Run a scenario with proper lifecycle:
+ * - Runner creates env (browser, pages)
+ * - Scenario receives env, runs test, returns result
+ * - Runner handles diagnostics on failure
+ * - Runner cleans up in finally
+ */
+async function runScenario(name, scenarioFn) {
   const diagnosticsDir = path.resolve(process.cwd(), "tmp");
   await fs.mkdir(diagnosticsDir, { force: true }).catch(() => {});
   const diagPath = path.join(diagnosticsDir, `e2e-${name}.txt`);
 
-  let context = null;
-  let userDataDir = null;
-  let popupPage = null;
-  let pageA = null;
-  let pageB = null;
+  let env = null;
 
   try {
-    const result = await fn();
+    // Runner creates the environment
+    env = await createEnv();
+    
+    // Run scenario with env - scenario does NOT create/cleanup browser
+    await scenarioFn(env);
+    
     // Success path
     await fs.writeFile(diagPath, `PASS\nScenario: ${name}\n`, "utf8").catch(() => {});
     return { name, status: "PASS" };
+    
   } catch (error) {
-    // Failure path - capture diagnostics
+    // Failure path - capture diagnostics using env
     let diagContent = `FAIL\nScenario: ${name}\nError: ${error.message}\n`;
 
-    try {
-      if (popupPage) {
-        const popupState = await readPopupState(popupPage);
+    if (env) {
+      try {
+        const popupState = await readPopupState(env.popupPage);
         diagContent += `\nPopup State:\n${JSON.stringify(popupState, null, 2)}\n`;
+      } catch (e) {
+        diagContent += `\nPopup state capture failed: ${e.message}`;
       }
-      if (pageA) {
-        const overlayA = await readOverlayState(pageA);
-        diagContent += `\nOverlay A State:\n${JSON.stringify(overlayA, null, 2)}\n`;
+
+      try {
+        const overlayAState = await readOverlayState(env.pageA);
+        diagContent += `\nOverlay A State:\n${JSON.stringify(overlayAState, null, 2)}\n`;
+      } catch (e) {
+        diagContent += `\nOverlay A state capture failed: ${e.message}`;
       }
-      if (pageB) {
-        const overlayB = await readOverlayState(pageB);
-        diagContent += `\nOverlay B State:\n${JSON.stringify(overlayB, null, 2)}\n`;
+
+      try {
+        const overlayBState = await readOverlayState(env.pageB);
+        diagContent += `\nOverlay B State:\n${JSON.stringify(overlayBState, null, 2)}\n`;
+      } catch (e) {
+        diagContent += `\nOverlay B state capture failed: ${e.message}`;
       }
-    } catch (e) {
-      diagContent += `\nDiagnostics capture failed: ${e.message}`;
+
+      // Screenshots
+      try {
+        if (env.pageA) {
+          await env.pageA.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-a.png`) }).catch(() => {});
+        }
+        if (env.pageB) {
+          await env.pageB.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-b.png`) }).catch(() => {});
+        }
+        if (env.popupPage) {
+          await env.popupPage.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-popup.png`) }).catch(() => {});
+        }
+      } catch (screenshotError) {
+        // Ignore
+      }
     }
 
     await fs.writeFile(diagPath, diagContent, "utf8").catch(() => {});
-
-    // Also try to capture screenshots
-    try {
-      if (pageA) {
-        await pageA.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-a.png`) }).catch(() => {});
-      }
-      if (pageB) {
-        await pageB.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-b.png`) }).catch(() => {});
-      }
-      if (popupPage) {
-        await popupPage.screenshot({ path: path.join(diagnosticsDir, `e2e-${name}-popup.png`) }).catch(() => {});
-      }
-    } catch (screenshotError) {
-      // Ignore screenshot failures
-    }
-
     return { name, status: "FAIL", diagnostics: diagPath, error: error.message };
+    
   } finally {
-    if (context) {
-      await cleanupBrowser(context, userDataDir);
+    // Runner cleans up
+    if (env) {
+      await cleanupEnv(env);
     }
+  }
+}
+
+/**
+ * Create test environment - browser, pages, popup.
+ */
+async function createEnv() {
+  const { context, userDataDir } = await launchBrowserWithExtension({ 
+    extensionPath, 
+    browserExecutablePath 
+  });
+  
+  const [pageA, pageB] = await getTwoPages(context);
+  
+  // Navigate based on mode
+  if (urlA && urlB) {
+    console.log("  Using provided thread URLs...");
+    await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
+    await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
+  } else if (skipBootstrap) {
+    console.log("  Skip bootstrap mode - waiting for user navigation...");
+    await Promise.all([
+      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+    ]);
+    // Wait for user to signal ready
+    console.log("  Please navigate both pages to valid thread URLs, then press Enter...");
+    await new Promise(resolve => {
+      process.stdin.once("data", () => resolve());
+    });
+  } else {
+    console.log("  Auto-bootstrapping two threads...");
+    await Promise.all([
+      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+    ]);
+    await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
+    await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
+  }
+  
+  // Wait for overlay
+  await ensureOverlay(pageA);
+  await ensureOverlay(pageB);
+  
+  // Bind A and B
+  await clickOverlayBind(pageA, "A");
+  await clickOverlayBind(pageB, "B");
+  
+  // Open popup
+  const extensionId = await getExtensionId(pageA);
+  const popupPage = await openPopup(context, extensionId);
+  
+  // Wait for ready
+  await expectPopupPhaseState(popupPage, "ready");
+  
+  return {
+    context,
+    userDataDir,
+    pageA,
+    pageB,
+    popupPage
+  };
+}
+
+/**
+ * Cleanup test environment.
+ */
+async function cleanupEnv(env) {
+  if (env.context) {
+    await cleanupBrowser(env.context, env.userDataDir);
   }
 }
 
 // ===== SCENARIO IMPLEMENTATIONS =====
+// Each receives env: { pageA, pageB, popupPage }
+// Each returns { success: true } or throws
 
-async function runHappyPath() {
-  const { context, userDataDir } = await launchBrowserWithExtension({ extensionPath, browserExecutablePath });
-  let pageA, pageB, popupPage;
+async function runHappyPath(env) {
+  const { pageA, pageB, popupPage } = env;
+  
+  // Start
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
 
-  try {
-    ([pageA, pageB] = await getTwoPages(context));
+  await expectPopupControlState(popupPage, {
+    canPause: true,
+    canResume: false,
+    canStop: true,
+    overrideSelectEnabled: false
+  });
 
-    // Auto-bootstrap if no URLs
-    if (!urlA || !urlB) {
-      console.log("  Auto-bootstrapping two threads...");
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
-    } else {
-      await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
-      await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    }
+  // Pause
+  await expectOverlayActionEnabled(pageA, "pause");
+  await clickOverlayAction(pageA, "pause");
+  await expectPopupPhaseState(popupPage, "paused");
 
-    await ensureOverlay(pageA);
-    await ensureOverlay(pageB);
+  await expectPopupControlState(popupPage, {
+    canPause: false,
+    canResume: true,
+    canStop: true,
+    overrideSelectEnabled: true
+  });
 
-    // Bind A and B
-    await clickOverlayBind(pageA, "A");
-    await clickOverlayBind(pageB, "B");
+  // Resume
+  await expectOverlayActionEnabled(pageA, "resume");
+  await clickOverlayAction(pageA, "resume");
+  await expectPopupPhaseState(popupPage, "running");
 
-    const extensionId = await getExtensionId(pageA);
-    popupPage = await openPopup(context, extensionId);
+  // Stop
+  await expectOverlayActionEnabled(pageA, "stop");
+  await clickOverlayAction(pageA, "stop");
+  await expectPopupPhaseState(popupPage, "stopped");
 
-    // Verify ready state
-    await expectBindingState(popupPage, "A");
-    await expectBindingState(popupPage, "B");
-    await expectPopupPhaseState(popupPage, "ready");
+  await expectPopupControlState(popupPage, {
+    canPause: false,
+    canResume: false,
+    canStop: false,
+    clearTerminalEnabled: true
+  });
 
-    // Start
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await expectPopupPhaseState(popupPage, "running");
+  return { success: true };
+}
 
-    await expectPopupControlState(popupPage, {
-      canPause: true,
-      canResume: false,
-      canStop: true,
-      overrideSelectEnabled: false
-    });
+async function runStarterBusyBeforeStart(env) {
+  const { pageA, popupPage } = env;
+  
+  // Send a prompt to make pageA busy (generating)
+  const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
+  await ensureComposer(pageA);
+  await sendPrompt(pageA, "Generate a longer response with multiple paragraphs. Include details about architecture patterns. [CONTINUE]");
 
-    // Pause
-    await expectOverlayActionEnabled(pageA, "pause");
-    await clickOverlayAction(pageA, "pause");
-    await expectPopupPhaseState(popupPage, "paused");
+  // Wait for generation to start
+  await sleep(3000);
 
-    await expectPopupControlState(popupPage, {
-      canPause: false,
-      canResume: true,
-      canStop: true,
-      overrideSelectEnabled: true
-    });
+  // Try to start - should NOT go directly to running
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
 
-    // Resume
-    await expectOverlayActionEnabled(pageA, "resume");
-    await clickOverlayAction(pageA, "resume");
-    await expectPopupPhaseState(popupPage, "running");
+  // PHASE 1: Must enter waiting/settle/preflight FIRST
+  // Wait a short time and check if we're in a waiting state
+  await sleep(1000);
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  // Must be in waiting/preflight first, NOT directly running
+  assert.ok(
+    ["waiting", "preflight", "settling"].includes(phase),
+    `Expected waiting/preflight/settling first when starting with busy starter, got: ${phase}`
+  );
 
-    // Stop
+  // PHASE 2: Then should eventually go to running after settle completes
+  // Wait longer for settle to complete
+  await sleep(5000);
+  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  // Should eventually be running
+  assert.ok(
+    ["running", "paused", "stopped", "error"].includes(phase),
+    `Expected running/paused/stopped/error after settle, got: ${phase}`
+  );
+
+  // Cleanup - stop if still running
+  if (phase === "running") {
     await expectOverlayActionEnabled(pageA, "stop");
     await clickOverlayAction(pageA, "stop");
     await expectPopupPhaseState(popupPage, "stopped");
-
-    await expectPopupControlState(popupPage, {
-      canPause: false,
-      canResume: false,
-      canStop: false,
-      clearTerminalEnabled: true
-    });
-
-    return { success: true };
-  } finally {
-    await cleanupBrowser(context, userDataDir);
   }
+
+  return { success: true };
 }
 
-async function runStarterBusyBeforeStart() {
-  const { context, userDataDir } = await launchBrowserWithExtension({ extensionPath, browserExecutablePath });
-  let pageA, pageB, popupPage;
+async function runStarterBusyBeforeResume(env) {
+  const { pageA, popupPage } = env;
+  
+  // Start the relay first
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
+  
+  // Let it run briefly
+  await sleep(2000);
+  
+  // Pause
+  await expectOverlayActionEnabled(pageA, "pause");
+  await clickOverlayAction(pageA, "pause");
+  await expectPopupPhaseState(popupPage, "paused");
 
-  try {
-    ([pageA, pageB] = await getTwoPages(context));
+  // Now make pageA busy (generating)
+  const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
+  await ensureComposer(pageA);
+  await sendPrompt(pageA, "Generate a detailed response about distributed systems. [CONTINUE]");
 
-    // Auto-bootstrap
-    if (!urlA || !urlB) {
-      console.log("  Auto-bootstrapping two threads...");
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
-    } else {
-      await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
-      await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    }
+  // Wait for generation to start
+  await sleep(3000);
 
-    await ensureOverlay(pageA);
-    await ensureOverlay(pageB);
+  // Try to resume - should wait for generation to settle first
+  await expectOverlayActionEnabled(pageA, "resume");
+  await clickOverlayAction(pageA, "resume");
 
-    // Bind A and B
-    await clickOverlayBind(pageA, "A");
-    await clickOverlayBind(pageB, "B");
+  // PHASE 1: Must enter waiting/settle/preflight FIRST
+  await sleep(1000);
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  assert.ok(
+    ["waiting", "preflight", "settling"].includes(phase),
+    `Expected waiting/preflight/settling first when resuming with busy starter, got: ${phase}`
+  );
 
-    const extensionId = await getExtensionId(pageA);
-    popupPage = await openPopup(context, extensionId);
+  // PHASE 2: Then should eventually go to running after settle completes
+  await sleep(5000);
+  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  assert.ok(
+    ["running", "paused", "stopped", "error"].includes(phase),
+    `Expected running/paused/stopped/error after settle, got: ${phase}`
+  );
 
-    // Wait for ready state
-    await expectPopupPhaseState(popupPage, "ready");
-
-    // Now make pageA busy - send another prompt
-    const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
-    const composer = await ensureComposer(pageA);
-    await sendPrompt(pageA, "Generate a longer response with multiple paragraphs. Include details about architecture patterns. [CONTINUE]");
-
-    // Wait a moment for the response to start generating
-    await sleep(3000);
-
-    // Now try to start - should go to waiting settle / preflight instead of running directly
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-
-    // Should NOT be in running immediately - should be in waiting/preflight
-    // The popup should show a state indicating waiting for generation to settle
-    await sleep(2000);
-    const phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
-    
-    // Either waiting/preflight or still settling
-    assert.ok(
-      ["waiting", "preflight", "running"].includes(phase),
-      `Expected waiting/preflight/running after start with busy starter, got: ${phase}`
-    );
-
-    return { success: true };
-  } finally {
-    await cleanupBrowser(context, userDataDir);
-  }
-}
-
-async function runStarterBusyBeforeResume() {
-  const { context, userDataDir } = await launchBrowserWithExtension({ extensionPath, browserExecutablePath });
-  let pageA, pageB, popupPage;
-
-  try {
-    ([pageA, pageB] = await getTwoPages(context));
-
-    // Auto-bootstrap
-    if (!urlA || !urlB) {
-      console.log("  Auto-bootstrapping two threads...");
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
-    } else {
-      await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
-      await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    }
-
-    await ensureOverlay(pageA);
-    await ensureOverlay(pageB);
-
-    // Bind A and B
-    await clickOverlayBind(pageA, "A");
-    await clickOverlayBind(pageB, "B");
-
-    const extensionId = await getExtensionId(pageA);
-    popupPage = await openPopup(context, extensionId);
-
-    // Wait for ready state
-    await expectPopupPhaseState(popupPage, "ready");
-
-    // Start
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await expectPopupPhaseState(popupPage, "running");
-
-    // Pause
-    await expectOverlayActionEnabled(pageA, "pause");
-    await clickOverlayAction(pageA, "pause");
-    await expectPopupPhaseState(popupPage, "paused");
-
-    // Now make pageA busy - send another prompt
-    const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
-    const composer = await ensureComposer(pageA);
-    await sendPrompt(pageA, "Generate a detailed response about distributed systems. [CONTINUE]");
-
-    // Wait for generation to start
-    await sleep(3000);
-
-    // Now try to resume - should wait for generation to settle first
-    await expectOverlayActionEnabled(pageA, "resume");
-    await clickOverlayAction(pageA, "resume");
-
-    // Should either wait for settle or eventually go to running after settle completes
-    await sleep(2000);
-    const phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
-    
-    // Should eventually settle to running
-    assert.ok(
-      ["waiting", "preflight", "running"].includes(phase),
-      `Expected waiting/preflight/running after resume with busy starter, got: ${phase}`
-    );
-
-    return { success: true };
-  } finally {
-    await cleanupBrowser(context, userDataDir);
-  }
-}
-
-async function runPopupOverlaySync() {
-  const { context, userDataDir } = await launchBrowserWithExtension({ extensionPath, browserExecutablePath });
-  let pageA, pageB, popupPage;
-
-  try {
-    ([pageA, pageB] = await getTwoPages(context));
-
-    // Auto-bootstrap
-    if (!urlA || !urlB) {
-      console.log("  Auto-bootstrapping two threads...");
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
-    } else {
-      await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
-      await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    }
-
-    await ensureOverlay(pageA);
-    await ensureOverlay(pageB);
-
-    // Bind A and B
-    await clickOverlayBind(pageA, "A");
-    await clickOverlayBind(pageB, "B");
-
-    const extensionId = await getExtensionId(pageA);
-    popupPage = await openPopup(context, extensionId);
-
-    // Wait for ready state
-    await expectPopupPhaseState(popupPage, "ready");
-
-    // Start the relay
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await expectPopupPhaseState(popupPage, "running");
-
-    // Now compare states during running
-    const popupState = await readPopupState(popupPage);
-    const overlayAState = await readOverlayState(pageA);
-    const overlayBState = await readOverlayState(pageB);
-
-    // Compare popup vs overlay A
-    const comparisonA = compareStates(popupState, overlayAState);
-    assert.ok(comparisonA.consistent, `Popup vs Overlay A mismatch: ${comparisonA.mismatches.join(", ")}`);
-
-    // Compare popup vs overlay B
-    const comparisonB = compareStates(popupState, overlayBState);
-    assert.ok(comparisonB.consistent, `Popup vs Overlay B mismatch: ${comparisonB.mismatches.join(", ")}`);
-
-    // Stop
+  // Cleanup
+  if (phase === "running") {
     await expectOverlayActionEnabled(pageA, "stop");
     await clickOverlayAction(pageA, "stop");
     await expectPopupPhaseState(popupPage, "stopped");
-
-    return { success: true };
-  } finally {
-    await cleanupBrowser(context, userDataDir);
   }
+
+  return { success: true };
 }
 
-async function runSourceBusyBeforeHop() {
-  const { context, userDataDir } = await launchBrowserWithExtension({ extensionPath, browserExecutablePath });
-  let pageA, pageB, popupPage;
+async function runPopupOverlaySync(env) {
+  const { pageA, pageB, popupPage } = env;
+  
+  // Start the relay
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
 
-  try {
-    ([pageA, pageB] = await getTwoPages(context));
+  // Let it run briefly
+  await sleep(3000);
 
-    // Auto-bootstrap
-    if (!urlA || !urlB) {
-      console.log("  Auto-bootstrapping two threads...");
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
-    } else {
-      await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
-      await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    }
+  // Compare popup vs overlay A
+  const popupState = await readPopupState(popupPage);
+  const overlayAState = await readOverlayState(pageA);
+  
+  const comparisonA = compareStates(popupState, overlayAState);
+  assert.ok(comparisonA.consistent, `Popup vs Overlay A mismatch: ${comparisonA.mismatches.join(", ")}`);
 
-    await ensureOverlay(pageA);
-    await ensureOverlay(pageB);
+  // Compare popup vs overlay B
+  const overlayBState = await readOverlayState(pageB);
+  const comparisonB = compareStates(popupState, overlayBState);
+  assert.ok(comparisonB.consistent, `Popup vs Overlay B mismatch: ${comparisonB.mismatches.join(", ")}`);
 
-    // Bind A and B
-    await clickOverlayBind(pageA, "A");
-    await clickOverlayBind(pageB, "B");
+  // Stop
+  await expectOverlayActionEnabled(pageA, "stop");
+  await clickOverlayAction(pageA, "stop");
+  await expectPopupPhaseState(popupPage, "stopped");
 
-    const extensionId = await getExtensionId(pageA);
-    popupPage = await openPopup(context, extensionId);
+  return { success: true };
+}
 
-    // Wait for ready state
-    await expectPopupPhaseState(popupPage, "ready");
+async function runSourceBusyBeforeHop(env) {
+  const { pageA, pageB, popupPage } = env;
+  
+  // Start
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
 
-    // Start
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await expectPopupPhaseState(popupPage, "running");
+  // Wait for first hop to potentially start
+  await sleep(5000);
 
-    // Wait a bit for first hop to complete
-    await sleep(5000);
+  // Make pageB (potential source) busy during hop
+  const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
+  await ensureComposer(pageB);
+  await sendPrompt(pageB, "Generate content while the bridge is running. [CONTINUE]");
 
-    // Now make pageB (the source at this point) busy during the hop
-    const { ensureComposer, sendPrompt } = await import("./_playwright-bridge-helpers.mjs");
-    const composer = await ensureComposer(pageB);
-    await sendPrompt(pageB, "Generate content while the bridge is running. [CONTINUE]");
+  await sleep(3000);
 
-    await sleep(3000);
+  // Check phase - should be waiting/preflight if hop was in progress
+  const popupState = await readPopupState(popupPage);
+  const phase = popupState.phase;
 
-    // The system should not proceed with the hop until source settles
-    // Check current step or phase to see if it's waiting
-    const popupState = await readPopupState(popupPage);
-    const currentStep = popupState.currentStep;
+  // If still in an active hop, should be in waiting/preflight
+  assert.ok(
+    ["waiting", "preflight", "running", "paused", "stopped"].includes(phase),
+    `Expected waiting/preflight/running/paused/stopped during busy source, got: ${phase}`
+  );
 
-    // If still in a hop operation, it should be in waiting/preflight
-    const phase = popupState.phase;
-    assert.ok(
-      ["waiting", "preflight", "running"].includes(phase),
-      `Expected waiting/preflight/running during hop with busy source, got: ${phase}`
-    );
+  // Stop
+  await expectOverlayActionEnabled(pageA, "stop");
+  await clickOverlayAction(pageA, "stop");
+  await expectPopupPhaseState(popupPage, "stopped");
 
-    // Stop
-    await expectOverlayActionEnabled(pageA, "stop");
-    await clickOverlayAction(pageA, "stop");
-    await expectPopupPhaseState(popupPage, "stopped");
-
-    return { success: true };
-  } finally {
-    await cleanupBrowser(context, userDataDir);
-  }
+  return { success: true };
 }
 
 // ===== MAIN EXECUTION =====

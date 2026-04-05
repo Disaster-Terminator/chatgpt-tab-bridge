@@ -298,6 +298,7 @@ export async function waitForManualThreadUrl(page, label) {
 
 /**
  * Bootstrap an anonymous ChatGPT thread with a prompt.
+ * Tries anonymous bootstrap first, only fails on actual error.
  * @param {import("playwright").Page} page
  * @param {string} seedLabel
  * @param {string} prompt
@@ -305,37 +306,82 @@ export async function waitForManualThreadUrl(page, label) {
 export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
   await dismissCookieBanner(page);
   
-  // Check session state - can't use :has-text in querySelector
-  const sessionState = await page.evaluate(() => {
-    // If there's a composer, user is logged in
-    const hasComposer = !!document.querySelector('[contenteditable="true"][role="textbox"]');
-    // Check for welcome screen vs existing conversation
-    const hasWelcome = document.body.innerText.includes("准备好了") || document.body.innerText.includes("Get started") || document.body.innerText.includes("ready");
-    const hasConversation = !!document.querySelector('[data-message-author-role="user"], [data-message-author-role="assistant"]');
-    // Check for login prompt
-    const hasLoginPrompt = document.body.innerText.includes("登录") && document.body.innerText.includes("免费注册");
-    return { hasComposer, hasWelcome, hasConversation, hasLoginPrompt };
-  });
-  
-  if (!sessionState.hasComposer) {
+  // Try anonymous bootstrap - send prompt and wait for response
+  try {
+    // Find and use composer
+    const composer = await findComposer(page);
+    await composer.waitFor({ state: "visible", timeout: 30000 });
+    
+    // Send the prompt
+    const tagName = await composer.evaluate((node) => node.tagName.toLowerCase());
+    if (tagName === "textarea" || tagName === "input") {
+      await composer.evaluate((node, value) => {
+        node.value = value;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+      }, prompt);
+    } else {
+      await composer.click({ force: true });
+      await composer.focus({ force: true });
+      await page.keyboard.insertText(prompt);
+    }
+    
+    // Click send or press Enter
+    const sendButton = page
+      .locator('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="发送"], form button[type="submit"]')
+      .first();
+
+    if (await sendButton.count()) {
+      const clickable = await waitForEnabledButton(sendButton, 5000);
+      if (clickable) {
+        await sendButton.click();
+      } else {
+        await page.keyboard.press("Enter");
+      }
+    } else {
+      await page.keyboard.press("Enter");
+    }
+
+    // Wait for assistant reply
+    const locator = page.locator('[data-message-author-role="assistant"]').last();
+    await locator.waitFor({ state: "visible", timeout: 60000 });
+    
+    // Wait for stable reply
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 60000) {
+      const text = (await locator.innerText()).trim();
+      if (text) break;
+      await page.waitForTimeout(1500);
+    }
+
+    // Wait for supported URL
+    await page.waitForFunction(() => {
+      return /^https:\/\/chatgpt\.com\/(c\/|g\/[^/]+\/c\/)/.test(window.location.href);
+    }, { timeout: 20000 });
+    
+    return; // Success!
+    
+  } catch (bootstrapError) {
+    // Check if we actually got a response despite the error
+    const hasConversation = await page.evaluate(() => {
+      return !!document.querySelector('[data-message-author-role="assistant"]');
+    }).catch(() => false);
+    
+    const hasSupportedUrl = await page.evaluate(() => {
+      return /^https:\/\/chatgpt\.com\/(c\/|g\/[^/]+\/c\/)/.test(window.location.href);
+    }).catch(() => false);
+    
+    // If we got both a response AND a supported URL, consider it a success
+    if (hasConversation && hasSupportedUrl) {
+      return; // Success despite error message
+    }
+    
+    // Real failure - couldn't create thread
     throw new Error(
-      `ChatGPT session has no composer (seed: ${seedLabel}). ` +
-      `Please provide --url-a and --url-b with authenticated thread URLs.`
+      `Anonymous bootstrap failed for ${seedLabel}: ${bootstrapError.message}. ` +
+      `Provide --url-a and --url-b with existing thread URLs instead.`
     );
   }
-  
-  // If showing login prompt prominently, user needs to log in
-  if (sessionState.hasLoginPrompt && !sessionState.hasConversation) {
-    throw new Error(
-      `ChatGPT showing login prompt (seed: ${seedLabel}). ` +
-      `Provide --url-a and --url-b with authenticated thread URLs.`
-    );
-  }
-  
-  await ensureComposer(page);
-  await sendPrompt(page, prompt);
-  await waitForAssistantReply(page, seedLabel);
-  await waitForSupportedThreadUrl(page);
 }
 
 /**
