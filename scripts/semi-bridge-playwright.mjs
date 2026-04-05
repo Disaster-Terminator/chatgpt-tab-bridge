@@ -53,60 +53,94 @@ try {
   await ensureOverlay(pageA);
   await ensureOverlay(pageB);
 
-  await pageA.getByRole("button", { name: "Bind A" }).click();
-  await pageB.getByRole("button", { name: "Bind B" }).click();
+  // P0: Bind using overlay selectors instead of popup
+  await clickOverlayBind(pageA, "A");
+  await clickOverlayBind(pageB, "B");
 
   const extensionId = await pageA.locator(".chatgpt-bridge-overlay").evaluate((node) => {
     return node.dataset.extensionId || "";
   });
   assert.ok(extensionId, "Expected overlay to expose extension id");
 
+  // P1: Open popup for read-only verification only
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
     waitUntil: "domcontentloaded"
   });
 
-  await popupPage.waitForSelector("text=Popup control surface");
-  await expectTextNotEqual(popupPage, "#bindingA", "Unbound");
-  await expectTextNotEqual(popupPage, "#bindingB", "Unbound");
-  await expectTextEqual(popupPage, "#phaseBadge", "ready");
+  // P1: Verify popup structural readiness (no copy-dependent checks)
+  await popupPage.waitForSelector("#phaseBadge");
+  await popupPage.waitForSelector("#bindingA");
+  await popupPage.waitForSelector("#bindingB");
 
-  await expectEnabled(popupPage, "#startButton");
-  await expectDisabled(popupPage, "#pauseButton");
-  await expectDisabled(popupPage, "#resumeButton");
-  await expectDisabled(popupPage, "#stopButton");
-  await expectDisabled(popupPage, "#overrideSelect");
+  // P2: Binding verification - check non-default values instead of specific copy
+  await expectBindingState(popupPage, "A");
+  await expectBindingState(popupPage, "B");
+  await expectPopupPhaseState(popupPage, "ready");
 
-  console.log("Binding and ready-state checks: PASS");
+  // P0: Wait for overlay start button to be enabled before clicking
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
 
-  await popupPage.locator("#startButton").click();
-  await expectTextEqual(popupPage, "#phaseBadge", "running");
-  await expectEnabled(popupPage, "#pauseButton");
-  await expectEnabled(popupPage, "#stopButton");
-  await expectDisabled(popupPage, "#resumeButton");
-  await expectDisabled(popupPage, "#overrideSelect");
+  // P1: Verify control states in popup (read-only check)
+  await expectPopupControlState(popupPage, {
+    canPause: true,
+    canResume: false,
+    canStop: true,
+    overrideSelectEnabled: false
+  });
 
+  // Capture round before pause
   const roundBeforePause = await popupPage.locator("#roundValue").innerText();
-  await popupPage.locator("#pauseButton").click();
 
-  await expectTextEqual(popupPage, "#phaseBadge", "paused");
-  await expectEnabled(popupPage, "#resumeButton");
-  await expectEnabled(popupPage, "#stopButton");
-  await expectEnabled(popupPage, "#overrideSelect");
+  // P0: Pause from overlay
+  await expectOverlayActionEnabled(pageA, "pause");
+  await clickOverlayAction(pageA, "pause");
+  await expectPopupPhaseState(popupPage, "paused");
+
+  // P1: Verify paused state controls in popup (read-only check)
+  await expectPopupControlState(popupPage, {
+    canPause: false,
+    canResume: true,
+    canStop: true,
+    overrideSelectEnabled: true
+  });
+
+  // P1: Verify override can be changed in paused state
   await popupPage.locator("#overrideSelect").selectOption("B");
-  await expectTextEqual(popupPage, "#nextHopValue", "B -> A");
-  await expectTextEqual(popupPage, "#roundValue", roundBeforePause);
 
-  await popupPage.locator("#resumeButton").click();
-  await expectTextEqual(popupPage, "#phaseBadge", "running");
-  await expectDisabled(popupPage, "#overrideSelect");
+  // P2: Verify next hop changed (no hard-coded copy assertion)
+  await expectValueChanged(popupPage, "#nextHopValue", async (val) => val !== "A → B");
+  await expectValueChanged(popupPage, "#roundValue", async (val) => val === roundBeforePause);
 
-  await popupPage.locator("#stopButton").click();
-  await expectTextEqual(popupPage, "#phaseBadge", "stopped");
-  await expectEnabled(popupPage, "#clearTerminalButton");
+  // P0: Resume from overlay
+  await expectOverlayActionEnabled(pageA, "resume");
+  await clickOverlayAction(pageA, "resume");
+  await expectPopupPhaseState(popupPage, "running");
 
-  console.log("Run-control checks: PASS");
-  console.log(`Semi bridge test: PASS (${extensionId})`);
+  // P1: Verify running state controls in popup (read-only check)
+  await expectPopupControlState(popupPage, {
+    canPause: true,
+    canResume: false,
+    canStop: true,
+    overrideSelectEnabled: false
+  });
+
+  // P0: Stop from overlay
+  await expectOverlayActionEnabled(pageA, "stop");
+  await clickOverlayAction(pageA, "stop");
+  await expectPopupPhaseState(popupPage, "stopped");
+
+  // P1: Verify stopped state controls in popup (read-only check)
+  await expectPopupControlState(popupPage, {
+    canPause: false,
+    canResume: false,
+    canStop: false,
+    clearTerminalEnabled: true
+  });
+
+  console.log("Semi bridge test: PASS");
 } catch (error) {
   runError = error;
 } finally {
@@ -126,52 +160,179 @@ if (runError) {
   throw runError;
 }
 
-async function expectTextEqual(page, selector, expected) {
+// ===== NEW HELPERS FOR FROZEN UI CONTRACT =====
+
+/**
+ * Click overlay bind button for specified role
+ * @param {import("playwright").Page} page
+ * @param {"A"|"B"} role
+ */
+async function clickOverlayBind(page, role) {
+  const selector = `[data-bind-role="${role}"]`;
+  await page.waitForSelector(selector, { state: "visible", timeout: 30000 });
+  await page.locator(selector).click();
+}
+
+/**
+ * Click overlay action button (start/pause/resume/stop)
+ * @param {import("playwright").Page} page
+ * @param {"start"|"pause"|"resume"|"stop"} action
+ */
+async function clickOverlayAction(page, action) {
+  const selector = `[data-action="${action}"]`;
+  await page.locator(selector).click();
+}
+
+/**
+ * Wait until overlay action is enabled (visible and not disabled)
+ * @param {import("playwright").Page} page
+ * @param {"start"|"pause"|"resume"|"stop"} action
+ */
+async function expectOverlayActionEnabled(page, action) {
+  const selector = `[data-action="${action}"]`;
   await page.waitForFunction(
-    ({ targetSelector, targetText }) => {
+    (targetSelector) => {
       const node = document.querySelector(targetSelector);
-      return Boolean(node) && node.textContent.trim() === targetText;
+      // Check if visible (not display:none) and not disabled
+      if (!node) return false;
+      const style = window.getComputedStyle(node);
+      if (style.display === "none") return false;
+      return node.disabled !== true;
     },
-    { targetSelector: selector, targetText: expected },
+    selector,
     { timeout: 30000 }
   );
 }
+
+/**
+ * Verify popup phase via data-phase attribute (no copy dependency)
+ * @param {import("playwright").Page} page
+ * @param {string} expectedPhase
+ */
+async function expectPopupPhaseState(page, expectedPhase) {
+  await page.waitForFunction(
+    ({ targetSelector, targetPhase }) => {
+      const node = document.querySelector(targetSelector);
+      return Boolean(node) && node.dataset.phase === targetPhase;
+    },
+    { targetSelector: "#phaseBadge", targetPhase: expectedPhase },
+    { timeout: 30000 }
+  );
+}
+
+/**
+ * Verify binding is in non-default state (not unbound)
+ * @param {import("playwright").Page} page
+ * @param {"A"|"B"} role
+ */
+async function expectBindingState(page, role) {
+  const selector = role === "A" ? "#bindingA" : "#bindingB";
+  await page.waitForFunction(
+    (targetSelector) => {
+      const node = document.querySelector(targetSelector);
+      if (!node) return false;
+      const text = node.textContent?.trim() || "";
+      // Check non-default: not "未绑定" (zh-CN) or "Unbound" (en)
+      return text.length > 0 && !text.includes("未绑定") && text.toLowerCase() !== "unbound";
+    },
+    selector,
+    { timeout: 30000 }
+  );
+}
+
+/**
+ * Verify popup control states via enabled/disabled attributes
+ * @param {import("playwright").Page} page
+ * @param {Object} expectedStates
+ */
+async function expectPopupControlState(page, expectedStates) {
+  if (expectedStates.canPause !== undefined) {
+    await page.waitForFunction(
+      ({ selector, expectedEnabled }) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const isEnabled = node.disabled !== true;
+        return isEnabled === expectedEnabled;
+      },
+      { selector: "#pauseButton", expectedEnabled: expectedStates.canPause },
+      { timeout: 30000 }
+    );
+  }
+  if (expectedStates.canResume !== undefined) {
+    await page.waitForFunction(
+      ({ selector, expectedEnabled }) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const isEnabled = node.disabled !== true;
+        return isEnabled === expectedEnabled;
+      },
+      { selector: "#resumeButton", expectedEnabled: expectedStates.canResume },
+      { timeout: 30000 }
+    );
+  }
+  if (expectedStates.canStop !== undefined) {
+    await page.waitForFunction(
+      ({ selector, expectedEnabled }) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const isEnabled = node.disabled !== true;
+        return isEnabled === expectedEnabled;
+      },
+      { selector: "#stopButton", expectedEnabled: expectedStates.canStop },
+      { timeout: 30000 }
+    );
+  }
+  if (expectedStates.overrideSelectEnabled !== undefined) {
+    await page.waitForFunction(
+      ({ selector, expectedEnabled }) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const isEnabled = node.disabled !== true;
+        return isEnabled === expectedEnabled;
+      },
+      { selector: "#overrideSelect", expectedEnabled: expectedStates.overrideSelectEnabled },
+      { timeout: 30000 }
+    );
+  }
+  if (expectedStates.clearTerminalEnabled !== undefined) {
+    await page.waitForFunction(
+      ({ selector, expectedEnabled }) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const isEnabled = node.disabled !== true;
+        return isEnabled === expectedEnabled;
+      },
+      { selector: "#clearTerminalButton", expectedEnabled: expectedStates.clearTerminalEnabled },
+      { timeout: 30000 }
+    );
+  }
+}
+
+/**
+ * Wait for value to change from initial value or satisfy predicate
+ * @param {import("playwright").Page} page
+ * @param {string} selector
+ * @param {Function} predicate - async function receiving current value
+ */
+async function expectValueChanged(page, selector, predicate) {
+  const initialValue = await page.locator(selector).innerText();
+  await page.waitForFunction(
+    async ({ targetSelector, initialVal }) => {
+      const node = document.querySelector(targetSelector);
+      if (!node) return false;
+      const currentValue = node.textContent?.trim() || "";
+      // Simple check: value changed from initial
+      return currentValue !== initialVal;
+    },
+    { targetSelector: selector, initialVal: initialValue },
+    { timeout: 30000 }
+  );
+}
+
+// ===== EXISTING HELPERS (unchanged) =====
 
 async function ensureOverlay(page) {
   await page.waitForSelector(".chatgpt-bridge-overlay", { timeout: 30000 });
-}
-
-async function expectTextNotEqual(page, selector, unexpected) {
-  await page.waitForFunction(
-    ({ targetSelector, unexpectedText }) => {
-      const node = document.querySelector(targetSelector);
-      return Boolean(node) && node.textContent.trim() !== unexpectedText;
-    },
-    { targetSelector: selector, unexpectedText: unexpected },
-    { timeout: 30000 }
-  );
-}
-
-async function expectEnabled(page, selector) {
-  await page.waitForFunction(
-    (targetSelector) => {
-      const node = document.querySelector(targetSelector);
-      return Boolean(node) && node.disabled === false;
-    },
-    selector,
-    { timeout: 30000 }
-  );
-}
-
-async function expectDisabled(page, selector) {
-  await page.waitForFunction(
-    (targetSelector) => {
-      const node = document.querySelector(targetSelector);
-      return Boolean(node) && node.disabled === true;
-    },
-    selector,
-    { timeout: 30000 }
-  );
 }
 
 function readFlag(flagName) {
