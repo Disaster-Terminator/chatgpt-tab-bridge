@@ -297,7 +297,7 @@ function render(model: PopupModel): void {
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.transportValue.textContent = display.transport || copy.none;
   elements.selectorValue.textContent = display.selector || copy.none;
-  elements.issueValue.textContent = state.lastError || state.lastStopReason || copy.none;
+  elements.issueValue.textContent = display.lastIssue || copy.none;
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.overlayEnabledCheckbox.checked = overlaySettings?.enabled ?? true;
@@ -398,7 +398,7 @@ function buildDebugSnapshot(model: PopupModel, ackDebug: any): string {
     `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
     `${copy.transportLabel}: ${display.transport || copy.none}`,
     `${copy.selectorLabel}: ${display.selector || copy.none}`,
-    `${copy.lastIssueLabel}: ${state.lastError || state.lastStopReason || copy.none}`
+    `${copy.lastIssueLabel}: ${display.lastIssue || copy.none}`
   ];
 
   if (ackDebug) {
