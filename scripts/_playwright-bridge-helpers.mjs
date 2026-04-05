@@ -379,7 +379,7 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
     // Real failure - couldn't create thread
     throw new Error(
       `Anonymous bootstrap failed for ${seedLabel}: ${bootstrapError.message}. ` +
-      `Provide --url-a and --url-b with existing thread URLs instead.`
+      `Root page cannot be bound directly. Bootstrap two threads first or provide existing thread URLs via --url-a and --url-b.`
     );
   }
 }
@@ -484,7 +484,8 @@ export async function waitForSupportedThreadUrl(page) {
   } catch (error) {
     await dumpBootstrapDiagnostics(page, "thread-url");
     throw new Error(
-      "Anonymous ChatGPT chat did not transition to a supported thread URL. Semi-automated binding tests need real /c/ or /g/.../c/ thread URLs."
+      "Anonymous bootstrap did not transition to a supported thread URL (/c/ or /g/.../c/). " +
+      "Root page cannot be bound directly. Provide existing thread URLs via --url-a and --url-b."
     );
   }
 }
@@ -570,6 +571,35 @@ export function sleep(durationMs) {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
+}
+
+/**
+ * Check if current URL is a supported thread URL.
+ * @param {import("playwright").Page} page
+ * @returns {Promise<boolean>}
+ */
+export async function isSupportedThreadUrl(page) {
+  return await page.evaluate(() => {
+    return /^https:\/\/chatgpt\.com\/(c\/|g\/[^/]+\/c\/)/.test(window.location.href);
+  });
+}
+
+/**
+ * Assert that current URL is a supported thread URL, fail if not.
+ * @param {import("playwright").Page} page
+ * @param {string} label - Label for error message (e.g., "pageA", "pageB")
+ */
+export async function assertSupportedThreadUrl(page, label) {
+  const isSupported = await isSupportedThreadUrl(page);
+  if (!isSupported) {
+    const currentUrl = page.url();
+    throw new Error(
+      `Root page cannot be bound directly for ${label}. ` +
+      `Current URL: ${currentUrl}. ` +
+      `Bootstrap two threads first (send prompts and wait for /c/ or /g/.../c/ URLs) ` +
+      `or provide existing thread URLs via --url-a and --url-b.`
+    );
+  }
 }
 
 /**

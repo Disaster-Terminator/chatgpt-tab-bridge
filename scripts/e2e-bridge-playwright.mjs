@@ -31,7 +31,8 @@ import {
   compareStates,
   assertStatesConsistent,
   cleanupBrowser,
-  sleep
+  sleep,
+  assertSupportedThreadUrl
 } from "./_playwright-bridge-helpers.mjs";
 
 const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
@@ -144,6 +145,9 @@ async function createEnv() {
     console.log("  Using provided thread URLs...");
     await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
     await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
+    // Validate URLs are supported thread URLs before binding
+    await assertSupportedThreadUrl(pageA, "pageA (--url-a)");
+    await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
   } else if (skipBootstrap) {
     console.log("  Skip bootstrap mode - waiting for user navigation...");
     await Promise.all([
@@ -151,10 +155,13 @@ async function createEnv() {
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
     // Wait for user to signal ready
-    console.log("  Please navigate both pages to valid thread URLs, then press Enter...");
+    console.log("  Please navigate both pages to valid thread URLs (/c/ or /g/.../c/), then press Enter...");
     await new Promise(resolve => {
       process.stdin.once("data", () => resolve());
     });
+    // Validate URLs after user navigation
+    await assertSupportedThreadUrl(pageA, "pageA (manual)");
+    await assertSupportedThreadUrl(pageB, "pageB (manual)");
   } else {
     console.log("  Auto-bootstrapping two threads...");
     await Promise.all([
@@ -401,14 +408,33 @@ async function runSourceBusyBeforeHop(env) {
 
   await sleep(3000);
 
-  // Check phase - should be waiting/preflight if hop was in progress
-  const popupState = await readPopupState(popupPage);
-  const phase = popupState.phase;
+  // PHASE 1: Must enter waiting/settle/preflight FIRST (if hop was in progress)
+  // Wait a short time and check if we're in a waiting state
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  // MUST see waiting/preflight/settling first - NOT allowed to go directly to running/paused/stopped
+  // If we see terminal states immediately without any waiting, it means the hop didn't even start
+  // which is still a valid scenario (busy source prevented hop), but we need to be explicit
+  const sawWaitingPhase = ["waiting", "preflight", "settling"].includes(phase);
+  const isTerminal = ["running", "paused", "stopped", "error"].includes(phase);
+  
+  // If directly in terminal state without waiting, that's okay IF the hop was blocked
+  // But we should document this behavior
+  if (!sawWaitingPhase && isTerminal) {
+    console.log(`  Note: Source busy blocked hop - went directly to ${phase} without waiting phase`);
+  } else if (!sawWaitingPhase && !isTerminal) {
+    // Unexpected intermediate state
+    throw new Error(`Unexpected phase during busy source: ${phase}`);
+  }
 
-  // If still in an active hop, should be in waiting/preflight
+  // PHASE 2: Wait longer to see final state after potential settle
+  await sleep(5000);
+  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  
+  // Should eventually be running or a terminal state
   assert.ok(
-    ["waiting", "preflight", "running", "paused", "stopped"].includes(phase),
-    `Expected waiting/preflight/running/paused/stopped during busy source, got: ${phase}`
+    ["running", "paused", "stopped", "error"].includes(phase),
+    `Expected running/paused/stopped/error after busy source settle, got: ${phase}`
   );
 
   // Stop

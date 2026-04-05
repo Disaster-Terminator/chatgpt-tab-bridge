@@ -23,7 +23,8 @@ import {
   bootstrapAnonymousThread,
   buildBootstrapPrompt,
   getExtensionId,
-  openPopup
+  openPopup,
+  assertSupportedThreadUrl
 } from "./_playwright-bridge-helpers.mjs";
 
 const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
@@ -46,6 +47,9 @@ try {
     console.log("Using provided thread URLs.");
     await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
     await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
+    // Validate URLs are supported thread URLs before binding
+    await assertSupportedThreadUrl(pageA, "pageA (--url-a)");
+    await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
   } else if (skipBootstrap) {
     console.log("Skip bootstrap mode - waiting for you to navigate to thread URLs...");
     console.log("Please navigate both pages to valid /c/ or /g/.../c/ URLs, then press Enter in this terminal.");
@@ -58,9 +62,13 @@ try {
     await new Promise(resolve => {
       process.stdin.once("data", () => resolve());
     });
+    // Validate URLs after user navigation
+    await assertSupportedThreadUrl(pageA, "pageA (manual)");
+    await assertSupportedThreadUrl(pageB, "pageB (manual)");
   } else {
-    console.log("No thread URLs supplied. Attempting bootstrap...");
-    console.log("NOTE: Bootstrap requires a logged-in ChatGPT session with valid cookies.");
+    console.log("No thread URLs supplied. Attempting anonymous bootstrap...");
+    console.log("NOTE: Anonymous bootstrap may fail if ChatGPT requires authentication.");
+    console.log("      If bootstrap fails, provide existing thread URLs via --url-a and --url-b.");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
