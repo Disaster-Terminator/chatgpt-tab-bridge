@@ -6,7 +6,9 @@
     "test:smoke": "node scripts/smoke-extension-playwright.mjs",
     "test:semi": "node scripts/semi-bridge-playwright.mjs",
     "test:real-hop": "node scripts/real-hop-playwright.mjs",
-    "test:e2e": "node scripts/e2e-bridge-playwright.mjs"
+    "test:e2e": "node scripts/e2e-bridge-playwright.mjs",
+    "auth:export": "node scripts/export-chatgpt-auth.mjs",
+    "auth:verify": "node scripts/verify-chatgpt-auth.mjs"
   },
   "dependencies": {
     "@openai/codex": "^0.118.0",
