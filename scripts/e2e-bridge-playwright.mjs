@@ -14,6 +14,11 @@ import {
   getTwoPages,
   readFlag,
   readPathFlag,
+  resolveAuthOptions,
+  validateAuthFiles,
+  loadSessionStorageData,
+  addSessionStorageInitScript,
+  restoreSessionStorage,
   ensureOverlay,
   clickOverlayBind,
   clickOverlayAction,
@@ -41,6 +46,29 @@ const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const scenarioFilter = readFlag("--scenario");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
+
+// Auth state options
+const authStateArg = readFlag("--auth-state");
+const sessionStateArg = readFlag("--session-state");
+
+// Resolve auth options
+const authOptions = resolveAuthOptions({
+  authStateArg,
+  sessionStateArg
+});
+
+// Validate auth files before starting
+const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
+if (!authValidation.valid) {
+  console.error(`[e2e] ERROR: ${authValidation.error}`);
+  console.error("[e2e] To skip auth, provide --url-a and --url-b for existing threads.");
+  process.exit(1);
+}
+
+// Load sessionStorage data
+const sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
+console.log(`[e2e] Auth state: ${authOptions.storageStatePath}`);
+console.log(`[e2e] Session storage: ${authOptions.sessionStoragePath} (${sessionStorageData ? "loaded" : "not found"})`);
 
 // Scenario registry - each receives env and returns { success: true } or throws
 const scenarios = {
@@ -178,10 +206,18 @@ async function runScenario(name, scenarioFn) {
  * Create test environment - browser, pages, popup.
  */
 async function createEnv() {
+  // Launch with auth state
   const { context, userDataDir } = await launchBrowserWithExtension({ 
     extensionPath, 
-    browserExecutablePath 
+    browserExecutablePath,
+    storageStatePath: authOptions.storageStatePath,
+    sessionStorageData
   });
+  
+  // Add sessionStorage init script
+  if (sessionStorageData) {
+    addSessionStorageInitScript(context, sessionStorageData);
+  }
   
   const [pageA, pageB] = await getTwoPages(context);
   
@@ -190,6 +226,11 @@ async function createEnv() {
     console.log("  Using provided thread URLs...");
     await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
     await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
+    // Restore sessionStorage after navigation (backup to init script)
+    if (sessionStorageData) {
+      await restoreSessionStorage(pageA, sessionStorageData);
+      await restoreSessionStorage(pageB, sessionStorageData);
+    }
     // Validate URLs are supported thread URLs before binding
     await assertSupportedThreadUrl(pageA, "pageA (--url-a)");
     await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
@@ -199,6 +240,11 @@ async function createEnv() {
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
+    // Restore sessionStorage after navigation
+    if (sessionStorageData) {
+      await restoreSessionStorage(pageA, sessionStorageData);
+      await restoreSessionStorage(pageB, sessionStorageData);
+    }
     // Wait for user to signal ready
     console.log("  Please navigate both pages to valid thread URLs (/c/ or /g/.../c/), then press Enter...");
     await new Promise(resolve => {
@@ -208,11 +254,22 @@ async function createEnv() {
     await assertSupportedThreadUrl(pageA, "pageA (manual)");
     await assertSupportedThreadUrl(pageB, "pageB (manual)");
   } else {
-    console.log("  Auto-bootstrapping two threads...");
+    // Default: Use auth state for authenticated bootstrap
+    console.log("  Using exported auth state for authenticated bootstrap...");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
+    
+    // Restore sessionStorage after navigation (backup to init script)
+    if (sessionStorageData) {
+      await restoreSessionStorage(pageA, sessionStorageData);
+      await restoreSessionStorage(pageB, sessionStorageData);
+    }
+    
+    // Give page time to stabilize
+    await sleep(2000);
+    
     await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
     await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
   }

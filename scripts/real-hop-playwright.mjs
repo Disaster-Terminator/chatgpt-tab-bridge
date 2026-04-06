@@ -24,6 +24,11 @@ import {
   getTwoPages,
   readFlag,
   readPathFlag,
+  resolveAuthOptions,
+  validateAuthFiles,
+  loadSessionStorageData,
+  addSessionStorageInitScript,
+  restoreSessionStorage,
   bootstrapAnonymousThread,
   buildBootstrapPrompt,
   ensureOverlay,
@@ -43,6 +48,29 @@ const browserExecutablePath = process.env.BROWSER_EXECUTABLE_PATH || null;
 const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
+
+// Auth state options
+const authStateArg = readFlag("--auth-state");
+const sessionStateArg = readFlag("--session-state");
+
+// Resolve auth options
+const authOptions = resolveAuthOptions({
+  authStateArg,
+  sessionStateArg
+});
+
+// Validate auth files before doing anything
+const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
+if (!authValidation.valid) {
+  console.error(`[real-hop] ERROR: ${authValidation.error}`);
+  console.error("[real-hop] To skip auth, provide --url-a and --url-b for existing threads.");
+  process.exit(1);
+}
+
+// Load sessionStorage data
+const sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
+console.log(`[real-hop] Auth state: ${authOptions.storageStatePath}`);
+console.log(`[real-hop] Session storage: ${authOptions.sessionStoragePath} (${sessionStorageData ? "loaded" : "not found"})`);
 
 const ACCEPTANCE_TIMEOUT_MS = 90000;
 const POLL_INTERVAL_MS = 1200;
@@ -508,10 +536,18 @@ async function verifyRealHop({ pageA, pageB, popupPage, baselineTarget, payloadF
 await fs.mkdir(evidenceDir, { recursive: true });
 logLine(`证据目录: ${evidenceDir}`);
 
+// Launch browser with auth state
 const { context, userDataDir } = await launchBrowserWithExtension({
   extensionPath,
-  browserExecutablePath
+  browserExecutablePath,
+  storageStatePath: authOptions.storageStatePath,
+  sessionStorageData
 });
+
+// Add sessionStorage init script for automatic restoration on page navigation
+if (sessionStorageData) {
+  addSessionStorageInitScript(context, sessionStorageData);
+}
 
 let runError = null;
 let finalRuntimeEvents = [];
@@ -555,22 +591,32 @@ try {
     resolvedUrlA = pageA.url();
     resolvedUrlB = pageB.url();
   } else {
-    bootstrapMode = "auto_bootstrap";
-    logLine("未提供线程 URL，开始自动 bootstrap 两个线程。\n");
+    // Default: Use auth state to open authenticated pages, then auto-bootstrap threads
+    bootstrapMode = "authenticated_bootstrap";
+    logLine("使用已导出的认证状态，自动 bootstrap 两个线程。\n");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
 
+    // Restore sessionStorage after navigation (as backup to init script)
+    if (sessionStorageData) {
+      await restoreSessionStorage(pageA, sessionStorageData);
+      await restoreSessionStorage(pageB, sessionStorageData);
+    }
+
+    // Give page time to stabilize after auth restoration
+    await sleep(2000);
+
     await bootstrapThreadWithRetry(pageA, "seed-a", "A");
     await bootstrapThreadWithRetry(pageB, "seed-b", "B");
-    await assertSupportedThreadUrl(pageA, "pageA (auto-bootstrap)");
-    await assertSupportedThreadUrl(pageB, "pageB (auto-bootstrap)");
+    await assertSupportedThreadUrl(pageA, "pageA (authenticated-bootstrap)");
+    await assertSupportedThreadUrl(pageB, "pageB (authenticated-bootstrap)");
 
     resolvedUrlA = pageA.url();
     resolvedUrlB = pageB.url();
-    logLine(`自动 bootstrap 成功: A=${resolvedUrlA}`);
-    logLine(`自动 bootstrap 成功: B=${resolvedUrlB}`);
+    logLine(`认证 bootstrap 成功: A=${resolvedUrlA}`);
+    logLine(`认证 bootstrap 成功: B=${resolvedUrlB}`);
   }
 
   await ensureOverlay(pageA);
@@ -646,6 +692,10 @@ try {
         : String(runError)
       : verificationResult?.reason || "independent_acceptance_before_waiting_reply",
     evidenceDir,
+    auth: {
+      storageState: authOptions.storageStatePath,
+      sessionStorageLoaded: !!sessionStorageData
+    },
     browser: {
       strategy: "playwright-persistent-chromium-with-extension",
       executablePath: browserExecutablePath || "playwright-default"

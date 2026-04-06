@@ -7,6 +7,9 @@
     "test:semi": "node scripts/semi-bridge-playwright.mjs",
     "test:real-hop": "node scripts/real-hop-playwright.mjs",
     "test:e2e": "node scripts/e2e-bridge-playwright.mjs",
+    "test:real-hop:auth": "node scripts/real-hop-playwright.mjs --auth-state playwright/.auth/chatgpt.json --session-state playwright/.auth/chatgpt.session.json",
+    "test:semi:auth": "node scripts/semi-bridge-playwright.mjs --auth-state playwright/.auth/chatgpt.json --session-state playwright/.auth/chatgpt.session.json",
+    "test:e2e:auth": "node scripts/e2e-bridge-playwright.mjs --auth-state playwright/.auth/chatgpt.json --session-state playwright/.auth/chatgpt.session.json",
     "auth:export": "node scripts/export-chatgpt-auth.mjs",
     "auth:verify": "node scripts/verify-chatgpt-auth.mjs"
   },

@@ -12,6 +12,11 @@ import {
   getTwoPages,
   readFlag,
   readPathFlag,
+  resolveAuthOptions,
+  validateAuthFiles,
+  loadSessionStorageData,
+  addSessionStorageInitScript,
+  restoreSessionStorage,
   ensureOverlay,
   clickOverlayBind,
   clickOverlayAction,
@@ -33,10 +38,41 @@ const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
 
+// Auth state options
+const authStateArg = readFlag("--auth-state");
+const sessionStateArg = readFlag("--session-state");
+
+// Resolve auth options
+const authOptions = resolveAuthOptions({
+  authStateArg,
+  sessionStateArg
+});
+
+// Validate auth files
+const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
+if (!authValidation.valid) {
+  console.error(`[semi] ERROR: ${authValidation.error}`);
+  console.error("[semi] To skip auth, provide --url-a and --url-b for existing threads.");
+  process.exit(1);
+}
+
+// Load sessionStorage data
+const sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
+console.log(`[semi] Auth state: ${authOptions.storageStatePath}`);
+console.log(`[semi] Session storage: ${authOptions.sessionStoragePath} (${sessionStorageData ? "loaded" : "not found"})`);
+
+// Launch browser with auth state
 const { context, userDataDir } = await launchBrowserWithExtension({
   extensionPath,
-  browserExecutablePath
+  browserExecutablePath,
+  storageStatePath: authOptions.storageStatePath,
+  sessionStorageData
 });
+
+// Add sessionStorage init script
+if (sessionStorageData) {
+  addSessionStorageInitScript(context, sessionStorageData);
+}
 
 let runError = null;
 
@@ -66,13 +102,22 @@ try {
     await assertSupportedThreadUrl(pageA, "pageA (manual)");
     await assertSupportedThreadUrl(pageB, "pageB (manual)");
   } else {
-    console.log("No thread URLs supplied. Attempting anonymous bootstrap...");
-    console.log("NOTE: Anonymous bootstrap may fail if ChatGPT requires authentication.");
-    console.log("      If bootstrap fails, provide existing thread URLs via --url-a and --url-b.");
+    // Default: Use auth state for authenticated bootstrap
+    console.log("Using exported auth state for authenticated bootstrap...");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
+    
+    // Restore sessionStorage after navigation
+    if (sessionStorageData) {
+      await restoreSessionStorage(pageA, sessionStorageData);
+      await restoreSessionStorage(pageB, sessionStorageData);
+    }
+    
+    // Give page time to stabilize
+    await pageA.waitForTimeout(2000);
+    
     await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
     await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
   }

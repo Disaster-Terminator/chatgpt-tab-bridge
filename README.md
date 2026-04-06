@@ -111,12 +111,65 @@
 - `[BRIDGE_STATE] CONTINUE`
 - 或 `[BRIDGE_STATE] FREEZE`
 
-## 已知限制
+## 认证状态导出与复用
 
-- 目前主要验证的是 popup / overlay / 状态机 / 控制逻辑
-- 真实 ChatGPT 页面 DOM 仍可能变化，selector 还需要按实际页面微调
-- real-hop 默认会从根页自动 bootstrap 两个线程；若当前环境不支持匿名创建线程，脚本会输出诊断并可改用 `--url-a/--url-b` 或 `--skip-bootstrap`
-- semi / e2e 仍更适合作为控制流辅助联调，主裁决以 real-hop 为准
+测试脚本支持使用已导出的 ChatGPT 登录态，避免每次手动登录。
+
+### `pnpm run auth:export`
+
+导出 Chrome 登录状态到本地文件：
+
+1. 复制 Chrome Default profile 到临时目录
+2. 启动 Playwright 浏览器加载该 profile
+3. 导航到 chatgpt.com 验证登录态
+4. 导出 storageState 到 `playwright/.auth/chatgpt.json`
+5. 导出 sessionStorage 到 `playwright/.auth/chatgpt.session.json`
+
+**要求**：WSL Chrome 已有登录的 Default profile，或设置 `CHROME_DATA_DIR` 环境变量指向 Chrome profile 目录。
+
+**注意**：`playwright/.auth` 已在 `.gitignore` 中，请勿提交认证文件。
+
+### `pnpm run auth:verify`
+
+验证导出的认证状态可被 Playwright 复用：
+
+- 加载 `playwright/.auth/chatgpt.json` 的 storageState
+- 使用 sessionStorage 恢复会话
+- 检查页面是否显示已登录状态（account menu、composer 等）
+- 输出 PASS/FAIL verdict
+
+### 使用认证状态运行测试
+
+所有测试脚本现在支持 `--auth-state` 和 `--session-state` 参数：
+
+```bash
+# 使用默认 auth 文件
+pnpm run test:real-hop:auth
+pnpm run test:semi:auth
+pnpm run test:e2e:auth
+
+# 自定义 auth 文件
+pnpm run test:real-hop -- --auth-state /path/to/auth.json --session-state /path/to/session.json
+```
+
+### 认证测试参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--auth-state` | storageState 文件路径 | `playwright/.auth/chatgpt.json` |
+| `--session-state` | sessionStorage 文件路径 | `playwright/.auth/chatgpt.session.json` |
+| `--url-a` | 指定线程 A URL | 自动 bootstrap |
+| `--url-b` | 指定线程 B URL | 自动 bootstrap |
+| `--skip-bootstrap` | 跳过自动 bootstrap，等待手动导航 | - |
+
+### 验收层级
+
+- **smoke**：扩展加载
+- **semi**：控制流辅助验证
+- **e2e**：辅助场景脚本
+- **real-hop**：**主链路真实性验收（唯一）**
+
+real-hop 是唯一验证真实 first-hop 发送的测试，使用独立页面证据（目标页 user message 变化）而非运行时事件作为通过标准。
 
 ## 目录说明
 
@@ -140,6 +193,13 @@ pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
 pnpm run test:real-hop
 pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
 pnpm run test:real-hop -- --skip-bootstrap
+
+# 认证测试（使用已导出的登录态）
+pnpm run auth:export    # 导出 ChatGPT 登录态
+pnpm run auth:verify    # 验证导出的登录态可用
+pnpm run test:real-hop:auth  # 使用 auth 运行 real-hop
+pnpm run test:semi:auth      # 使用 auth 运行 semi
+pnpm run test:e2e:auth       # 使用 auth 运行 e2e
 ```
 
 ### `pnpm run build`

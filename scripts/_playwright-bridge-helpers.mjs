@@ -4,30 +4,139 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 import { chromium } from "playwright";
+
 import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
+
+// ===== AUTH STATE CONSTANTS =====
+
+/**
+ * Default auth state file paths.
+ * These are relative to cwd and resolve to absolute paths.
+ */
+export const DEFAULT_AUTH_PATHS = {
+  storageState: "playwright/.auth/chatgpt.json",
+  sessionStorage: "playwright/.auth/chatgpt.session.json"
+};
+
+/**
+ * Resolve auth options from CLI arguments.
+ * @param {Object} options
+ * @param {string} [options.authStateArg] - CLI flag value for --auth-state
+ * @param {string} [options.sessionStateArg] - CLI flag value for --session-state
+ * @returns {{ storageStatePath: string|null, sessionStoragePath: string|null, useAuth: boolean }}
+ */
+export function resolveAuthOptions(options = {}) {
+  const { authStateArg, sessionStateArg } = options;
+  
+  const cwd = process.cwd();
+  
+  // Resolve storageState path
+  let storageStatePath = null;
+  if (authStateArg) {
+    storageStatePath = path.isAbsolute(authStateArg) 
+      ? authStateArg 
+      : path.resolve(cwd, authStateArg);
+  } else {
+    // Use default path
+    storageStatePath = path.resolve(cwd, DEFAULT_AUTH_PATHS.storageState);
+  }
+  
+  // Resolve sessionStorage path
+  let sessionStoragePath = null;
+  if (sessionStateArg) {
+    sessionStoragePath = path.isAbsolute(sessionStateArg)
+      ? sessionStateArg
+      : path.resolve(cwd, sessionStateArg);
+  } else {
+    // Use default path (derived from storageState path directory)
+    sessionStoragePath = path.resolve(cwd, DEFAULT_AUTH_PATHS.sessionStorage);
+  }
+  
+  return {
+    storageStatePath,
+    sessionStoragePath,
+    useAuth: true // Always use auth if files exist and are valid
+  };
+}
+
+/**
+ * Validate that auth files exist and are readable.
+ * @param {string} storageStatePath
+ * @param {string} sessionStoragePath
+ * @returns {{ valid: boolean, storageStateExists: boolean, sessionStorageExists: boolean, error?: string }}
+ */
+export async function validateAuthFiles(storageStatePath, sessionStoragePath) {
+  const results = {
+    valid: false,
+    storageStateExists: false,
+    sessionStorageExists: false,
+    error: undefined
+  };
+  
+  // Check storageState
+  try {
+    await access(storageStatePath);
+    results.storageStateExists = true;
+  } catch {
+    results.error = `Auth state file not found: ${storageStatePath}`;
+    return results;
+  }
+  
+  // Check sessionStorage (optional - may not exist)
+  try {
+    await access(sessionStoragePath);
+    results.sessionStorageExists = true;
+  } catch {
+    // sessionStorage is optional - this is OK
+    results.sessionStorageExists = false;
+  }
+  
+  results.valid = true;
+  return results;
+}
+
+/**
+ * Load sessionStorage data from file.
+ * @param {string} sessionStoragePath
+ * @returns {Promise<Object|null>} - Parsed sessionStorage object or null if file doesn't exist
+ */
+export async function loadSessionStorageData(sessionStoragePath) {
+  try {
+    const content = await readFile(sessionStoragePath, "utf8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Launch Playwright browser with extension loaded.
  * @param {Object} options
  * @param {string} [options.extensionPath] - Path to extension dist
  * @param {string} [options.browserExecutablePath] - Custom browser path
- * @returns {Promise<{context: import("playwright").BrowserContext, userDataDir: string}>}
+ * @param {string} [options.storageStatePath] - Path to Playwright storageState JSON file
+ * @param {Object} [options.sessionStorageData] - sessionStorage data to restore
+ * @returns {Promise<{context: import("playwright").BrowserContext, userDataDir: string, sessionStorageData: Object|null}>}
  */
 export async function launchBrowserWithExtension(options = {}) {
   const extensionPath = options.extensionPath || path.resolve(process.cwd(), "dist/extension");
   const browserExecutablePath = options.browserExecutablePath || null;
+  const storageStatePath = options.storageStatePath || null;
+  const sessionStorageData = options.sessionStorageData || null;
 
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "chatgpt-bridge-e2e-"));
 
-  const context = await chromium.launchPersistentContext(userDataDir, {
+  // Build launch options
+  const launchOptions = {
     headless: false,
     ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
+    ...(storageStatePath ? { storageState: storageStatePath } : {}),
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -35,9 +144,12 @@ export async function launchBrowserWithExtension(options = {}) {
       "--no-default-browser-check",
       "--enable-unsafe-extension-debugging"
     ]
-  });
+  };
 
-  return { context, userDataDir };
+  const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+
+  // Return sessionStorage data for later restoration if needed
+  return { context, userDataDir, sessionStorageData };
 }
 
 /**
@@ -56,6 +168,55 @@ export async function cleanupBrowser(context, userDataDir) {
     recursive: true,
     retryDelay: 250
   }).catch(() => {});
+}
+
+/**
+ * Restore sessionStorage data on a page after navigation.
+ * Call this after page.goto() for ChatGPT pages to restore session state.
+ * @param {import("playwright").Page} page
+ * @param {Object} sessionStorageData - Key-value pairs to set in sessionStorage
+ */
+export async function restoreSessionStorage(page, sessionStorageData) {
+  if (!sessionStorageData || Object.keys(sessionStorageData).length === 0) {
+    return;
+  }
+
+  await page.evaluate((data) => {
+    for (const [key, value] of Object.entries(data)) {
+      try {
+        sessionStorage.setItem(key, value);
+      } catch {
+        // Ignore sessionStorage errors (e.g., quota exceeded)
+      }
+    }
+  }, sessionStorageData);
+}
+
+/**
+ * Add sessionStorage restoration as an init script to a context.
+ * This will automatically restore sessionStorage when pages navigate.
+ * @param {import("playwright").BrowserContext} context
+ * @param {Object} sessionStorageData - Key-value pairs to restore
+ */
+export function addSessionStorageInitScript(context, sessionStorageData) {
+  if (!sessionStorageData || Object.keys(sessionStorageData).length === 0) {
+    return;
+  }
+
+  const script = `
+    () => {
+      const sessionData = ${JSON.stringify(sessionStorageData)};
+      try {
+        for (const [key, value] of Object.entries(sessionData)) {
+          sessionStorage.setItem(key, value);
+        }
+      } catch {
+        // Ignore - sessionStorage may be blocked
+      }
+    }
+  `;
+
+  context.addInitScript(script);
 }
 
 /**
