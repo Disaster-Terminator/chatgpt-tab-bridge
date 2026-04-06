@@ -496,14 +496,19 @@ function buildRelayEnvelope({
   sourceRole,
   round,
   message,
+  hopId = null,
   continueMarker = DEFAULT_SETTINGS.continueMarker,
   bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
 }) {
-  return [
+  const headerLines = [
     "[BRIDGE_CONTEXT]",
     `source: ${sourceRole}`,
     `round: ${round}`,
-    "",
+    ...hopId ? [`hop: ${hopId}`] : [],
+    ""
+  ];
+  return [
+    ...headerLines,
     normalizeAssistantText(message),
     "",
     "[BRIDGE_INSTRUCTION]",
@@ -620,14 +625,29 @@ function calculateTextOverlap(textA, textB) {
   }
   return matchCount / Math.max(wordsA.length, wordsB.length);
 }
-function verifyPayloadCorrelation(latestUserText, relayPayload) {
+function extractHopIdFromPayload(relayPayload) {
+  const match = normalizeAssistantText(relayPayload).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return match?.[1] ?? null;
+}
+function verifyPayloadCorrelation(latestUserText, relayPayload, expectedHopId) {
   if (!latestUserText || !relayPayload) {
     return false;
   }
-  if (containsBridgeEnvelope(latestUserText)) {
+  const normalizedLatest = normalizeAssistantText(latestUserText);
+  const normalizedPayload = normalizeAssistantText(relayPayload);
+  if (!normalizedLatest || !normalizedPayload) {
+    return false;
+  }
+  const hopId = normalizeAssistantText(expectedHopId ?? "") || extractHopIdFromPayload(normalizedPayload);
+  if (hopId) {
+    const latestLower = normalizedLatest.toLowerCase();
+    const expectedMarker = `hop: ${hopId}`.toLowerCase();
+    return latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker);
+  }
+  if (containsBridgeEnvelope(normalizedLatest)) {
     return true;
   }
-  const overlap = calculateTextOverlap(latestUserText, relayPayload);
+  const overlap = calculateTextOverlap(normalizedLatest, normalizedPayload);
   if (overlap >= 0.5) {
     return true;
   }
@@ -649,13 +669,18 @@ function evaluateSubmissionVerification(input) {
     currentUserHash,
     currentGenerating,
     currentLatestUserText,
-    relayPayloadText
+    relayPayloadText,
+    expectedHopId
   } = input;
   const latestUserTextChanged = hasLatestUserTextChanged(
     baselineLatestUserText,
     currentLatestUserText
   );
-  const payloadCorrelated = verifyPayloadCorrelation(currentLatestUserText, relayPayloadText);
+  const payloadCorrelated = verifyPayloadCorrelation(
+    currentLatestUserText,
+    relayPayloadText,
+    expectedHopId
+  );
   if (!latestUserTextChanged || !payloadCorrelated) {
     return {
       verified: false,
@@ -781,11 +806,11 @@ function addRuntimeEvent(event) {
 function getRecentRuntimeEvents() {
   return [...runtimeEvents];
 }
-function formatVerificationBaseline(baselineUserHash, baselineGenerating, baselineLatestUserText) {
+function formatVerificationBaseline(baselineUserHash, baselineGenerating, baselineLatestUserText, hopId) {
   if (baselineLatestUserText) {
-    return `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}`;
+    return `hash:${baselineUserHash},gen:${baselineGenerating},hop:${hopId ?? "none"},text:${baselineLatestUserText.slice(0, 50)}`;
   }
-  return `hash:${baselineUserHash},gen:${baselineGenerating},text:null`;
+  return `hash:${baselineUserHash},gen:${baselineGenerating},hop:${hopId ?? "none"},text:null`;
 }
 function formatVerificationPollSample(currentUserHash, currentGenerating, currentLatestUserText) {
   return `hash:${currentUserHash},gen:${currentGenerating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`;
@@ -801,6 +826,7 @@ function summarizeDispatchReadback(sendResult) {
     accepted,
     `signal:${signal}`,
     `text_changed:${evidence.textChanged}`,
+    `payload_released:${evidence.payloadReleased}`,
     `button_changed:${evidence.buttonStateChanged}`,
     `attempts:${evidence.attempts}`
   ].join("|");
@@ -823,7 +849,14 @@ function resolveDispatchFailureCode(sendResult) {
   if (sendResult.ok && sendResult.dispatchAccepted === true) {
     return "dispatch_accepted";
   }
-  return sendResult.dispatchErrorCode ?? sendResult.error ?? "dispatch_rejected";
+  if (!sendResult.ok) {
+    const dispatchCode = "dispatchErrorCode" in sendResult ? sendResult.dispatchErrorCode : void 0;
+    return dispatchCode ?? sendResult.error ?? "dispatch_rejected";
+  }
+  return sendResult.error ?? "dispatch_rejected";
+}
+function createVerificationHopId(sessionId, round) {
+  return `s${sessionId}-r${round}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeState();
@@ -1254,10 +1287,12 @@ async function runRelayLoop(token, settings) {
       });
       return;
     }
+    const verificationHopId = createVerificationHopId(state.sessionId, state.round + 1);
     const envelope = buildRelayEnvelope({
       sourceRole,
       round: state.round + 1,
       message: sourceText,
+      hopId: verificationHopId,
       continueMarker: settings.continueMarker
     });
     await updateState({
@@ -1271,14 +1306,34 @@ async function runRelayLoop(token, settings) {
         selector: "ok"
       }
     });
-    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
-    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
-    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
-    const baselineLatestUserText = baselineTargetActivity.ok ? await getTargetLatestUserText(targetBinding.tabId) : null;
+    const baselineCapture = await captureSubmissionVerificationBaseline(targetBinding.tabId);
+    if (!baselineCapture.ok) {
+      const baselineFailureReason = "reason" in baselineCapture ? baselineCapture.reason : "baseline_capture_failed";
+      addRuntimeEvent({
+        phaseStep: "baseline_capture_failed",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: "baseline_capture_failed",
+        sendTriggerMode: "not_triggered",
+        verificationBaseline: `hop:${verificationHopId}`,
+        verificationPollSample: baselineFailureReason,
+        verificationVerdict: "baseline_capture_failed"
+      });
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:baseline_capture_failed`
+      });
+      return;
+    }
+    const baselineUserHash = baselineCapture.userHash;
+    const baselineGenerating = baselineCapture.generating;
+    const baselineLatestUserText = baselineCapture.latestUserText;
     const verificationBaselineSummary = formatVerificationBaseline(
       baselineUserHash,
       baselineGenerating,
-      baselineLatestUserText
+      baselineLatestUserText,
+      verificationHopId
     );
     addRuntimeEvent({
       phaseStep: "pre_send_baseline",
@@ -1364,7 +1419,9 @@ async function runRelayLoop(token, settings) {
         });
         continue;
       }
-      const currentLatestUserText = await getTargetLatestUserText(targetBinding.tabId);
+      const currentLatestUserTextResult = await getTargetLatestUserText(targetBinding.tabId);
+      const currentLatestUserText = currentLatestUserTextResult.ok ? currentLatestUserTextResult.text : null;
+      const currentLatestUserTextError = currentLatestUserTextResult.ok ? null : "error" in currentLatestUserTextResult ? currentLatestUserTextResult.error : "latest_user_text_unavailable";
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
@@ -1372,13 +1429,15 @@ async function runRelayLoop(token, settings) {
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
         currentLatestUserText,
-        relayPayloadText: envelope
+        relayPayloadText: envelope,
+        expectedHopId: verificationHopId
       });
-      const verificationPollSample = formatVerificationPollSample(
+      const verificationPollSampleBase = formatVerificationPollSample(
         activity.result.latestUserHash,
         activity.result.generating,
         currentLatestUserText
       );
+      const verificationPollSample = currentLatestUserTextError === null ? verificationPollSampleBase : `${verificationPollSampleBase}|text_error:${currentLatestUserTextError}`;
       lastVerificationPollSample = verificationPollSample;
       if (verificationResult.verified) {
         addRuntimeEvent({
@@ -1555,13 +1614,50 @@ async function getTargetLatestUserText(tabId) {
     const response = await chrome.tabs.sendMessage(tabId, {
       type: MESSAGE_TYPES.GET_LATEST_USER_TEXT
     });
-    if (response.ok) {
-      return response.text;
+    if (response?.ok === true) {
+      return {
+        ok: true,
+        text: response.text
+      };
     }
-    return null;
+    return {
+      ok: false,
+      error: response?.error ?? "latest_user_text_unavailable"
+    };
   } catch {
-    return null;
+    return {
+      ok: false,
+      error: "latest_user_text_unavailable"
+    };
   }
+}
+async function captureSubmissionVerificationBaseline(tabId, timeoutMs = 5e3, pollIntervalMs = 250) {
+  const startedAt = Date.now();
+  let lastReason = "thread_activity_unavailable";
+  while (Date.now() - startedAt < timeoutMs) {
+    const activity = await requestThreadActivity(tabId);
+    if (!activity.ok) {
+      lastReason = `thread_activity:${"error" in activity ? activity.error : "unavailable"}`;
+      await sleep(pollIntervalMs);
+      continue;
+    }
+    const latestUserText = await getTargetLatestUserText(tabId);
+    if (!latestUserText.ok) {
+      lastReason = `latest_user_text:${"error" in latestUserText ? latestUserText.error : "unavailable"}`;
+      await sleep(pollIntervalMs);
+      continue;
+    }
+    return {
+      ok: true,
+      userHash: activity.result.latestUserHash,
+      generating: activity.result.generating,
+      latestUserText: latestUserText.text
+    };
+  }
+  return {
+    ok: false,
+    reason: lastReason
+  };
 }
 var SEND_MESSAGE_TIMEOUT_MS = 8e3;
 async function sendRelayMessage(tabId, text) {

@@ -117,7 +117,16 @@ function calculateTextOverlap(textA, textB) {
 function containsBridgeEnvelopePrefix(text) {
   return text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
 }
+function extractHopMarker(text) {
+  const match = normalizeText(text).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return match?.[1] ?? null;
+}
 function showsPayloadAdoption(latestText, expectedText) {
+  const hopMarker = extractHopMarker(expectedText);
+  if (hopMarker) {
+    const latestLower = normalizeText(latestText).toLowerCase();
+    return latestLower.includes(`[bridge_context]`) && latestLower.includes(`hop: ${hopMarker}`.toLowerCase());
+  }
   if (containsBridgeEnvelopePrefix(latestText)) {
     return true;
   }
@@ -1198,6 +1207,7 @@ async function sendRelayMessage(text) {
         postTriggerText: composerTextBeforeTrigger.slice(0, 120),
         latestUserPreview: submissionBaseline.latestUserText?.slice(0, 120) ?? null,
         textChanged: false,
+        payloadReleased: false,
         buttonStateChanged: false,
         ackSignal: "none",
         attempts: 0
@@ -1232,6 +1242,7 @@ async function sendRelayMessage(text) {
       sendButton
     });
     if (!sendResult.ok) {
+      const latestUserTextResponse = getLatestUserText();
       const failedEvidence = {
         baselineUserHash: submissionBaseline.userHash,
         currentUserHash: findLatestUserMessageHash(),
@@ -1240,8 +1251,9 @@ async function sendRelayMessage(text) {
         baselineComposerPreview: submissionBaseline.composerText.slice(0, 120),
         preTriggerText: composerTextBeforeTrigger.slice(0, 120),
         postTriggerText: readComposerText(composer).slice(0, 120),
-        latestUserPreview: getLatestUserText().ok ? getLatestUserText().text?.slice(0, 120) ?? null : null,
+        latestUserPreview: latestUserTextResponse.ok ? latestUserTextResponse.text?.slice(0, 120) ?? null : null,
         textChanged: false,
+        payloadReleased: false,
         buttonStateChanged: false,
         ackSignal: "none",
         attempts: 1
@@ -1364,6 +1376,7 @@ async function waitForDispatchAcceptance(input) {
     postTriggerText: input.preTriggerComposerText.slice(0, 120),
     latestUserPreview: input.baseline.latestUserText?.slice(0, 120) ?? null,
     textChanged: false,
+    payloadReleased: false,
     buttonStateChanged: false,
     ackSignal: "none",
     attempts
@@ -1376,6 +1389,7 @@ async function waitForDispatchAcceptance(input) {
     const currentGenerating = isGenerationInProgressFromDoc();
     const postTriggerComposerText = readComposerText(input.composer);
     const sendButtonAfter = captureSendButtonState(input.sendButton);
+    const payloadReleased = !stillContainsExpectedPayload(postTriggerComposerText, input.text);
     const textChanged = postTriggerComposerText.length < input.preTriggerComposerText.length * 0.3;
     const buttonStateChanged = hasButtonStateChanged(input.sendButtonBefore, sendButtonAfter);
     const ack = checkAckSignals({
@@ -1390,7 +1404,7 @@ async function waitForDispatchAcceptance(input) {
       lastSignal = ack.signal;
     }
     const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
-    const hasSubmissionTransition = textChanged || buttonStateChanged || hasUserThreadChange;
+    const hasSubmissionTransition = textChanged || payloadReleased || hasUserThreadChange;
     lastEvidence = {
       baselineUserHash: input.baseline.userHash,
       currentUserHash,
@@ -1401,11 +1415,19 @@ async function waitForDispatchAcceptance(input) {
       postTriggerText: postTriggerComposerText.slice(0, 120),
       latestUserPreview: latestUserText?.slice(0, 120) ?? null,
       textChanged,
+      payloadReleased,
       buttonStateChanged,
       ackSignal: ack?.signal ?? lastSignal,
       attempts
     };
-    if (ack?.ok && ack.signal !== "composer_cleared" && hasSubmissionTransition) {
+    if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+      return {
+        accepted: true,
+        signal: ack.signal,
+        evidence: lastEvidence
+      };
+    }
+    if (ack?.ok && ack.signal === "generation_started" && hasSubmissionTransition && payloadReleased) {
       return {
         accepted: true,
         signal: ack.signal,

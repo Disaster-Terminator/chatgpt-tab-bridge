@@ -9,6 +9,7 @@
  * Runtime events are exported only as auxiliary evidence.
  *
  * Usage:
+ *   pnpm run test:real-hop
  *   pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
  *   pnpm run test:real-hop -- --skip-bootstrap
  */
@@ -23,6 +24,8 @@ import {
   getTwoPages,
   readFlag,
   readPathFlag,
+  bootstrapAnonymousThread,
+  buildBootstrapPrompt,
   ensureOverlay,
   clickOverlayBind,
   clickOverlayAction,
@@ -108,8 +111,14 @@ function isPayloadCorrelated(latestUserText, payloadFingerprint) {
     return false;
   }
 
-  if (normalized.includes("[BRIDGE_CONTEXT]")) {
+  const hasBridgeContext = normalized.includes("[BRIDGE_CONTEXT]");
+  const hasBridgeInstruction = normalized.includes("[BRIDGE_INSTRUCTION]");
+  if (hasBridgeContext && hasBridgeInstruction) {
     return true;
+  }
+
+  if (!hasBridgeContext) {
+    return false;
   }
 
   if (normalized.includes("source: A") || normalized.includes("source: B")) {
@@ -343,6 +352,30 @@ async function savePartialFailureScreenshots(pageA, pageB, popupPage) {
   await Promise.all(captures);
 }
 
+async function bootstrapThreadWithRetry(page, seedLabel, roleLabel, maxAttempts = 2) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await bootstrapAnonymousThread(page, seedLabel, buildBootstrapPrompt(roleLabel));
+      return;
+    } catch (error) {
+      lastError = error;
+      logLine(
+        `bootstrap ${seedLabel} 第 ${attempt}/${maxAttempts} 次失败: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+
+      if (attempt < maxAttempts) {
+        await page.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" });
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`bootstrap_failed:${seedLabel}`);
+}
+
 async function verifyRealHop({ pageA, pageB, popupPage, baselineTarget, payloadFingerprint }) {
   /** @type {Array<Record<string, unknown>>} */
   const observationLog = [];
@@ -443,7 +476,16 @@ async function verifyRealHop({ pageA, pageB, popupPage, baselineTarget, payloadF
       };
     }
 
-    if (independentAcceptance && waitingReplyEvent) {
+    if (hasWaitingStep(popupSnapshot.currentStep) && !independentAcceptance && !independentAcceptedNow) {
+      return {
+        success: false,
+        reason: "popup_waiting_observed_before_independent_acceptance",
+        observationLog,
+        acceptance: independentAcceptance
+      };
+    }
+
+    if (independentAcceptance && (waitingReplyEvent || hasWaitingStep(popupSnapshot.currentStep))) {
       return {
         success: true,
         reason: "independent_acceptance_before_waiting_reply",
@@ -477,6 +519,9 @@ let verificationResult = null;
 let popupSnapshot = null;
 let baselineSource = null;
 let baselineTarget = null;
+let bootstrapMode = "provided_urls";
+let resolvedUrlA = null;
+let resolvedUrlB = null;
 
 let pageA = null;
 let pageB = null;
@@ -486,12 +531,16 @@ try {
   [pageA, pageB] = await getTwoPages(context);
 
   if (urlA && urlB) {
+    bootstrapMode = "provided_urls";
     logLine("使用 --url-a / --url-b 真实线程。\n");
     await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
     await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
     await assertSupportedThreadUrl(pageA, "pageA (--url-a)");
     await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
+    resolvedUrlA = pageA.url();
+    resolvedUrlB = pageB.url();
   } else if (skipBootstrap) {
+    bootstrapMode = "manual_skip_bootstrap";
     logLine("--skip-bootstrap 模式：请手动导航到两个真实线程 URL。\n");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
@@ -503,8 +552,25 @@ try {
     });
     await assertSupportedThreadUrl(pageA, "pageA (manual)");
     await assertSupportedThreadUrl(pageB, "pageB (manual)");
+    resolvedUrlA = pageA.url();
+    resolvedUrlB = pageB.url();
   } else {
-    throw new Error("real-hop 仅支持真实线程 URL。请提供 --url-a/--url-b，或使用 --skip-bootstrap 手动导航。");
+    bootstrapMode = "auto_bootstrap";
+    logLine("未提供线程 URL，开始自动 bootstrap 两个线程。\n");
+    await Promise.all([
+      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+    ]);
+
+    await bootstrapThreadWithRetry(pageA, "seed-a", "A");
+    await bootstrapThreadWithRetry(pageB, "seed-b", "B");
+    await assertSupportedThreadUrl(pageA, "pageA (auto-bootstrap)");
+    await assertSupportedThreadUrl(pageB, "pageB (auto-bootstrap)");
+
+    resolvedUrlA = pageA.url();
+    resolvedUrlB = pageB.url();
+    logLine(`自动 bootstrap 成功: A=${resolvedUrlA}`);
+    logLine(`自动 bootstrap 成功: B=${resolvedUrlB}`);
   }
 
   await ensureOverlay(pageA);
@@ -580,9 +646,20 @@ try {
         : String(runError)
       : verificationResult?.reason || "independent_acceptance_before_waiting_reply",
     evidenceDir,
-    urlA: urlA || null,
-    urlB: urlB || null,
-    skipBootstrap,
+    browser: {
+      strategy: "playwright-persistent-chromium-with-extension",
+      executablePath: browserExecutablePath || "playwright-default"
+    },
+    input: {
+      urlA: urlA || null,
+      urlB: urlB || null,
+      skipBootstrap
+    },
+    bootstrapMode,
+    resolvedUrls: {
+      urlA: resolvedUrlA,
+      urlB: resolvedUrlB
+    },
     baseline: {
       source: baselineSource,
       target: baselineTarget
@@ -594,7 +671,18 @@ try {
     lastRuntimeEvents: finalRuntimeEvents.slice(-12)
   };
 
+  const acceptanceVerdict = {
+    status: runError ? "FAIL" : "PASS",
+    acceptanceReason: verificationResult?.reason || null,
+    independentAcceptance: verificationResult?.acceptance || null,
+    runtimeAuxiliary: {
+      eventCount: finalRuntimeEvents.length,
+      phaseSteps: finalRuntimeEvents.map((event) => event.phaseStep)
+    }
+  };
+
   await writeJson("summary.json", summary);
+  await writeJson("acceptance-verdict.json", acceptanceVerdict);
   await writeJson("runtime-events.json", finalRuntimeEvents);
   await writeJson("observation-log.json", verificationResult?.observationLog || []);
   await writeText("run.log", `${runLog.join("\n")}\n`);

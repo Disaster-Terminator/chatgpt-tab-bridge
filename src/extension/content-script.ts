@@ -9,6 +9,7 @@ import {
   isGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
+  stillContainsExpectedPayload,
   triggerComposerSend
 } from "./content-helpers.ts";
 import { MESSAGE_TYPES } from "./core/constants.ts";
@@ -665,6 +666,7 @@ async function sendRelayMessage(text: string): Promise<{
         postTriggerText: composerTextBeforeTrigger.slice(0, 120),
         latestUserPreview: submissionBaseline.latestUserText?.slice(0, 120) ?? null,
         textChanged: false,
+        payloadReleased: false,
         buttonStateChanged: false,
         ackSignal: "none",
         attempts: 0
@@ -718,6 +720,7 @@ async function sendRelayMessage(text: string): Promise<{
           ? latestUserTextResponse.text?.slice(0, 120) ?? null
           : null,
         textChanged: false,
+        payloadReleased: false,
         buttonStateChanged: false,
         ackSignal: "none",
         attempts: 1
@@ -890,6 +893,7 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
     postTriggerText: input.preTriggerComposerText.slice(0, 120),
     latestUserPreview: input.baseline.latestUserText?.slice(0, 120) ?? null,
     textChanged: false,
+    payloadReleased: false,
     buttonStateChanged: false,
     ackSignal: "none",
     attempts
@@ -904,6 +908,7 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
     const currentGenerating = isGenerationInProgressFromDoc();
     const postTriggerComposerText = readComposerText(input.composer);
     const sendButtonAfter = captureSendButtonState(input.sendButton);
+    const payloadReleased = !stillContainsExpectedPayload(postTriggerComposerText, input.text);
     const textChanged = postTriggerComposerText.length < input.preTriggerComposerText.length * 0.3;
     const buttonStateChanged = hasButtonStateChanged(input.sendButtonBefore, sendButtonAfter);
 
@@ -921,7 +926,7 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
     }
 
     const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
-    const hasSubmissionTransition = textChanged || buttonStateChanged || hasUserThreadChange;
+    const hasSubmissionTransition = textChanged || payloadReleased || hasUserThreadChange;
 
     lastEvidence = {
       baselineUserHash: input.baseline.userHash,
@@ -933,12 +938,21 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
       postTriggerText: postTriggerComposerText.slice(0, 120),
       latestUserPreview: latestUserText?.slice(0, 120) ?? null,
       textChanged,
+      payloadReleased,
       buttonStateChanged,
       ackSignal: ack?.signal ?? lastSignal,
       attempts
     };
 
-    if (ack?.ok && ack.signal !== "composer_cleared" && hasSubmissionTransition) {
+    if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+      return {
+        accepted: true,
+        signal: ack.signal,
+        evidence: lastEvidence
+      };
+    }
+
+    if (ack?.ok && ack.signal === "generation_started" && hasSubmissionTransition && payloadReleased) {
       return {
         accepted: true,
         signal: ack.signal,

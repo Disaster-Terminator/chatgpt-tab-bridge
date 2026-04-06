@@ -197,11 +197,22 @@ function containsBridgeEnvelopePrefix(text: string): boolean {
   return text.includes("[BRIDGE_CONTEXT]") || text.includes("[来自");
 }
 
+function extractHopMarker(text: string): string | null {
+  const match = normalizeText(text).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return match?.[1] ?? null;
+}
+
 /**
  * Check if the latest user message shows payload adoption.
  * This checks if the expected text is present in any form in the latest user message.
  */
 function showsPayloadAdoption(latestText: string, expectedText: string): boolean {
+  const hopMarker = extractHopMarker(expectedText);
+  if (hopMarker) {
+    const latestLower = normalizeText(latestText).toLowerCase();
+    return latestLower.includes(`[bridge_context]`) && latestLower.includes(`hop: ${hopMarker}`.toLowerCase());
+  }
+
   // Check for bridge envelope prefix
   if (containsBridgeEnvelopePrefix(latestText)) {
     return true;

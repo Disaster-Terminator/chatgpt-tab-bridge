@@ -71,6 +71,10 @@ type SettledReplyResult =
   | AssistantSnapshotResponse
   | { ok: false; reason: "loop_cancelled" | StopReason };
 
+type LatestUserTextResponse =
+  | { ok: true; text: string | null }
+  | { ok: false; error: string };
+
 interface WaitForSettledReplyInput {
   tabId: number;
   baselineHash: string;
@@ -103,13 +107,14 @@ function getRecentRuntimeEvents(): RuntimeEvent[] {
 function formatVerificationBaseline(
   baselineUserHash: string | null,
   baselineGenerating: boolean,
-  baselineLatestUserText: string | null
+  baselineLatestUserText: string | null,
+  hopId: string | null
 ): string {
   if (baselineLatestUserText) {
-    return `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}`;
+    return `hash:${baselineUserHash},gen:${baselineGenerating},hop:${hopId ?? "none"},text:${baselineLatestUserText.slice(0, 50)}`;
   }
 
-  return `hash:${baselineUserHash},gen:${baselineGenerating},text:null`;
+  return `hash:${baselineUserHash},gen:${baselineGenerating},hop:${hopId ?? "none"},text:null`;
 }
 
 function formatVerificationPollSample(
@@ -133,6 +138,7 @@ function summarizeDispatchReadback(sendResult: RelayMessageResponse): string {
     accepted,
     `signal:${signal}`,
     `text_changed:${evidence.textChanged}`,
+    `payload_released:${evidence.payloadReleased}`,
     `button_changed:${evidence.buttonStateChanged}`,
     `attempts:${evidence.attempts}`
   ].join("|");
@@ -165,6 +171,10 @@ function resolveDispatchFailureCode(sendResult: RelayMessageResponse): string {
   }
 
   return sendResult.error ?? "dispatch_rejected";
+}
+
+function createVerificationHopId(sessionId: number, round: number): string {
+  return `s${sessionId}-r${round}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 chrome.runtime.onInstalled.addListener(async (): Promise<void> => {
@@ -709,10 +719,12 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       return;
     }
 
+    const verificationHopId = createVerificationHopId(state.sessionId, state.round + 1);
     const envelope = buildRelayEnvelope({
       sourceRole,
       round: state.round + 1,
       message: sourceText,
+      hopId: verificationHopId,
       continueMarker: settings.continueMarker
     });
 
@@ -728,16 +740,39 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       }
     });
 
-    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
-    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
-    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
-    const baselineLatestUserText = baselineTargetActivity.ok
-      ? (await getTargetLatestUserText(targetBinding.tabId))
-      : null;
+    const baselineCapture = await captureSubmissionVerificationBaseline(targetBinding.tabId);
+    if (!baselineCapture.ok) {
+      const baselineFailureReason = "reason" in baselineCapture
+        ? baselineCapture.reason
+        : "baseline_capture_failed";
+
+      addRuntimeEvent({
+        phaseStep: "baseline_capture_failed",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: "baseline_capture_failed",
+        sendTriggerMode: "not_triggered",
+        verificationBaseline: `hop:${verificationHopId}`,
+        verificationPollSample: baselineFailureReason,
+        verificationVerdict: "baseline_capture_failed"
+      });
+
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:baseline_capture_failed`
+      });
+      return;
+    }
+
+    const baselineUserHash = baselineCapture.userHash;
+    const baselineGenerating = baselineCapture.generating;
+    const baselineLatestUserText = baselineCapture.latestUserText;
     const verificationBaselineSummary = formatVerificationBaseline(
       baselineUserHash,
       baselineGenerating,
-      baselineLatestUserText
+      baselineLatestUserText,
+      verificationHopId
     );
 
     addRuntimeEvent({
@@ -835,7 +870,15 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         continue;
       }
 
-      const currentLatestUserText = await getTargetLatestUserText(targetBinding.tabId);
+      const currentLatestUserTextResult = await getTargetLatestUserText(targetBinding.tabId);
+      const currentLatestUserText = currentLatestUserTextResult.ok
+        ? currentLatestUserTextResult.text
+        : null;
+      const currentLatestUserTextError = currentLatestUserTextResult.ok
+        ? null
+        : ("error" in currentLatestUserTextResult
+            ? currentLatestUserTextResult.error
+            : "latest_user_text_unavailable");
 
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
@@ -844,14 +887,18 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
         currentLatestUserText,
-        relayPayloadText: envelope
+        relayPayloadText: envelope,
+        expectedHopId: verificationHopId
       });
 
-      const verificationPollSample = formatVerificationPollSample(
+      const verificationPollSampleBase = formatVerificationPollSample(
         activity.result.latestUserHash,
         activity.result.generating,
         currentLatestUserText
       );
+      const verificationPollSample = currentLatestUserTextError === null
+        ? verificationPollSampleBase
+        : `${verificationPollSampleBase}|text_error:${currentLatestUserTextError}`;
       lastVerificationPollSample = verificationPollSample;
 
       if (verificationResult.verified) {
@@ -1046,18 +1093,77 @@ async function requestThreadActivity(tabId: number): Promise<ThreadActivityRespo
   }
 }
 
-async function getTargetLatestUserText(tabId: number): Promise<string | null> {
+async function getTargetLatestUserText(tabId: number): Promise<LatestUserTextResponse> {
   try {
-    const response = await chrome.tabs.sendMessage<{ ok: true; text: string | null } | { ok: false; error: string }>(tabId, {
+    const response = await chrome.tabs.sendMessage<LatestUserTextResponse>(tabId, {
       type: MESSAGE_TYPES.GET_LATEST_USER_TEXT
     });
-    if (response.ok) {
-      return response.text;
+
+    if (response?.ok === true) {
+      return {
+        ok: true,
+        text: response.text
+      };
     }
-    return null;
+
+    return {
+      ok: false,
+      error: response?.error ?? "latest_user_text_unavailable"
+    };
   } catch {
-    return null;
+    return {
+      ok: false,
+      error: "latest_user_text_unavailable"
+    };
   }
+}
+
+async function captureSubmissionVerificationBaseline(
+  tabId: number,
+  timeoutMs = 5000,
+  pollIntervalMs = 250
+): Promise<
+  | {
+      ok: true;
+      userHash: string | null;
+      generating: boolean;
+      latestUserText: string | null;
+    }
+  | {
+      ok: false;
+      reason: string;
+    }
+> {
+  const startedAt = Date.now();
+  let lastReason = "thread_activity_unavailable";
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const activity = await requestThreadActivity(tabId);
+    if (!activity.ok) {
+      lastReason = `thread_activity:${"error" in activity ? activity.error : "unavailable"}`;
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
+    const latestUserText = await getTargetLatestUserText(tabId);
+    if (!latestUserText.ok) {
+      lastReason = `latest_user_text:${"error" in latestUserText ? latestUserText.error : "unavailable"}`;
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
+    return {
+      ok: true,
+      userHash: activity.result.latestUserHash,
+      generating: activity.result.generating,
+      latestUserText: latestUserText.text
+    };
+  }
+
+  return {
+    ok: false,
+    reason: lastReason
+  };
 }
 
 const SEND_MESSAGE_TIMEOUT_MS = 8000;

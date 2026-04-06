@@ -12,6 +12,7 @@ interface RelayEnvelopeInput {
   sourceRole: BridgeRole;
   round: number;
   message: unknown;
+  hopId?: string | null;
   continueMarker?: string;
   bridgeStatePrefix?: string;
 }
@@ -53,14 +54,20 @@ export function buildRelayEnvelope({
   sourceRole,
   round,
   message,
+  hopId = null,
   continueMarker = DEFAULT_SETTINGS.continueMarker,
   bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
 }: RelayEnvelopeInput): string {
-  return [
+  const headerLines = [
     "[BRIDGE_CONTEXT]",
     `source: ${sourceRole}`,
     `round: ${round}`,
-    "",
+    ...(hopId ? [`hop: ${hopId}`] : []),
+    ""
+  ];
+
+  return [
+    ...headerLines,
     normalizeAssistantText(message),
     "",
     "[BRIDGE_INSTRUCTION]",
@@ -186,6 +193,7 @@ export interface SubmissionVerificationInput {
   currentGenerating: boolean;
   currentLatestUserText: string | null;
   relayPayloadText: string;
+  expectedHopId?: string | null;
 }
 
 export interface SubmissionVerificationResult {
@@ -222,16 +230,39 @@ function calculateTextOverlap(textA: string, textB: string): number {
   return matchCount / Math.max(wordsA.length, wordsB.length);
 }
 
-function verifyPayloadCorrelation(latestUserText: string | null, relayPayload: string): boolean {
+function extractHopIdFromPayload(relayPayload: string): string | null {
+  const match = normalizeAssistantText(relayPayload).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return match?.[1] ?? null;
+}
+
+function verifyPayloadCorrelation(
+  latestUserText: string | null,
+  relayPayload: string,
+  expectedHopId: string | null | undefined
+): boolean {
   if (!latestUserText || !relayPayload) {
     return false;
   }
+
+  const normalizedLatest = normalizeAssistantText(latestUserText);
+  const normalizedPayload = normalizeAssistantText(relayPayload);
+
+  if (!normalizedLatest || !normalizedPayload) {
+    return false;
+  }
+
+  const hopId = normalizeAssistantText(expectedHopId ?? "") || extractHopIdFromPayload(normalizedPayload);
+  if (hopId) {
+    const latestLower = normalizedLatest.toLowerCase();
+    const expectedMarker = `hop: ${hopId}`.toLowerCase();
+    return latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker);
+  }
   
-  if (containsBridgeEnvelope(latestUserText)) {
+  if (containsBridgeEnvelope(normalizedLatest)) {
     return true;
   }
   
-  const overlap = calculateTextOverlap(latestUserText, relayPayload);
+  const overlap = calculateTextOverlap(normalizedLatest, normalizedPayload);
   if (overlap >= 0.5) {
     return true;
   }
@@ -261,14 +292,19 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
     currentUserHash,
     currentGenerating,
     currentLatestUserText,
-    relayPayloadText
+    relayPayloadText,
+    expectedHopId
   } = input;
 
   const latestUserTextChanged = hasLatestUserTextChanged(
     baselineLatestUserText,
     currentLatestUserText
   );
-  const payloadCorrelated = verifyPayloadCorrelation(currentLatestUserText, relayPayloadText);
+  const payloadCorrelated = verifyPayloadCorrelation(
+    currentLatestUserText,
+    relayPayloadText,
+    expectedHopId
+  );
 
   if (!latestUserTextChanged || !payloadCorrelated) {
     return {

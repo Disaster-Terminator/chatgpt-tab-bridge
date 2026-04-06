@@ -237,6 +237,7 @@ export interface RelayDispatchEvidence {
   postTriggerText: string;
   latestUserPreview: string | null;
   textChanged: boolean;
+  payloadReleased: boolean;
   buttonStateChanged: boolean;
   ackSignal: RelayDispatchSignal;
   attempts: number;

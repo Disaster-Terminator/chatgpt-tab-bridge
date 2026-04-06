@@ -115,8 +115,8 @@
 
 - 目前主要验证的是 popup / overlay / 状态机 / 控制逻辑
 - 真实 ChatGPT 页面 DOM 仍可能变化，selector 还需要按实际页面微调
-- 未登录匿名根页虽然可能允许输入，但不稳定进入可绑定线程 URL，因此不能作为正式联调基线
-- 更适合用真实线程 URL 做半自动联调
+- real-hop 默认会从根页自动 bootstrap 两个线程；若当前环境不支持匿名创建线程，脚本会输出诊断并可改用 `--url-a/--url-b` 或 `--skip-bootstrap`
+- semi / e2e 仍更适合作为控制流辅助联调，主裁决以 real-hop 为准
 
 ## 目录说明
 
@@ -137,7 +137,9 @@ pnpm run build
 pnpm test
 pnpm run test:smoke
 pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
+pnpm run test:real-hop
 pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
+pnpm run test:real-hop -- --skip-bootstrap
 ```
 
 ### `pnpm run build`
@@ -188,11 +190,13 @@ pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
 
 定位：辅助场景脚本，不作为主链路真实性验收。
 
-### `pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>`
+### `pnpm run test:real-hop`
 
 **唯一主链路真实性验收路径**。验证一次真实 first-hop 发送闭环：
 
-- 绑定两个真实 ChatGPT 线程
+- 默认自动 bootstrap 两个线程（A/B 各发送一条 seed message，等待形成可绑定线程 URL）
+- 也支持手动线程 URL：`--url-a <thread-a> --url-b <thread-b>`
+- 也支持手动导航：`--skip-bootstrap`
 - 启动 relay session
 - 基于目标页面独立观察验证：
   - latest user message 相对发送前 baseline 发生变化
@@ -200,6 +204,7 @@ pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
   - `waiting reply` 前必须已看到独立接受证据
 - 运行时事件链（`GET_RECENT_RUNTIME_EVENTS`）仅作为辅助证据导出，不单独决定通过
 - 自动导出证据包到 `tmp/real-hop-<timestamp>/`：
+  - `acceptance-verdict.json`
   - 关键步骤截图
   - `runtime-events.json`
   - `observation-log.json`

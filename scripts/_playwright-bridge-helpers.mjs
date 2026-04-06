@@ -308,53 +308,77 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
       await composer.focus({ force: true });
       await page.keyboard.insertText(prompt);
     }
+
+    await dismissCookieBanner(page);
     
     // Click send or press Enter
     const sendButton = page
       .locator('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="发送"], form button[type="submit"]')
       .first();
 
+    let dispatched = false;
     if (await sendButton.count()) {
       const clickable = await waitForEnabledButton(sendButton, 5000);
       if (clickable) {
-        await sendButton.click();
+        try {
+          await sendButton.click({ force: true, timeout: 5000 });
+        } catch {
+          // Fall through to alternative submit paths.
+        }
+
+        dispatched = await waitForPromptDispatch(page, composer, prompt);
+        if (!dispatched) {
+          await sendButton.evaluate((node) => node.click()).catch(() => {});
+          dispatched = await waitForPromptDispatch(page, composer, prompt);
+        }
+
+        if (!dispatched) {
+          await page.keyboard.press("Enter");
+          dispatched = await waitForPromptDispatch(page, composer, prompt);
+        }
       } else {
         await page.keyboard.press("Enter");
+        dispatched = await waitForPromptDispatch(page, composer, prompt);
       }
     } else {
       await page.keyboard.press("Enter");
+      dispatched = await waitForPromptDispatch(page, composer, prompt);
     }
 
-    // Wait for assistant reply
+    if (!dispatched) {
+      throw new Error("seed_prompt_not_dispatched");
+    }
+
+    // Bootstrap success only requires transitioning to a bindable thread URL.
+    await waitUntilSupportedThreadUrl(page, 30000);
+
+    // Assistant generation can be delayed; treat as best-effort evidence only.
     const locator = page.locator('[data-message-author-role="assistant"]').last();
-    await locator.waitFor({ state: "visible", timeout: 60000 });
-    
-    // Wait for stable reply
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 60000) {
-      const text = (await locator.innerText()).trim();
-      if (text) break;
-      await page.waitForTimeout(1500);
+    try {
+      await locator.waitFor({ state: "visible", timeout: 15000 });
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 15000) {
+        const text = (await locator.innerText()).trim();
+        if (text) {
+          break;
+        }
+        await page.waitForTimeout(1000);
+      }
+    } catch {
+      // Ignore assistant timeout here. URL transition already proved bootstrap success.
     }
-
-    // Wait for supported URL to transition - use polling helper
-    await waitUntilSupportedThreadUrl(page, 20000);
     
     return; // Success!
     
   } catch (bootstrapError) {
     // Check if we actually got a response despite the error
-    const hasConversation = await page.evaluate(() => {
-      return !!document.querySelector('[data-message-author-role="assistant"]');
-    }).catch(() => false);
-    
     // Use canonical parser to validate URL
     const url = page.url();
     const parsed = parseChatGptThreadUrl(url);
     const hasSupportedUrl = parsed.supported;
     
-    // If we got both a response AND a supported URL, consider it a success
-    if (hasConversation && hasSupportedUrl) {
+    // If URL is already a supported thread, treat bootstrap as successful.
+    if (hasSupportedUrl) {
       return; // Success despite error message
     }
     
@@ -402,21 +426,43 @@ export async function sendPrompt(page, prompt) {
     await page.keyboard.insertText(prompt);
   }
 
+  await dismissCookieBanner(page);
+
   const sendButton = page
     .locator('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="发送"], form button[type="submit"]')
     .first();
 
+  let dispatched = false;
   if (await sendButton.count()) {
     const clickable = await waitForEnabledButton(sendButton, 5000);
     if (clickable) {
-      await sendButton.click();
-      await waitForPromptDispatch(page, composer, prompt);
-      return;
+      try {
+        await sendButton.click({ force: true, timeout: 5000 });
+      } catch {
+        // Fall through to alternative submit paths.
+      }
+
+      dispatched = await waitForPromptDispatch(page, composer, prompt);
+      if (!dispatched) {
+        await sendButton.evaluate((node) => node.click()).catch(() => {});
+        dispatched = await waitForPromptDispatch(page, composer, prompt);
+      }
+
+      if (!dispatched) {
+        await page.keyboard.press("Enter");
+        dispatched = await waitForPromptDispatch(page, composer, prompt);
+      }
     }
   }
 
-  await page.keyboard.press("Enter");
-  await waitForPromptDispatch(page, composer, prompt);
+  if (!dispatched) {
+    await page.keyboard.press("Enter");
+    dispatched = await waitForPromptDispatch(page, composer, prompt);
+  }
+
+  if (!dispatched) {
+    throw new Error("prompt_not_dispatched");
+  }
 }
 
 /**
@@ -509,18 +555,45 @@ export async function dismissCookieBanner(page) {
     'button:has-text("Manage Cookie")'
   ];
 
+  let dismissedAny = false;
   for (const selector of selectors) {
     const button = page.locator(selector).first();
     if (await button.count()) {
       try {
         await button.click({ force: true, timeout: 2000 });
-        await page.waitForTimeout(500);
-        return;
       } catch {
-        // Try the next known banner action.
+        await button.evaluate((node) => node.click()).catch(() => {});
       }
+
+      dismissedAny = true;
+      await page.waitForTimeout(300);
     }
   }
+
+  if (!dismissedAny) {
+    return;
+  }
+
+  await page
+    .evaluate(() => {
+      const targets = [
+        "拒绝非必需",
+        "全部接受",
+        "Reject non-essential",
+        "Accept all",
+        "Manage Cookie"
+      ];
+
+      for (const button of Array.from(document.querySelectorAll("button"))) {
+        const text = button.textContent?.trim() || "";
+        if (targets.includes(text)) {
+          button.click();
+        }
+      }
+    })
+    .catch(() => {});
+
+  await page.waitForTimeout(300);
 }
 
 /**
@@ -639,17 +712,19 @@ export async function waitForPromptDispatch(page, composer, prompt) {
     });
 
     if (!String(currentValue).includes(prompt)) {
-      return;
+      return true;
     }
 
     // Use canonical parser to check if URL is a supported thread
     const parsed = parseChatGptThreadUrl(page.url());
     if (parsed.supported) {
-      return;
+      return true;
     }
 
     await sleep(250);
   }
+
+  return false;
 }
 
 /**
