@@ -110,11 +110,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
    }
 
    if (message?.type === MESSAGE_TYPES.GET_LAST_ACK_DEBUG) {
-     sendResponse(lastAckDebug ?? { ok: false, error: "no_ack_debug" });
-     return true;
-   }
+      sendResponse(lastAckDebug ?? { ok: false, error: "no_ack_debug" });
+      return true;
+    }
 
-   if (message?.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
+    if (message?.type === MESSAGE_TYPES.GET_LATEST_USER_TEXT) {
+      try {
+        sendResponse(getLatestUserText());
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : "get_latest_user_text_failed"
+        });
+      }
+      return true;
+    }
+
+    if (message?.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
     overlaySnapshot = {
       ...overlaySnapshot,
       ...message.snapshot
@@ -619,6 +631,10 @@ async function sendRelayMessage(text: string): Promise<{
 
     const submissionBaseline = captureSubmissionBaseline(text);
     const applyMode = applyComposerText(composer, text);
+    
+    const composerText = readComposerText(composer);
+    const readbackValid = validateComposerReadback(composerText, text);
+    
     const sendButton = await waitForSendButton({
       composer,
       root: document
@@ -639,8 +655,16 @@ async function sendRelayMessage(text: string): Promise<{
       };
     }
 
-    // Dispatch-only semantics: success means the trigger was accepted,
-    // not that the message was submitted. Background handles verification.
+    if (!readbackValid) {
+      return {
+        ok: false,
+        mode: sendResult.mode,
+        applyMode,
+        dispatchAccepted: false,
+        error: "payload_not_applied"
+      };
+    }
+
     return {
       ok: true,
       mode: sendResult.mode,
@@ -654,6 +678,36 @@ async function sendRelayMessage(text: string): Promise<{
       error: error instanceof Error ? error.message : "send_relay_message_failed"
     };
   }
+}
+
+function validateComposerReadback(composerText: string, expectedText: string): boolean {
+  if (!composerText || !expectedText) {
+    return false;
+  }
+  
+  const normalizedComposer = normalizeText(composerText);
+  const normalizedExpected = normalizeText(expectedText);
+  
+  if (normalizedComposer.includes(normalizedExpected)) {
+    return true;
+  }
+  
+  const expectedWords = normalizedExpected.split(/\s+/).filter(w => w.length > 0);
+  const composerWords = normalizedComposer.split(/\s+/).filter(w => w.length > 0);
+  
+  if (expectedWords.length === 0) {
+    return false;
+  }
+  
+  let matchCount = 0;
+  for (const word of expectedWords) {
+    if (composerWords.some(cw => cw.includes(word) || word.includes(cw))) {
+      matchCount++;
+    }
+  }
+  
+  const overlap = matchCount / expectedWords.length;
+  return overlap >= 0.8;
 }
 
 function findLatestAssistantElement(): Element | null {
@@ -755,6 +809,33 @@ function findLatestMessageElement(role: "user" | "assistant"): Element | null {
   }
 
   return null;
+}
+
+function getLatestUserText(): { ok: true; text: string | null } | { ok: false; error: string } {
+  const selectors = [
+    '[data-message-author-role="user"]',
+    'article [data-message-author-role="user"]',
+    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+    "main [data-message-author-role='user']"
+  ];
+
+  for (const selector of selectors) {
+    const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
+      normalizeText(element.textContent || "")
+    );
+    if (candidates.length > 0) {
+      const latest = candidates[candidates.length - 1];
+      return {
+        ok: true,
+        text: normalizeText(latest.textContent || "")
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    text: null
+  };
 }
 
 function sleep(durationMs: number): Promise<void> {

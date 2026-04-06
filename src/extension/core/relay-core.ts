@@ -183,12 +183,59 @@ export interface SubmissionVerificationInput {
   baselineGenerating: boolean;
   currentUserHash: string | null;
   currentGenerating: boolean;
+  currentLatestUserText: string | null;
   relayPayloadText: string;
 }
 
 export interface SubmissionVerificationResult {
   verified: boolean;
-  reason: "user_hash_changed" | "generation_started" | "not_verified";
+  reason: "payload_accepted" | "generation_with_user_changed" | "not_verified";
+}
+
+function containsBridgeEnvelope(text: string): boolean {
+  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[来自");
+}
+
+function calculateTextOverlap(textA: string, textB: string): number {
+  if (!textA || !textB) {
+    return 0;
+  }
+  
+  const normalizedA = normalizeAssistantText(textA);
+  const normalizedB = normalizeAssistantText(textB);
+  
+  const wordsA = normalizedA.split(/\s+/).filter(w => w.length > 0);
+  const wordsB = normalizedB.split(/\s+/).filter(w => w.length > 0);
+  
+  if (wordsA.length === 0 || wordsB.length === 0) {
+    return 0;
+  }
+  
+  let matchCount = 0;
+  for (const word of wordsA) {
+    if (wordsB.some(bw => bw.includes(word) || word.includes(bw))) {
+      matchCount++;
+    }
+  }
+  
+  return matchCount / Math.max(wordsA.length, wordsB.length);
+}
+
+function verifyPayloadCorrelation(latestUserText: string | null, relayPayload: string): boolean {
+  if (!latestUserText || !relayPayload) {
+    return false;
+  }
+  
+  if (containsBridgeEnvelope(latestUserText)) {
+    return true;
+  }
+  
+  const overlap = calculateTextOverlap(latestUserText, relayPayload);
+  if (overlap >= 0.5) {
+    return true;
+  }
+  
+  return false;
 }
 
 export function evaluateSubmissionVerification(input: SubmissionVerificationInput): SubmissionVerificationResult {
@@ -197,21 +244,26 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
     baselineGenerating,
     currentUserHash,
     currentGenerating,
+    currentLatestUserText,
     relayPayloadText
   } = input;
 
   if (currentUserHash && currentUserHash !== baselineUserHash) {
-    return {
-      verified: true,
-      reason: "user_hash_changed"
-    };
+    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
+      return {
+        verified: true,
+        reason: "payload_accepted"
+      };
+    }
   }
 
   if (!baselineGenerating && currentGenerating) {
-    return {
-      verified: true,
-      reason: "generation_started"
-    };
+    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
+      return {
+        verified: true,
+        reason: "generation_with_user_changed"
+      };
+    }
   }
 
   return {

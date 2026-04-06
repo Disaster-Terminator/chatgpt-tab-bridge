@@ -638,6 +638,13 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       }
     });
 
+    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
+    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
+    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
+    const baselineLatestUserText = baselineTargetActivity.ok 
+      ? (await getTargetLatestUserText(targetBinding.tabId)) 
+      : null;
+
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
     if (!sendResult.ok) {
       await updateState({
@@ -646,10 +653,6 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       });
       return;
     }
-
-    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
-    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
-    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
 
     await updateState({
       type: "set_runtime_activity",
@@ -667,7 +670,6 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
     const verificationPollIntervalMs = 500;
     const verificationStartTime = Date.now();
     let verificationPassed = false;
-    let verificationFailedReason: string | null = null;
 
     while (Date.now() - verificationStartTime < verificationTimeoutMs) {
       if (token !== activeLoopToken) {
@@ -697,11 +699,14 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         continue;
       }
 
+      const currentLatestUserText = await getTargetLatestUserText(targetBinding.tabId);
+
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
+        currentLatestUserText,
         relayPayloadText: envelope
       });
 
@@ -847,6 +852,20 @@ async function requestThreadActivity(tabId: number): Promise<ThreadActivityRespo
       ok: false,
       error: getErrorMessage(error)
     };
+  }
+}
+
+async function getTargetLatestUserText(tabId: number): Promise<string | null> {
+  try {
+    const response = await chrome.tabs.sendMessage<{ ok: true; text: string | null } | { ok: false; error: string }>(tabId, {
+      type: MESSAGE_TYPES.GET_LATEST_USER_TEXT
+    });
+    if (response.ok) {
+      return response.text;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

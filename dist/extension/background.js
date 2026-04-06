@@ -113,6 +113,7 @@ var MESSAGE_TYPES = Object.freeze({
   GET_ASSISTANT_SNAPSHOT: "GET_ASSISTANT_SNAPSHOT",
   GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
+  GET_LATEST_USER_TEXT: "GET_LATEST_USER_TEXT",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -596,25 +597,65 @@ function guardReasonToStopReason(reason) {
 function formatNextHop(sourceRole) {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
 }
+function containsBridgeEnvelope(text) {
+  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
+}
+function calculateTextOverlap(textA, textB) {
+  if (!textA || !textB) {
+    return 0;
+  }
+  const normalizedA = normalizeAssistantText(textA);
+  const normalizedB = normalizeAssistantText(textB);
+  const wordsA = normalizedA.split(/\s+/).filter((w) => w.length > 0);
+  const wordsB = normalizedB.split(/\s+/).filter((w) => w.length > 0);
+  if (wordsA.length === 0 || wordsB.length === 0) {
+    return 0;
+  }
+  let matchCount = 0;
+  for (const word of wordsA) {
+    if (wordsB.some((bw) => bw.includes(word) || word.includes(bw))) {
+      matchCount++;
+    }
+  }
+  return matchCount / Math.max(wordsA.length, wordsB.length);
+}
+function verifyPayloadCorrelation(latestUserText, relayPayload) {
+  if (!latestUserText || !relayPayload) {
+    return false;
+  }
+  if (containsBridgeEnvelope(latestUserText)) {
+    return true;
+  }
+  const overlap = calculateTextOverlap(latestUserText, relayPayload);
+  if (overlap >= 0.5) {
+    return true;
+  }
+  return false;
+}
 function evaluateSubmissionVerification(input) {
   const {
     baselineUserHash,
     baselineGenerating,
     currentUserHash,
     currentGenerating,
+    currentLatestUserText,
     relayPayloadText
   } = input;
   if (currentUserHash && currentUserHash !== baselineUserHash) {
-    return {
-      verified: true,
-      reason: "user_hash_changed"
-    };
+    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
+      return {
+        verified: true,
+        reason: "payload_accepted"
+      };
+    }
   }
   if (!baselineGenerating && currentGenerating) {
-    return {
-      verified: true,
-      reason: "generation_started"
-    };
+    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
+      return {
+        verified: true,
+        reason: "generation_with_user_changed"
+      };
+    }
   }
   return {
     verified: false,
@@ -1150,6 +1191,10 @@ async function runRelayLoop(token, settings) {
         selector: "ok"
       }
     });
+    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
+    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
+    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
+    const baselineLatestUserText = baselineTargetActivity.ok ? await getTargetLatestUserText(targetBinding.tabId) : null;
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
     if (!sendResult.ok) {
       await updateState({
@@ -1158,9 +1203,6 @@ async function runRelayLoop(token, settings) {
       });
       return;
     }
-    const baselineTargetActivity = await requestThreadActivity(targetBinding.tabId);
-    const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
-    const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
     await updateState({
       type: "set_runtime_activity",
       activity: {
@@ -1176,7 +1218,6 @@ async function runRelayLoop(token, settings) {
     const verificationPollIntervalMs = 500;
     const verificationStartTime = Date.now();
     let verificationPassed = false;
-    let verificationFailedReason = null;
     while (Date.now() - verificationStartTime < verificationTimeoutMs) {
       if (token !== activeLoopToken) {
         return;
@@ -1201,11 +1242,13 @@ async function runRelayLoop(token, settings) {
         });
         continue;
       }
+      const currentLatestUserText = await getTargetLatestUserText(targetBinding.tabId);
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
+        currentLatestUserText,
         relayPayloadText: envelope
       });
       if (verificationResult.verified) {
@@ -1332,6 +1375,19 @@ async function requestThreadActivity(tabId) {
       ok: false,
       error: getErrorMessage(error)
     };
+  }
+}
+async function getTargetLatestUserText(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: MESSAGE_TYPES.GET_LATEST_USER_TEXT
+    });
+    if (response.ok) {
+      return response.text;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 var SEND_MESSAGE_TIMEOUT_MS = 8e3;
