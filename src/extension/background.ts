@@ -51,6 +51,7 @@ import type {
   PopupModel,
   RelayGuardReason,
   RelayMessageResponse,
+  RuntimeEvent,
   RuntimeMessage,
   RuntimeResponse,
   RuntimeSettings,
@@ -64,7 +65,7 @@ type OverlaySettingsResult = {
   overlaySettings: OverlaySettings;
 };
 
-type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult;
+type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult | RuntimeEvent[];
 
 type SettledReplyResult =
   | AssistantSnapshotResponse
@@ -79,6 +80,25 @@ interface WaitForSettledReplyInput {
 
 let activeLoopToken = 0;
 const keepAlivePorts = new Set<ChromePort>();
+
+// P0-1: Runtime event ring buffer for evidence chain
+const MAX_RUNTIME_EVENTS = 30;
+const runtimeEvents: RuntimeEvent[] = [];
+
+function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
+  runtimeEvents.push({
+    ...event,
+    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    timestamp: new Date().toISOString()
+  });
+  if (runtimeEvents.length > MAX_RUNTIME_EVENTS) {
+    runtimeEvents.shift();
+  }
+}
+
+function getRecentRuntimeEvents(): RuntimeEvent[] {
+  return [...runtimeEvents];
+}
 
 chrome.runtime.onInstalled.addListener(async (): Promise<void> => {
   await initializeState();
@@ -204,6 +224,9 @@ async function handleMessage(
 
     case MESSAGE_TYPES.CLEAR_TERMINAL:
       return clearTerminal();
+
+    case MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS:
+      return getRecentRuntimeEvents();
 
     case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
       if (typeof chrome.action.openPopup === "function") {
@@ -645,8 +668,33 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       ? (await getTargetLatestUserText(targetBinding.tabId)) 
       : null;
 
+    addRuntimeEvent({
+      phaseStep: "pre_send_baseline",
+      sourceRole,
+      targetRole,
+      round: state.round + 1,
+      dispatchReadbackSummary: "pending",
+      sendTriggerMode: "pending",
+      verificationBaseline: baselineLatestUserText 
+        ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0,50)}` 
+        : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+      verificationPollSample: "",
+      verificationVerdict: "pending"
+    });
+
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
     if (!sendResult.ok) {
+      addRuntimeEvent({
+        phaseStep: "send_failed",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: sendResult.dispatchAccepted ? "accepted" : "rejected",
+        sendTriggerMode: sendResult.mode ?? "unknown",
+        verificationBaseline: "n/a",
+        verificationPollSample: "",
+        verificationVerdict: sendResult.error ?? "unknown_error"
+      });
       await updateState({
         type: "runtime_error",
         reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${sendResult.error ?? "unknown"}`
@@ -704,6 +752,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
+        baselineLatestUserText,
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
         currentLatestUserText,
@@ -711,9 +760,36 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       });
 
       if (verificationResult.verified) {
+        addRuntimeEvent({
+          phaseStep: "verification_passed",
+          sourceRole,
+          targetRole,
+          round: state.round + 1,
+          dispatchReadbackSummary: "n/a",
+          sendTriggerMode: sendResult.mode ?? "unknown",
+          verificationBaseline: baselineLatestUserText 
+            ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0,50)}` 
+            : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+          verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0,50) ?? "null"}`,
+          verificationVerdict: verificationResult.reason
+        });
         verificationPassed = true;
         break;
       }
+
+      addRuntimeEvent({
+        phaseStep: "verifying",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: "n/a",
+        sendTriggerMode: sendResult.mode ?? "unknown",
+        verificationBaseline: baselineLatestUserText 
+          ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0,50)}` 
+          : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+        verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0,50) ?? "null"}`,
+        verificationVerdict: verificationResult.reason
+      });
 
       await updateState({
         type: "set_runtime_activity",

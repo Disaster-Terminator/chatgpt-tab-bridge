@@ -137,6 +137,7 @@ pnpm run build
 pnpm test
 pnpm run test:smoke
 pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
+pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
 ```
 
 ### `pnpm run build`
@@ -167,7 +168,7 @@ pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
 
 ### `pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>`
 
-半自动联调脚本，建议只传真实线程 URL。它主要验证：
+半自动联调脚本，验证控制流正确性（非真实性验证）：
 
 - 两个页面都注入 overlay
 - A/B 绑定是否成功
@@ -176,6 +177,21 @@ pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
 - `Pause / Resume / Stop` 的启停逻辑是否正确
 - `paused` 时 override 是否可写
 - `running` 时 override 是否不可写
+
+### `pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>`
+
+**真实性验收主路径**。验证消息真实发送流程：
+
+- 绑定两个真实 ChatGPT 线程
+- 启动 relay session
+- 等待一次 hop 完成
+- 拉取 GET_RECENT_RUNTIME_EVENTS 验证事件序列：
+  - 必须有 `sending` / `pre_send_baseline`
+  - 必须有 `verification_passed`（不是只靠 generation_started）
+  - `verification_passed` 必须在 `waiting_reply` 之前
+- 如果没有 verification_passed 就进入 waiting_reply，测试失败
+
+**test:e2e 已被降级为辅助场景脚本，不再作为真实性验收依据。**
 
 ## 在 Edge 里加载
 

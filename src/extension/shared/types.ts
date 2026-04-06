@@ -41,6 +41,7 @@ export type MessageType =
   | "GET_THREAD_ACTIVITY"
   | "GET_LAST_ACK_DEBUG"
   | "GET_LATEST_USER_TEXT"
+  | "GET_RECENT_RUNTIME_EVENTS"
   | "SEND_RELAY_MESSAGE"
   | "SYNC_OVERLAY_STATE"
   | "REQUEST_OPEN_POPUP";
@@ -325,6 +326,28 @@ export interface GetLastAckDebugMessage extends MessageBase {
   type: "GET_LAST_ACK_DEBUG";
 }
 
+export interface GetLatestUserTextMessage extends MessageBase {
+  type: "GET_LATEST_USER_TEXT";
+}
+
+export interface GetRecentRuntimeEventsMessage extends MessageBase {
+  type: "GET_RECENT_RUNTIME_EVENTS";
+}
+
+export interface RuntimeEvent {
+  id: string;
+  phaseStep: string;
+  timestamp: string;
+  sourceRole: BridgeRole | null;
+  targetRole: BridgeRole | null;
+  round: number;
+  dispatchReadbackSummary: string;
+  sendTriggerMode: string;
+  verificationBaseline: string;
+  verificationPollSample: string;
+  verificationVerdict: string;
+}
+
 export interface SendRelayMessageRequest extends MessageBase {
   type: "SEND_RELAY_MESSAGE";
   text: string;
@@ -359,6 +382,8 @@ export type RuntimeMessage =
   | GetAssistantSnapshotMessage
   | GetThreadActivityMessage
   | GetLastAckDebugMessage
+  | GetLatestUserTextMessage
+  | GetRecentRuntimeEventsMessage
   | SendRelayMessageRequest
   | SyncOverlayStateMessage
   | RequestOpenPopupMessage;

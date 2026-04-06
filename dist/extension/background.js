@@ -114,6 +114,7 @@ var MESSAGE_TYPES = Object.freeze({
   GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   GET_LATEST_USER_TEXT: "GET_LATEST_USER_TEXT",
+  GET_RECENT_RUNTIME_EVENTS: "GET_RECENT_RUNTIME_EVENTS",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -636,6 +637,7 @@ function evaluateSubmissionVerification(input) {
   const {
     baselineUserHash,
     baselineGenerating,
+    baselineLatestUserText,
     currentUserHash,
     currentGenerating,
     currentLatestUserText,
@@ -651,10 +653,13 @@ function evaluateSubmissionVerification(input) {
   }
   if (!baselineGenerating && currentGenerating) {
     if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      return {
-        verified: true,
-        reason: "generation_with_user_changed"
-      };
+      const textChanged = baselineLatestUserText !== null && currentLatestUserText !== null && currentLatestUserText !== baselineLatestUserText;
+      if (textChanged) {
+        return {
+          verified: true,
+          reason: "generation_with_user_changed"
+        };
+      }
     }
   }
   return {
@@ -747,6 +752,21 @@ function normalizePosition(position) {
 // background.ts
 var activeLoopToken = 0;
 var keepAlivePorts = /* @__PURE__ */ new Set();
+var MAX_RUNTIME_EVENTS = 30;
+var runtimeEvents = [];
+function addRuntimeEvent(event) {
+  runtimeEvents.push({
+    ...event,
+    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  if (runtimeEvents.length > MAX_RUNTIME_EVENTS) {
+    runtimeEvents.shift();
+  }
+}
+function getRecentRuntimeEvents() {
+  return [...runtimeEvents];
+}
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeState();
   await initializeOverlaySettings();
@@ -836,6 +856,8 @@ async function handleMessage(message, sender) {
       return stopSession();
     case MESSAGE_TYPES.CLEAR_TERMINAL:
       return clearTerminal();
+    case MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS:
+      return getRecentRuntimeEvents();
     case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
       if (typeof chrome.action.openPopup === "function") {
         await chrome.action.openPopup();
@@ -1195,8 +1217,30 @@ async function runRelayLoop(token, settings) {
     const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
     const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
     const baselineLatestUserText = baselineTargetActivity.ok ? await getTargetLatestUserText(targetBinding.tabId) : null;
+    addRuntimeEvent({
+      phaseStep: "pre_send_baseline",
+      sourceRole,
+      targetRole,
+      round: state.round + 1,
+      dispatchReadbackSummary: "pending",
+      sendTriggerMode: "pending",
+      verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+      verificationPollSample: "",
+      verificationVerdict: "pending"
+    });
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
     if (!sendResult.ok) {
+      addRuntimeEvent({
+        phaseStep: "send_failed",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: sendResult.dispatchAccepted ? "accepted" : "rejected",
+        sendTriggerMode: sendResult.mode ?? "unknown",
+        verificationBaseline: "n/a",
+        verificationPollSample: "",
+        verificationVerdict: sendResult.error ?? "unknown_error"
+      });
       await updateState({
         type: "runtime_error",
         reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${sendResult.error ?? "unknown"}`
@@ -1246,15 +1290,38 @@ async function runRelayLoop(token, settings) {
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
+        baselineLatestUserText,
         currentUserHash: activity.result.latestUserHash,
         currentGenerating: activity.result.generating,
         currentLatestUserText,
         relayPayloadText: envelope
       });
       if (verificationResult.verified) {
+        addRuntimeEvent({
+          phaseStep: "verification_passed",
+          sourceRole,
+          targetRole,
+          round: state.round + 1,
+          dispatchReadbackSummary: "n/a",
+          sendTriggerMode: sendResult.mode ?? "unknown",
+          verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+          verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`,
+          verificationVerdict: verificationResult.reason
+        });
         verificationPassed = true;
         break;
       }
+      addRuntimeEvent({
+        phaseStep: "verifying",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary: "n/a",
+        sendTriggerMode: sendResult.mode ?? "unknown",
+        verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
+        verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`,
+        verificationVerdict: verificationResult.reason
+      });
       await updateState({
         type: "set_runtime_activity",
         activity: {

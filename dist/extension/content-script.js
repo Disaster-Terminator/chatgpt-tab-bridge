@@ -263,6 +263,7 @@ var MESSAGE_TYPES = Object.freeze({
   GET_THREAD_ACTIVITY: "GET_THREAD_ACTIVITY",
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   GET_LATEST_USER_TEXT: "GET_LATEST_USER_TEXT",
+  GET_RECENT_RUNTIME_EVENTS: "GET_RECENT_RUNTIME_EVENTS",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -1052,23 +1053,36 @@ async function sendRelayMessage(text) {
     }
     const submissionBaseline = captureSubmissionBaseline(text);
     const applyMode = applyComposerText(composer, text);
-    const composerText = readComposerText(composer);
-    const readbackValid = validateComposerReadback(composerText, text);
+    const composerTextBeforeTrigger = readComposerText(composer);
+    const readbackValid = validateComposerReadback(composerTextBeforeTrigger, text);
     const sendButton = await waitForSendButton({
       composer,
       root: document
     });
+    const sendButtonBefore = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
     const sendResult = triggerComposerSend({
       root: document,
       composer,
       sendButton
     });
+    await sleep(300);
+    const postTriggerComposerText = readComposerText(composer);
+    const sendButtonAfter = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
+    const textClearedAfterTrigger = postTriggerComposerText.length < composerTextBeforeTrigger.length * 0.3;
+    const buttonStateChanged = sendButtonBefore && sendButtonAfter ? sendButtonBefore.disabled !== sendButtonAfter.disabled || sendButtonBefore.visible !== sendButtonAfter.visible : false;
+    const dispatchEvidence = {
+      preTriggerText: composerTextBeforeTrigger.slice(0, 100),
+      postTriggerText: postTriggerComposerText.slice(0, 100),
+      textChanged: textClearedAfterTrigger,
+      buttonStateChanged
+    };
     if (!sendResult.ok) {
       return {
         ok: false,
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
+        dispatchEvidence,
         error: sendResult.error ?? "send_trigger_failed"
       };
     }
@@ -1078,7 +1092,19 @@ async function sendRelayMessage(text) {
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
+        dispatchEvidence,
         error: "payload_not_applied"
+      };
+    }
+    const dispatchAccepted = textClearedAfterTrigger || buttonStateChanged;
+    if (!dispatchAccepted) {
+      return {
+        ok: true,
+        mode: sendResult.mode,
+        applyMode,
+        dispatchAccepted: false,
+        dispatchEvidence,
+        error: "dispatch_evidence_weak"
       };
     }
     return {
@@ -1086,6 +1112,7 @@ async function sendRelayMessage(text) {
       mode: sendResult.mode,
       applyMode,
       dispatchAccepted: true,
+      dispatchEvidence,
       error: null
     };
   } catch (error) {
@@ -1201,6 +1228,11 @@ function getLatestUserText() {
     ok: true,
     text: null
   };
+}
+function sleep(durationMs) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
 }
 function requireOverlayElement(selector) {
   const element = overlay.querySelector(selector);

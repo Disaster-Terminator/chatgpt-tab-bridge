@@ -4,6 +4,7 @@ import {
   findLatestUserMessageHash,
   findSendButton,
   hashText,
+  isElementVisible,
   isGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
@@ -618,6 +619,12 @@ async function sendRelayMessage(text: string): Promise<{
   mode?: string;
   applyMode?: string;
   dispatchAccepted?: boolean;
+  dispatchEvidence?: {
+    preTriggerText: string;
+    postTriggerText: string;
+    textChanged: boolean;
+    buttonStateChanged: boolean;
+  };
   error?: string | null;
 }> {
   try {
@@ -632,18 +639,35 @@ async function sendRelayMessage(text: string): Promise<{
     const submissionBaseline = captureSubmissionBaseline(text);
     const applyMode = applyComposerText(composer, text);
     
-    const composerText = readComposerText(composer);
-    const readbackValid = validateComposerReadback(composerText, text);
+    const composerTextBeforeTrigger = readComposerText(composer);
+    const readbackValid = validateComposerReadback(composerTextBeforeTrigger, text);
     
     const sendButton = await waitForSendButton({
       composer,
       root: document
     });
+    const sendButtonBefore = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
     const sendResult = triggerComposerSend({
       root: document,
       composer,
       sendButton
     });
+
+    await sleep(300);
+    const postTriggerComposerText = readComposerText(composer);
+    const sendButtonAfter = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
+    
+    const textClearedAfterTrigger = postTriggerComposerText.length < composerTextBeforeTrigger.length * 0.3;
+    const buttonStateChanged = sendButtonBefore && sendButtonAfter 
+      ? (sendButtonBefore.disabled !== sendButtonAfter.disabled || sendButtonBefore.visible !== sendButtonAfter.visible)
+      : false;
+
+    const dispatchEvidence = {
+      preTriggerText: composerTextBeforeTrigger.slice(0, 100),
+      postTriggerText: postTriggerComposerText.slice(0, 100),
+      textChanged: textClearedAfterTrigger,
+      buttonStateChanged
+    };
 
     if (!sendResult.ok) {
       return {
@@ -651,6 +675,7 @@ async function sendRelayMessage(text: string): Promise<{
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
+        dispatchEvidence,
         error: sendResult.error ?? "send_trigger_failed"
       };
     }
@@ -661,7 +686,20 @@ async function sendRelayMessage(text: string): Promise<{
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
+        dispatchEvidence,
         error: "payload_not_applied"
+      };
+    }
+
+    const dispatchAccepted = textClearedAfterTrigger || buttonStateChanged;
+    if (!dispatchAccepted) {
+      return {
+        ok: true,
+        mode: sendResult.mode,
+        applyMode,
+        dispatchAccepted: false,
+        dispatchEvidence,
+        error: "dispatch_evidence_weak"
       };
     }
 
@@ -670,6 +708,7 @@ async function sendRelayMessage(text: string): Promise<{
       mode: sendResult.mode,
       applyMode,
       dispatchAccepted: true,
+      dispatchEvidence,
       error: null
     };
   } catch (error) {

@@ -181,6 +181,7 @@ export function formatNextHop(sourceRole: BridgeRole): string {
 export interface SubmissionVerificationInput {
   baselineUserHash: string | null;
   baselineGenerating: boolean;
+  baselineLatestUserText: string | null;
   currentUserHash: string | null;
   currentGenerating: boolean;
   currentLatestUserText: string | null;
@@ -242,6 +243,7 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
   const {
     baselineUserHash,
     baselineGenerating,
+    baselineLatestUserText,
     currentUserHash,
     currentGenerating,
     currentLatestUserText,
@@ -259,10 +261,15 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
 
   if (!baselineGenerating && currentGenerating) {
     if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      return {
-        verified: true,
-        reason: "generation_with_user_changed"
-      };
+      const textChanged = baselineLatestUserText !== null && 
+        currentLatestUserText !== null && 
+        currentLatestUserText !== baselineLatestUserText;
+      if (textChanged) {
+        return {
+          verified: true,
+          reason: "generation_with_user_changed"
+        };
+      }
     }
   }
 
