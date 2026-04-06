@@ -7,6 +7,7 @@ const {
   buildRelayEnvelope,
   evaluatePostHopGuard,
   evaluatePreSendGuard,
+  evaluateSubmissionVerification,
   formatNextHop,
   guardReasonToStopReason,
   hashText,
@@ -76,4 +77,66 @@ test("guardReasonToStopReason preserves explicit stop reasons", () => {
   assert.equal(guardReasonToStopReason("stop_marker"), "stop_marker");
   assert.equal(guardReasonToStopReason("duplicate_output"), "duplicate_output");
   assert.equal(guardReasonToStopReason("max_rounds_reached"), "max_rounds_reached");
+});
+
+test("evaluateSubmissionVerification fails when latest user text did not change", () => {
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "same text",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: "same text",
+    relayPayloadText: "[BRIDGE_CONTEXT]\nsource: A"
+  });
+
+  assert.equal(result.verified, false);
+  assert.equal(result.reason, "not_verified");
+});
+
+test("evaluateSubmissionVerification fails when latest user text is unrelated to payload", () => {
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old baseline",
+    currentUserHash: "h2",
+    currentGenerating: true,
+    currentLatestUserText: "completely unrelated message",
+    relayPayloadText: "[BRIDGE_CONTEXT]\nsource: A\nround: 2\nbridged payload"
+  });
+
+  assert.equal(result.verified, false);
+  assert.equal(result.reason, "not_verified");
+});
+
+test("evaluateSubmissionVerification passes when user hash changed with payload correlation", () => {
+  const payload = "[BRIDGE_CONTEXT]\nsource: A\nround: 2\nhello relay";
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old baseline",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: `${payload}\n[BRIDGE_INSTRUCTION]`,
+    relayPayloadText: payload
+  });
+
+  assert.equal(result.verified, true);
+  assert.equal(result.reason, "payload_accepted");
+});
+
+test("evaluateSubmissionVerification generation branch requires text change with payload correlation", () => {
+  const payload = "[BRIDGE_CONTEXT]\nsource: B\nround: 3\nforwarded content";
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before hop",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: `${payload}\nextra line`,
+    relayPayloadText: payload
+  });
+
+  assert.equal(result.verified, true);
+  assert.equal(result.reason, "generation_with_user_changed");
 });

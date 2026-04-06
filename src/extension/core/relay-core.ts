@@ -239,6 +239,20 @@ function verifyPayloadCorrelation(latestUserText: string | null, relayPayload: s
   return false;
 }
 
+function hasLatestUserTextChanged(
+  baselineLatestUserText: string | null,
+  currentLatestUserText: string | null
+): boolean {
+  const baselineNormalized = normalizeAssistantText(baselineLatestUserText ?? "");
+  const currentNormalized = normalizeAssistantText(currentLatestUserText ?? "");
+
+  if (!currentNormalized) {
+    return false;
+  }
+
+  return baselineNormalized !== currentNormalized;
+}
+
 export function evaluateSubmissionVerification(input: SubmissionVerificationInput): SubmissionVerificationResult {
   const {
     baselineUserHash,
@@ -250,27 +264,34 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
     relayPayloadText
   } = input;
 
-  if (currentUserHash && currentUserHash !== baselineUserHash) {
-    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      return {
-        verified: true,
-        reason: "payload_accepted"
-      };
-    }
+  const latestUserTextChanged = hasLatestUserTextChanged(
+    baselineLatestUserText,
+    currentLatestUserText
+  );
+  const payloadCorrelated = verifyPayloadCorrelation(currentLatestUserText, relayPayloadText);
+
+  if (!latestUserTextChanged || !payloadCorrelated) {
+    return {
+      verified: false,
+      reason: "not_verified"
+    };
   }
 
-  if (!baselineGenerating && currentGenerating) {
-    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      const textChanged = baselineLatestUserText !== null && 
-        currentLatestUserText !== null && 
-        currentLatestUserText !== baselineLatestUserText;
-      if (textChanged) {
-        return {
-          verified: true,
-          reason: "generation_with_user_changed"
-        };
-      }
-    }
+  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
+  const generationTransitioned = !baselineGenerating && currentGenerating;
+
+  if (userHashChanged) {
+    return {
+      verified: true,
+      reason: "payload_accepted"
+    };
+  }
+
+  if (generationTransitioned) {
+    return {
+      verified: true,
+      reason: "generation_with_user_changed"
+    };
   }
 
   return {

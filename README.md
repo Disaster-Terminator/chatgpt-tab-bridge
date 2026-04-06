@@ -166,6 +166,8 @@ pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
 - `chatgpt.com` 页面注入 overlay
 - popup 能通过扩展 id 打开
 
+定位：仅做扩展加载与注入冒烟，不验证真实发送。
+
 ### `pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>`
 
 半自动联调脚本，验证控制流正确性（非真实性验证）：
@@ -178,20 +180,38 @@ pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
 - `paused` 时 override 是否可写
 - `running` 时 override 是否不可写
 
+定位：控制流辅助验证，不作为主链路真实性验收。
+
+### `pnpm run test:e2e -- --url-a <thread-a> --url-b <thread-b>`
+
+场景矩阵脚本（happy-path / sync / busy 场景等），用于覆盖更多控制面回归。
+
+定位：辅助场景脚本，不作为主链路真实性验收。
+
 ### `pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>`
 
-**真实性验收主路径**。验证消息真实发送流程：
+**唯一主链路真实性验收路径**。验证一次真实 first-hop 发送闭环：
 
 - 绑定两个真实 ChatGPT 线程
 - 启动 relay session
-- 等待一次 hop 完成
-- 拉取 GET_RECENT_RUNTIME_EVENTS 验证事件序列：
-  - 必须有 `sending` / `pre_send_baseline`
-  - 必须有 `verification_passed`（不是只靠 generation_started）
-  - `verification_passed` 必须在 `waiting_reply` 之前
-- 如果没有 verification_passed 就进入 waiting_reply，测试失败
+- 基于目标页面独立观察验证：
+  - latest user message 相对发送前 baseline 发生变化
+  - 变化后的 latest user message 与本次 relay payload 相关（例如包含 bridge context）
+  - `waiting reply` 前必须已看到独立接受证据
+- 运行时事件链（`GET_RECENT_RUNTIME_EVENTS`）仅作为辅助证据导出，不单独决定通过
+- 自动导出证据包到 `tmp/real-hop-<timestamp>/`：
+  - 关键步骤截图
+  - `runtime-events.json`
+  - `observation-log.json`
+  - `summary.json`
+  - `run.log`
 
-**test:e2e 已被降级为辅助场景脚本，不再作为真实性验收依据。**
+结论分层：
+
+- smoke：扩展加载
+- semi：控制流辅助
+- e2e：辅助场景
+- real-hop：主链路真实性验收（唯一）
 
 ## 在 Edge 里加载
 

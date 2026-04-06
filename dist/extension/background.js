@@ -633,6 +633,14 @@ function verifyPayloadCorrelation(latestUserText, relayPayload) {
   }
   return false;
 }
+function hasLatestUserTextChanged(baselineLatestUserText, currentLatestUserText) {
+  const baselineNormalized = normalizeAssistantText(baselineLatestUserText ?? "");
+  const currentNormalized = normalizeAssistantText(currentLatestUserText ?? "");
+  if (!currentNormalized) {
+    return false;
+  }
+  return baselineNormalized !== currentNormalized;
+}
 function evaluateSubmissionVerification(input) {
   const {
     baselineUserHash,
@@ -643,24 +651,30 @@ function evaluateSubmissionVerification(input) {
     currentLatestUserText,
     relayPayloadText
   } = input;
-  if (currentUserHash && currentUserHash !== baselineUserHash) {
-    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      return {
-        verified: true,
-        reason: "payload_accepted"
-      };
-    }
+  const latestUserTextChanged = hasLatestUserTextChanged(
+    baselineLatestUserText,
+    currentLatestUserText
+  );
+  const payloadCorrelated = verifyPayloadCorrelation(currentLatestUserText, relayPayloadText);
+  if (!latestUserTextChanged || !payloadCorrelated) {
+    return {
+      verified: false,
+      reason: "not_verified"
+    };
   }
-  if (!baselineGenerating && currentGenerating) {
-    if (currentLatestUserText && verifyPayloadCorrelation(currentLatestUserText, relayPayloadText)) {
-      const textChanged = baselineLatestUserText !== null && currentLatestUserText !== null && currentLatestUserText !== baselineLatestUserText;
-      if (textChanged) {
-        return {
-          verified: true,
-          reason: "generation_with_user_changed"
-        };
-      }
-    }
+  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
+  const generationTransitioned = !baselineGenerating && currentGenerating;
+  if (userHashChanged) {
+    return {
+      verified: true,
+      reason: "payload_accepted"
+    };
+  }
+  if (generationTransitioned) {
+    return {
+      verified: true,
+      reason: "generation_with_user_changed"
+    };
   }
   return {
     verified: false,
@@ -766,6 +780,50 @@ function addRuntimeEvent(event) {
 }
 function getRecentRuntimeEvents() {
   return [...runtimeEvents];
+}
+function formatVerificationBaseline(baselineUserHash, baselineGenerating, baselineLatestUserText) {
+  if (baselineLatestUserText) {
+    return `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}`;
+  }
+  return `hash:${baselineUserHash},gen:${baselineGenerating},text:null`;
+}
+function formatVerificationPollSample(currentUserHash, currentGenerating, currentLatestUserText) {
+  return `hash:${currentUserHash},gen:${currentGenerating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`;
+}
+function summarizeDispatchReadback(sendResult) {
+  const accepted = sendResult.ok && sendResult.dispatchAccepted === true ? "accepted" : "rejected";
+  const signal = sendResult.dispatchSignal ?? "none";
+  const evidence = sendResult.dispatchEvidence;
+  if (!evidence) {
+    return `${accepted}|signal:${signal}`;
+  }
+  return [
+    accepted,
+    `signal:${signal}`,
+    `text_changed:${evidence.textChanged}`,
+    `button_changed:${evidence.buttonStateChanged}`,
+    `attempts:${evidence.attempts}`
+  ].join("|");
+}
+function summarizeDispatchEvidence(sendResult) {
+  const evidence = sendResult.dispatchEvidence;
+  if (!evidence) {
+    return "dispatch_evidence_missing";
+  }
+  return [
+    `baseline_user:${evidence.baselineUserHash}`,
+    `current_user:${evidence.currentUserHash}`,
+    `baseline_gen:${evidence.baselineGenerating}`,
+    `current_gen:${evidence.currentGenerating}`,
+    `ack:${evidence.ackSignal}`,
+    `latest_user:${evidence.latestUserPreview ?? "null"}`
+  ].join("|");
+}
+function resolveDispatchFailureCode(sendResult) {
+  if (sendResult.ok && sendResult.dispatchAccepted === true) {
+    return "dispatch_accepted";
+  }
+  return sendResult.dispatchErrorCode ?? sendResult.error ?? "dispatch_rejected";
 }
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeState();
@@ -1217,36 +1275,55 @@ async function runRelayLoop(token, settings) {
     const baselineUserHash = baselineTargetActivity.ok ? baselineTargetActivity.result.latestUserHash : null;
     const baselineGenerating = baselineTargetActivity.ok ? baselineTargetActivity.result.generating : false;
     const baselineLatestUserText = baselineTargetActivity.ok ? await getTargetLatestUserText(targetBinding.tabId) : null;
+    const verificationBaselineSummary = formatVerificationBaseline(
+      baselineUserHash,
+      baselineGenerating,
+      baselineLatestUserText
+    );
     addRuntimeEvent({
       phaseStep: "pre_send_baseline",
       sourceRole,
       targetRole,
       round: state.round + 1,
-      dispatchReadbackSummary: "pending",
-      sendTriggerMode: "pending",
-      verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
-      verificationPollSample: "",
-      verificationVerdict: "pending"
+      dispatchReadbackSummary: "baseline_captured",
+      sendTriggerMode: "not_triggered",
+      verificationBaseline: verificationBaselineSummary,
+      verificationPollSample: "baseline_only",
+      verificationVerdict: "baseline_ready"
     });
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
-    if (!sendResult.ok) {
+    const dispatchReadbackSummary = summarizeDispatchReadback(sendResult);
+    const dispatchEvidenceSummary = summarizeDispatchEvidence(sendResult);
+    const dispatchFailureCode = resolveDispatchFailureCode(sendResult);
+    if (!sendResult.ok || sendResult.dispatchAccepted !== true) {
       addRuntimeEvent({
-        phaseStep: "send_failed",
+        phaseStep: "dispatch_rejected",
         sourceRole,
         targetRole,
         round: state.round + 1,
-        dispatchReadbackSummary: sendResult.dispatchAccepted ? "accepted" : "rejected",
+        dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode ?? "unknown",
-        verificationBaseline: "n/a",
-        verificationPollSample: "",
-        verificationVerdict: sendResult.error ?? "unknown_error"
+        verificationBaseline: verificationBaselineSummary,
+        verificationPollSample: dispatchEvidenceSummary,
+        verificationVerdict: dispatchFailureCode
       });
       await updateState({
         type: "runtime_error",
-        reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${sendResult.error ?? "unknown"}`
+        reason: `${ERROR_REASONS.MESSAGE_SEND_FAILED}:${dispatchFailureCode}`
       });
       return;
     }
+    addRuntimeEvent({
+      phaseStep: "dispatch_accepted",
+      sourceRole,
+      targetRole,
+      round: state.round + 1,
+      dispatchReadbackSummary,
+      sendTriggerMode: sendResult.mode,
+      verificationBaseline: verificationBaselineSummary,
+      verificationPollSample: dispatchEvidenceSummary,
+      verificationVerdict: "dispatch_accepted"
+    });
     await updateState({
       type: "set_runtime_activity",
       activity: {
@@ -1262,6 +1339,7 @@ async function runRelayLoop(token, settings) {
     const verificationPollIntervalMs = 500;
     const verificationStartTime = Date.now();
     let verificationPassed = false;
+    let lastVerificationPollSample = "no_poll_sample";
     while (Date.now() - verificationStartTime < verificationTimeoutMs) {
       if (token !== activeLoopToken) {
         return;
@@ -1296,16 +1374,22 @@ async function runRelayLoop(token, settings) {
         currentLatestUserText,
         relayPayloadText: envelope
       });
+      const verificationPollSample = formatVerificationPollSample(
+        activity.result.latestUserHash,
+        activity.result.generating,
+        currentLatestUserText
+      );
+      lastVerificationPollSample = verificationPollSample;
       if (verificationResult.verified) {
         addRuntimeEvent({
           phaseStep: "verification_passed",
           sourceRole,
           targetRole,
           round: state.round + 1,
-          dispatchReadbackSummary: "n/a",
-          sendTriggerMode: sendResult.mode ?? "unknown",
-          verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
-          verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`,
+          dispatchReadbackSummary,
+          sendTriggerMode: sendResult.mode,
+          verificationBaseline: verificationBaselineSummary,
+          verificationPollSample,
           verificationVerdict: verificationResult.reason
         });
         verificationPassed = true;
@@ -1316,10 +1400,10 @@ async function runRelayLoop(token, settings) {
         sourceRole,
         targetRole,
         round: state.round + 1,
-        dispatchReadbackSummary: "n/a",
-        sendTriggerMode: sendResult.mode ?? "unknown",
-        verificationBaseline: baselineLatestUserText ? `hash:${baselineUserHash},gen:${baselineGenerating},text:${baselineLatestUserText.slice(0, 50)}` : `hash:${baselineUserHash},gen:${baselineGenerating}`,
-        verificationPollSample: `hash:${activity.result.latestUserHash},gen:${activity.result.generating},text:${currentLatestUserText?.slice(0, 50) ?? "null"}`,
+        dispatchReadbackSummary,
+        sendTriggerMode: sendResult.mode,
+        verificationBaseline: verificationBaselineSummary,
+        verificationPollSample,
         verificationVerdict: verificationResult.reason
       });
       await updateState({
@@ -1335,6 +1419,17 @@ async function runRelayLoop(token, settings) {
       });
     }
     if (!verificationPassed) {
+      addRuntimeEvent({
+        phaseStep: "verification_failed",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary,
+        sendTriggerMode: sendResult.mode,
+        verificationBaseline: verificationBaselineSummary,
+        verificationPollSample: lastVerificationPollSample,
+        verificationVerdict: "submission_not_verified"
+      });
       await updateState({
         type: "stop_condition",
         reason: STOP_REASONS.SUBMISSION_NOT_VERIFIED
@@ -1351,6 +1446,17 @@ async function runRelayLoop(token, settings) {
         transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
         selector: "waiting_reply"
       }
+    });
+    addRuntimeEvent({
+      phaseStep: "waiting_reply",
+      sourceRole,
+      targetRole,
+      round: state.round + 1,
+      dispatchReadbackSummary,
+      sendTriggerMode: sendResult.mode,
+      verificationBaseline: verificationBaselineSummary,
+      verificationPollSample: lastVerificationPollSample,
+      verificationVerdict: "waiting_reply"
     });
     const settled = await waitForSettledReply({
       tabId: targetBinding.tabId,

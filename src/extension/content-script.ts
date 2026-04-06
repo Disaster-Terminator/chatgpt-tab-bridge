@@ -1,5 +1,6 @@
 import {
   applyComposerText,
+  checkAckSignals,
   findBestComposer,
   findLatestUserMessageHash,
   findSendButton,
@@ -14,6 +15,9 @@ import { MESSAGE_TYPES } from "./core/constants.ts";
 import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
 import { readUiLocale, observeUiLocale } from "./ui/preferences.ts";
 import type {
+  RelayDispatchEvidence,
+  RelayDispatchSignal,
+  RelayMessageResponse,
   OverlayModel,
   PopupControls,
   RuntimeDisplay,
@@ -619,104 +623,348 @@ async function sendRelayMessage(text: string): Promise<{
   mode?: string;
   applyMode?: string;
   dispatchAccepted?: boolean;
-  dispatchEvidence?: {
-    preTriggerText: string;
-    postTriggerText: string;
-    textChanged: boolean;
-    buttonStateChanged: boolean;
-  };
+  dispatchSignal?: RelayDispatchSignal;
+  dispatchEvidence?: RelayDispatchEvidence;
+  dispatchErrorCode?: string;
   error?: string | null;
 }> {
   try {
     const composer = findBestComposer(document);
     if (!composer) {
-      return {
+      const response: RelayMessageResponse = {
         ok: false,
+        dispatchAccepted: false,
+        dispatchSignal: "none",
+        dispatchErrorCode: "dispatch_trigger_rejected",
         error: "composer_not_found"
+      };
+      recordAckDebug({
+        outcome: "failed",
+        reason: "composer_not_found",
+        response
+      });
+      return {
+        ...response
       };
     }
 
     const submissionBaseline = captureSubmissionBaseline(text);
     const applyMode = applyComposerText(composer, text);
-    
+
     const composerTextBeforeTrigger = readComposerText(composer);
     const readbackValid = validateComposerReadback(composerTextBeforeTrigger, text);
-    
+
+    if (!readbackValid) {
+      const failedEvidence: RelayDispatchEvidence = {
+        baselineUserHash: submissionBaseline.userHash,
+        currentUserHash: submissionBaseline.userHash,
+        baselineGenerating: submissionBaseline.generating,
+        currentGenerating: submissionBaseline.generating,
+        baselineComposerPreview: submissionBaseline.composerText.slice(0, 120),
+        preTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        postTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        latestUserPreview: submissionBaseline.latestUserText?.slice(0, 120) ?? null,
+        textChanged: false,
+        buttonStateChanged: false,
+        ackSignal: "none",
+        attempts: 0
+      };
+
+      const response: RelayMessageResponse = {
+        ok: false,
+        applyMode,
+        dispatchAccepted: false,
+        dispatchSignal: "none",
+        dispatchEvidence: failedEvidence,
+        dispatchErrorCode: "payload_not_applied",
+        error: "payload_not_applied"
+      };
+
+      recordAckDebug({
+        outcome: "failed",
+        reason: "payload_not_applied",
+        baseline: submissionBaseline,
+        response
+      });
+
+      return {
+        ...response
+      };
+    }
+
     const sendButton = await waitForSendButton({
       composer,
       root: document
     });
-    const sendButtonBefore = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
+    const sendButtonBefore = captureSendButtonState(sendButton);
+
     const sendResult = triggerComposerSend({
       root: document,
       composer,
       sendButton
     });
 
-    await sleep(300);
-    const postTriggerComposerText = readComposerText(composer);
-    const sendButtonAfter = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
-    
-    const textClearedAfterTrigger = postTriggerComposerText.length < composerTextBeforeTrigger.length * 0.3;
-    const buttonStateChanged = sendButtonBefore && sendButtonAfter 
-      ? (sendButtonBefore.disabled !== sendButtonAfter.disabled || sendButtonBefore.visible !== sendButtonAfter.visible)
-      : false;
-
-    const dispatchEvidence = {
-      preTriggerText: composerTextBeforeTrigger.slice(0, 100),
-      postTriggerText: postTriggerComposerText.slice(0, 100),
-      textChanged: textClearedAfterTrigger,
-      buttonStateChanged
-    };
-
     if (!sendResult.ok) {
-      return {
+      const latestUserTextResponse = getLatestUserText();
+      const failedEvidence: RelayDispatchEvidence = {
+        baselineUserHash: submissionBaseline.userHash,
+        currentUserHash: findLatestUserMessageHash(),
+        baselineGenerating: submissionBaseline.generating,
+        currentGenerating: isGenerationInProgressFromDoc(),
+        baselineComposerPreview: submissionBaseline.composerText.slice(0, 120),
+        preTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        postTriggerText: readComposerText(composer).slice(0, 120),
+        latestUserPreview: latestUserTextResponse.ok
+          ? latestUserTextResponse.text?.slice(0, 120) ?? null
+          : null,
+        textChanged: false,
+        buttonStateChanged: false,
+        ackSignal: "none",
+        attempts: 1
+      };
+
+      const response: RelayMessageResponse = {
         ok: false,
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
-        dispatchEvidence,
-        error: sendResult.error ?? "send_trigger_failed"
+        dispatchSignal: "none",
+        dispatchEvidence: failedEvidence,
+        dispatchErrorCode: "dispatch_trigger_rejected",
+        error: sendResult.error ?? "dispatch_trigger_rejected"
+      };
+
+      recordAckDebug({
+        outcome: "failed",
+        reason: "dispatch_trigger_rejected",
+        baseline: submissionBaseline,
+        sendResult,
+        response
+      });
+
+      return {
+        ...response
       };
     }
 
-    if (!readbackValid) {
-      return {
+    const dispatchProbe = await waitForDispatchAcceptance({
+      composer,
+      text,
+      baseline: submissionBaseline,
+      preTriggerComposerText: composerTextBeforeTrigger,
+      sendButton,
+      sendButtonBefore
+    });
+
+    if (!dispatchProbe.accepted) {
+      const response: RelayMessageResponse = {
         ok: false,
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
-        dispatchEvidence,
-        error: "payload_not_applied"
-      };
-    }
-
-    const dispatchAccepted = textClearedAfterTrigger || buttonStateChanged;
-    if (!dispatchAccepted) {
-      return {
-        ok: true,
-        mode: sendResult.mode,
-        applyMode,
-        dispatchAccepted: false,
-        dispatchEvidence,
+        dispatchSignal: dispatchProbe.signal,
+        dispatchEvidence: dispatchProbe.evidence,
+        dispatchErrorCode: "dispatch_evidence_weak",
         error: "dispatch_evidence_weak"
       };
+
+      recordAckDebug({
+        outcome: "failed",
+        reason: "dispatch_evidence_weak",
+        baseline: submissionBaseline,
+        sendResult,
+        response
+      });
+
+      return {
+        ...response
+      };
     }
 
-    return {
+    const response: RelayMessageResponse = {
       ok: true,
       mode: sendResult.mode,
       applyMode,
       dispatchAccepted: true,
-      dispatchEvidence,
+      dispatchSignal: dispatchProbe.signal,
+      dispatchEvidence: dispatchProbe.evidence,
       error: null
     };
-  } catch (error) {
+
+    recordAckDebug({
+      outcome: "accepted",
+      baseline: submissionBaseline,
+      sendResult,
+      response
+    });
+
     return {
+      ...response
+    };
+  } catch (error) {
+    const response: RelayMessageResponse = {
       ok: false,
+      dispatchAccepted: false,
+      dispatchSignal: "none",
+      dispatchErrorCode: "dispatch_trigger_rejected",
       error: error instanceof Error ? error.message : "send_relay_message_failed"
     };
+
+    recordAckDebug({
+      outcome: "failed",
+      reason: "send_relay_message_failed",
+      response
+    });
+
+    return {
+      ...response
+    };
   }
+}
+
+interface SendButtonState {
+  disabled: boolean;
+  visible: boolean;
+}
+
+interface DispatchAcceptanceInput {
+  composer: Element;
+  text: string;
+  baseline: ReturnType<typeof captureSubmissionBaseline>;
+  preTriggerComposerText: string;
+  sendButton: HTMLButtonElement | null;
+  sendButtonBefore: SendButtonState | null;
+}
+
+interface DispatchAcceptanceResult {
+  accepted: true;
+  signal: "user_message_added" | "generation_started";
+  evidence: RelayDispatchEvidence;
+}
+
+interface DispatchRejectedResult {
+  accepted: false;
+  signal: RelayDispatchSignal;
+  evidence: RelayDispatchEvidence;
+}
+
+type DispatchAcceptanceOutcome = DispatchAcceptanceResult | DispatchRejectedResult;
+
+function captureSendButtonState(sendButton: HTMLButtonElement | null): SendButtonState | null {
+  if (!sendButton) {
+    return null;
+  }
+
+  return {
+    disabled: sendButton.disabled,
+    visible: isElementVisible(sendButton)
+  };
+}
+
+function hasButtonStateChanged(
+  before: SendButtonState | null,
+  after: SendButtonState | null
+): boolean {
+  if (!before || !after) {
+    return false;
+  }
+
+  return before.disabled !== after.disabled || before.visible !== after.visible;
+}
+
+async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promise<DispatchAcceptanceOutcome> {
+  const timeoutMs = 5000;
+  const pollIntervalMs = 150;
+  const startedAt = Date.now();
+
+  let attempts = 0;
+  let lastSignal: RelayDispatchSignal = "none";
+
+  let lastEvidence: RelayDispatchEvidence = {
+    baselineUserHash: input.baseline.userHash,
+    currentUserHash: input.baseline.userHash,
+    baselineGenerating: input.baseline.generating,
+    currentGenerating: input.baseline.generating,
+    baselineComposerPreview: input.baseline.composerText.slice(0, 120),
+    preTriggerText: input.preTriggerComposerText.slice(0, 120),
+    postTriggerText: input.preTriggerComposerText.slice(0, 120),
+    latestUserPreview: input.baseline.latestUserText?.slice(0, 120) ?? null,
+    textChanged: false,
+    buttonStateChanged: false,
+    ackSignal: "none",
+    attempts
+  };
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempts += 1;
+
+    const currentUserHash = findLatestUserMessageHash();
+    const latestUserTextResponse = getLatestUserText();
+    const latestUserText = latestUserTextResponse.ok ? latestUserTextResponse.text : null;
+    const currentGenerating = isGenerationInProgressFromDoc();
+    const postTriggerComposerText = readComposerText(input.composer);
+    const sendButtonAfter = captureSendButtonState(input.sendButton);
+    const textChanged = postTriggerComposerText.length < input.preTriggerComposerText.length * 0.3;
+    const buttonStateChanged = hasButtonStateChanged(input.sendButtonBefore, sendButtonAfter);
+
+    const ack = checkAckSignals({
+      baselineGenerating: input.baseline.generating,
+      baselineUserHash: input.baseline.userHash,
+      baselineSendButtonReady: input.baseline.sendButtonReady,
+      composer: input.composer,
+      expectedHash: input.baseline.expectedHash,
+      expectedText: input.text
+    });
+
+    if (ack?.signal) {
+      lastSignal = ack.signal;
+    }
+
+    const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
+    const hasSubmissionTransition = textChanged || buttonStateChanged || hasUserThreadChange;
+
+    lastEvidence = {
+      baselineUserHash: input.baseline.userHash,
+      currentUserHash,
+      baselineGenerating: input.baseline.generating,
+      currentGenerating,
+      baselineComposerPreview: input.baseline.composerText.slice(0, 120),
+      preTriggerText: input.preTriggerComposerText.slice(0, 120),
+      postTriggerText: postTriggerComposerText.slice(0, 120),
+      latestUserPreview: latestUserText?.slice(0, 120) ?? null,
+      textChanged,
+      buttonStateChanged,
+      ackSignal: ack?.signal ?? lastSignal,
+      attempts
+    };
+
+    if (ack?.ok && ack.signal !== "composer_cleared" && hasSubmissionTransition) {
+      return {
+        accepted: true,
+        signal: ack.signal,
+        evidence: lastEvidence
+      };
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  return {
+    accepted: false,
+    signal: lastSignal,
+    evidence: {
+      ...lastEvidence,
+      ackSignal: lastSignal,
+      attempts
+    }
+  };
+}
+
+function recordAckDebug(payload: Record<string, unknown>): void {
+  lastAckDebug = {
+    timestamp: new Date().toISOString(),
+    ...payload
+  };
 }
 
 function validateComposerReadback(composerText: string, expectedText: string): boolean {
@@ -774,17 +1022,20 @@ function captureSubmissionBaseline(expectedText: string): {
   generating: boolean;
   sendButtonReady: boolean;
   userHash: string | null;
+  latestUserText: string | null;
   expectedHash: string;
 } {
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const latestUserTextResponse = getLatestUserText();
   
   return {
     composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
     sendButtonReady,
     userHash: findLatestUserMessageHash(),
+    latestUserText: latestUserTextResponse.ok ? latestUserTextResponse.text : null,
     expectedHash: hashText(expectedText)
   };
 }

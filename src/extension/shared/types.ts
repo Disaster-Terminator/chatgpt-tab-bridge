@@ -221,19 +221,45 @@ export interface ExecutionReadiness {
 
 export type RelaySendMode = "button" | "form_submit" | "button_missing" | "button_disabled";
 
+export type RelayDispatchSignal =
+  | "user_message_added"
+  | "generation_started"
+  | "composer_cleared"
+  | "none";
+
+export interface RelayDispatchEvidence {
+  baselineUserHash: string | null;
+  currentUserHash: string | null;
+  baselineGenerating: boolean;
+  currentGenerating: boolean;
+  baselineComposerPreview: string;
+  preTriggerText: string;
+  postTriggerText: string;
+  latestUserPreview: string | null;
+  textChanged: boolean;
+  buttonStateChanged: boolean;
+  ackSignal: RelayDispatchSignal;
+  attempts: number;
+}
+
 export type RelayMessageResponse =
   | {
       ok: true;
       mode: RelaySendMode;
       applyMode: string;
       dispatchAccepted: true;
+      dispatchSignal: Exclude<RelayDispatchSignal, "composer_cleared" | "none">;
+      dispatchEvidence: RelayDispatchEvidence;
       error: null;
     }
   | {
       ok: false;
       mode?: RelaySendMode;
       applyMode?: string;
-      dispatchAccepted?: boolean;
+      dispatchAccepted?: false;
+      dispatchSignal?: RelayDispatchSignal;
+      dispatchEvidence?: RelayDispatchEvidence;
+      dispatchErrorCode?: string;
       error: string;
     };
 

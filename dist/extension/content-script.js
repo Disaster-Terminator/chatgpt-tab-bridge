@@ -11,6 +11,35 @@ function hashText(value) {
   }
   return `h${(hash >>> 0).toString(16)}`;
 }
+function isComposerTrulyCleared(currentText, expectedText) {
+  if (!currentText || currentText.trim() === "") {
+    return true;
+  }
+  if (stillContainsExpectedPayload(currentText, expectedText)) {
+    return false;
+  }
+  return true;
+}
+function stillContainsExpectedPayload(currentText, expectedText) {
+  if (!expectedText || !currentText) {
+    return false;
+  }
+  const normalizedCurrent = normalizeText(currentText);
+  const normalizedExpected = normalizeText(expectedText);
+  if (normalizedCurrent === normalizedExpected) {
+    return true;
+  }
+  let matchCount = 0;
+  const expectedWords = normalizedExpected.split(/\s+/).filter((w) => w.length > 0);
+  const currentWords = normalizedCurrent.split(/\s+/).filter((w) => w.length > 0);
+  for (const word of expectedWords) {
+    if (currentWords.some((cw) => cw.includes(word) || word.includes(cw))) {
+      matchCount++;
+    }
+  }
+  const similarity = expectedWords.length > 0 ? matchCount / expectedWords.length : 0;
+  return similarity >= 0.5;
+}
 function isGenerationInProgressFromDoc() {
   if (document.querySelector('button[data-testid="stop-button"]') || document.querySelector('button[data-testid="stop-generating-button"]')) {
     return true;
@@ -18,6 +47,15 @@ function isGenerationInProgressFromDoc() {
   return Boolean(
     document.querySelector('button[aria-label*="\u505C\u6B62"]') || document.querySelector('button[aria-label*="Stop"]') || document.querySelector('button[aria-label*="Cancel"]')
   );
+}
+function readComposerTextFromDoc(composer) {
+  if (!composer) {
+    return "";
+  }
+  if (isValueComposer(composer)) {
+    return normalizeText(composer.value || "");
+  }
+  return normalizeText(composer.textContent || "");
 }
 function findLatestUserMessageHash() {
   const selectors = [
@@ -35,6 +73,89 @@ function findLatestUserMessageHash() {
       const text = normalizeText(latest.textContent || "");
       return text ? hashText(text) : null;
     }
+  }
+  return null;
+}
+function findLatestUserMessageText() {
+  const selectors = [
+    '[data-message-author-role="user"]',
+    'article [data-message-author-role="user"]',
+    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+    'main [data-message-author-role="user"]'
+  ];
+  for (const selector of selectors) {
+    const candidates = Array.from(document.querySelectorAll(selector)).filter(
+      (element) => normalizeText(element.textContent || "")
+    );
+    if (candidates.length > 0) {
+      const latest = candidates[candidates.length - 1];
+      const text = normalizeText(latest.textContent || "");
+      return text || null;
+    }
+  }
+  return null;
+}
+function calculateTextOverlap(textA, textB) {
+  const normalizedA = normalizeText(textA);
+  const normalizedB = normalizeText(textB);
+  if (!normalizedA || !normalizedB) {
+    return 0;
+  }
+  const wordsA = normalizedA.split(/\s+/).filter((w) => w.length > 0);
+  const wordsB = normalizedB.split(/\s+/).filter((w) => w.length > 0);
+  if (wordsA.length === 0 || wordsB.length === 0) {
+    return 0;
+  }
+  let matchCount = 0;
+  for (const word of wordsA) {
+    if (wordsB.some((bw) => bw.includes(word) || word.includes(bw))) {
+      matchCount++;
+    }
+  }
+  return matchCount / Math.max(wordsA.length, wordsB.length);
+}
+function containsBridgeEnvelopePrefix(text) {
+  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
+}
+function showsPayloadAdoption(latestText, expectedText) {
+  if (containsBridgeEnvelopePrefix(latestText)) {
+    return true;
+  }
+  const overlap = calculateTextOverlap(latestText, expectedText);
+  if (overlap >= 0.5) {
+    return true;
+  }
+  return false;
+}
+function checkAckSignals(input) {
+  const { baselineGenerating, baselineUserHash, composer, expectedHash, expectedText } = input;
+  const composerText = readComposerTextFromDoc(composer);
+  const latestUserHash = findLatestUserMessageHash();
+  const latestUserText = findLatestUserMessageText();
+  const currentGenerating = isGenerationInProgressFromDoc();
+  const composerCleared = isComposerTrulyCleared(composerText, expectedText);
+  if (latestUserHash && latestUserHash !== baselineUserHash) {
+    if (latestUserText && showsPayloadAdoption(latestUserText, expectedText)) {
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
+    }
+    if (latestUserHash === expectedHash) {
+      if (composerCleared) {
+        return { ok: true, signal: "user_message_added", evidence: "strong_with_auxiliary" };
+      }
+      return { ok: true, signal: "user_message_added", evidence: "strong" };
+    }
+  }
+  if (!baselineGenerating && currentGenerating) {
+    if (composerCleared) {
+      return { ok: true, signal: "generation_started", evidence: "strong_with_auxiliary" };
+    }
+    return { ok: true, signal: "generation_started", evidence: "strong" };
+  }
+  if (composerCleared) {
+    return { ok: true, signal: "composer_cleared", evidence: "auxiliary_only" };
   }
   return null;
 }
@@ -1046,81 +1167,268 @@ async function sendRelayMessage(text) {
   try {
     const composer = findBestComposer(document);
     if (!composer) {
-      return {
+      const response2 = {
         ok: false,
+        dispatchAccepted: false,
+        dispatchSignal: "none",
+        dispatchErrorCode: "dispatch_trigger_rejected",
         error: "composer_not_found"
+      };
+      recordAckDebug({
+        outcome: "failed",
+        reason: "composer_not_found",
+        response: response2
+      });
+      return {
+        ...response2
       };
     }
     const submissionBaseline = captureSubmissionBaseline(text);
     const applyMode = applyComposerText(composer, text);
     const composerTextBeforeTrigger = readComposerText(composer);
     const readbackValid = validateComposerReadback(composerTextBeforeTrigger, text);
+    if (!readbackValid) {
+      const failedEvidence = {
+        baselineUserHash: submissionBaseline.userHash,
+        currentUserHash: submissionBaseline.userHash,
+        baselineGenerating: submissionBaseline.generating,
+        currentGenerating: submissionBaseline.generating,
+        baselineComposerPreview: submissionBaseline.composerText.slice(0, 120),
+        preTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        postTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        latestUserPreview: submissionBaseline.latestUserText?.slice(0, 120) ?? null,
+        textChanged: false,
+        buttonStateChanged: false,
+        ackSignal: "none",
+        attempts: 0
+      };
+      const response2 = {
+        ok: false,
+        applyMode,
+        dispatchAccepted: false,
+        dispatchSignal: "none",
+        dispatchEvidence: failedEvidence,
+        dispatchErrorCode: "payload_not_applied",
+        error: "payload_not_applied"
+      };
+      recordAckDebug({
+        outcome: "failed",
+        reason: "payload_not_applied",
+        baseline: submissionBaseline,
+        response: response2
+      });
+      return {
+        ...response2
+      };
+    }
     const sendButton = await waitForSendButton({
       composer,
       root: document
     });
-    const sendButtonBefore = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
+    const sendButtonBefore = captureSendButtonState(sendButton);
     const sendResult = triggerComposerSend({
       root: document,
       composer,
       sendButton
     });
-    await sleep(300);
-    const postTriggerComposerText = readComposerText(composer);
-    const sendButtonAfter = sendButton ? { disabled: sendButton.disabled, visible: isElementVisible(sendButton) } : null;
-    const textClearedAfterTrigger = postTriggerComposerText.length < composerTextBeforeTrigger.length * 0.3;
-    const buttonStateChanged = sendButtonBefore && sendButtonAfter ? sendButtonBefore.disabled !== sendButtonAfter.disabled || sendButtonBefore.visible !== sendButtonAfter.visible : false;
-    const dispatchEvidence = {
-      preTriggerText: composerTextBeforeTrigger.slice(0, 100),
-      postTriggerText: postTriggerComposerText.slice(0, 100),
-      textChanged: textClearedAfterTrigger,
-      buttonStateChanged
-    };
     if (!sendResult.ok) {
-      return {
+      const failedEvidence = {
+        baselineUserHash: submissionBaseline.userHash,
+        currentUserHash: findLatestUserMessageHash(),
+        baselineGenerating: submissionBaseline.generating,
+        currentGenerating: isGenerationInProgressFromDoc(),
+        baselineComposerPreview: submissionBaseline.composerText.slice(0, 120),
+        preTriggerText: composerTextBeforeTrigger.slice(0, 120),
+        postTriggerText: readComposerText(composer).slice(0, 120),
+        latestUserPreview: getLatestUserText().ok ? getLatestUserText().text?.slice(0, 120) ?? null : null,
+        textChanged: false,
+        buttonStateChanged: false,
+        ackSignal: "none",
+        attempts: 1
+      };
+      const response2 = {
         ok: false,
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
-        dispatchEvidence,
-        error: sendResult.error ?? "send_trigger_failed"
+        dispatchSignal: "none",
+        dispatchEvidence: failedEvidence,
+        dispatchErrorCode: "dispatch_trigger_rejected",
+        error: sendResult.error ?? "dispatch_trigger_rejected"
+      };
+      recordAckDebug({
+        outcome: "failed",
+        reason: "dispatch_trigger_rejected",
+        baseline: submissionBaseline,
+        sendResult,
+        response: response2
+      });
+      return {
+        ...response2
       };
     }
-    if (!readbackValid) {
-      return {
+    const dispatchProbe = await waitForDispatchAcceptance({
+      composer,
+      text,
+      baseline: submissionBaseline,
+      preTriggerComposerText: composerTextBeforeTrigger,
+      sendButton,
+      sendButtonBefore
+    });
+    if (!dispatchProbe.accepted) {
+      const response2 = {
         ok: false,
         mode: sendResult.mode,
         applyMode,
         dispatchAccepted: false,
-        dispatchEvidence,
-        error: "payload_not_applied"
-      };
-    }
-    const dispatchAccepted = textClearedAfterTrigger || buttonStateChanged;
-    if (!dispatchAccepted) {
-      return {
-        ok: true,
-        mode: sendResult.mode,
-        applyMode,
-        dispatchAccepted: false,
-        dispatchEvidence,
+        dispatchSignal: dispatchProbe.signal,
+        dispatchEvidence: dispatchProbe.evidence,
+        dispatchErrorCode: "dispatch_evidence_weak",
         error: "dispatch_evidence_weak"
       };
+      recordAckDebug({
+        outcome: "failed",
+        reason: "dispatch_evidence_weak",
+        baseline: submissionBaseline,
+        sendResult,
+        response: response2
+      });
+      return {
+        ...response2
+      };
     }
-    return {
+    const response = {
       ok: true,
       mode: sendResult.mode,
       applyMode,
       dispatchAccepted: true,
-      dispatchEvidence,
+      dispatchSignal: dispatchProbe.signal,
+      dispatchEvidence: dispatchProbe.evidence,
       error: null
     };
-  } catch (error) {
+    recordAckDebug({
+      outcome: "accepted",
+      baseline: submissionBaseline,
+      sendResult,
+      response
+    });
     return {
+      ...response
+    };
+  } catch (error) {
+    const response = {
       ok: false,
+      dispatchAccepted: false,
+      dispatchSignal: "none",
+      dispatchErrorCode: "dispatch_trigger_rejected",
       error: error instanceof Error ? error.message : "send_relay_message_failed"
     };
+    recordAckDebug({
+      outcome: "failed",
+      reason: "send_relay_message_failed",
+      response
+    });
+    return {
+      ...response
+    };
   }
+}
+function captureSendButtonState(sendButton) {
+  if (!sendButton) {
+    return null;
+  }
+  return {
+    disabled: sendButton.disabled,
+    visible: isElementVisible(sendButton)
+  };
+}
+function hasButtonStateChanged(before, after) {
+  if (!before || !after) {
+    return false;
+  }
+  return before.disabled !== after.disabled || before.visible !== after.visible;
+}
+async function waitForDispatchAcceptance(input) {
+  const timeoutMs = 5e3;
+  const pollIntervalMs = 150;
+  const startedAt = Date.now();
+  let attempts = 0;
+  let lastSignal = "none";
+  let lastEvidence = {
+    baselineUserHash: input.baseline.userHash,
+    currentUserHash: input.baseline.userHash,
+    baselineGenerating: input.baseline.generating,
+    currentGenerating: input.baseline.generating,
+    baselineComposerPreview: input.baseline.composerText.slice(0, 120),
+    preTriggerText: input.preTriggerComposerText.slice(0, 120),
+    postTriggerText: input.preTriggerComposerText.slice(0, 120),
+    latestUserPreview: input.baseline.latestUserText?.slice(0, 120) ?? null,
+    textChanged: false,
+    buttonStateChanged: false,
+    ackSignal: "none",
+    attempts
+  };
+  while (Date.now() - startedAt < timeoutMs) {
+    attempts += 1;
+    const currentUserHash = findLatestUserMessageHash();
+    const latestUserTextResponse = getLatestUserText();
+    const latestUserText = latestUserTextResponse.ok ? latestUserTextResponse.text : null;
+    const currentGenerating = isGenerationInProgressFromDoc();
+    const postTriggerComposerText = readComposerText(input.composer);
+    const sendButtonAfter = captureSendButtonState(input.sendButton);
+    const textChanged = postTriggerComposerText.length < input.preTriggerComposerText.length * 0.3;
+    const buttonStateChanged = hasButtonStateChanged(input.sendButtonBefore, sendButtonAfter);
+    const ack = checkAckSignals({
+      baselineGenerating: input.baseline.generating,
+      baselineUserHash: input.baseline.userHash,
+      baselineSendButtonReady: input.baseline.sendButtonReady,
+      composer: input.composer,
+      expectedHash: input.baseline.expectedHash,
+      expectedText: input.text
+    });
+    if (ack?.signal) {
+      lastSignal = ack.signal;
+    }
+    const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
+    const hasSubmissionTransition = textChanged || buttonStateChanged || hasUserThreadChange;
+    lastEvidence = {
+      baselineUserHash: input.baseline.userHash,
+      currentUserHash,
+      baselineGenerating: input.baseline.generating,
+      currentGenerating,
+      baselineComposerPreview: input.baseline.composerText.slice(0, 120),
+      preTriggerText: input.preTriggerComposerText.slice(0, 120),
+      postTriggerText: postTriggerComposerText.slice(0, 120),
+      latestUserPreview: latestUserText?.slice(0, 120) ?? null,
+      textChanged,
+      buttonStateChanged,
+      ackSignal: ack?.signal ?? lastSignal,
+      attempts
+    };
+    if (ack?.ok && ack.signal !== "composer_cleared" && hasSubmissionTransition) {
+      return {
+        accepted: true,
+        signal: ack.signal,
+        evidence: lastEvidence
+      };
+    }
+    await sleep(pollIntervalMs);
+  }
+  return {
+    accepted: false,
+    signal: lastSignal,
+    evidence: {
+      ...lastEvidence,
+      ackSignal: lastSignal,
+      attempts
+    }
+  };
+}
+function recordAckDebug(payload) {
+  lastAckDebug = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    ...payload
+  };
 }
 function validateComposerReadback(composerText, expectedText) {
   if (!composerText || !expectedText) {
@@ -1166,11 +1474,13 @@ function captureSubmissionBaseline(expectedText) {
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const latestUserTextResponse = getLatestUserText();
   return {
     composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
     sendButtonReady,
     userHash: findLatestUserMessageHash(),
+    latestUserText: latestUserTextResponse.ok ? latestUserTextResponse.text : null,
     expectedHash: hashText(expectedText)
   };
 }
