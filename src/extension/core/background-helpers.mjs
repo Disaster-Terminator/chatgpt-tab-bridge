@@ -1,5 +1,9 @@
 export function shouldKeepBindingForUrlChange(binding, nextUrlInfo) {
-  if (!binding?.urlInfo?.supported || !nextUrlInfo?.supported) {
+  if (!binding?.urlInfo?.supported) {
+    return true;
+  }
+
+  if (!nextUrlInfo?.supported) {
     return false;
   }
 
