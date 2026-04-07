@@ -471,7 +471,7 @@ function cloneState(state: RuntimeState): RuntimeState {
 }
 
 function isBindingValid(binding: RuntimeBinding | null | undefined): boolean {
-  return Boolean(binding?.tabId && binding?.urlInfo?.supported);
+  return Boolean(binding?.tabId && (binding.sessionIdentity !== null || binding.urlInfo?.supported));
 }
 
 function isBridgeRole(value: unknown): value is BridgeRole {
@@ -493,6 +493,7 @@ function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): 
     title: binding.title ?? "",
     url: binding.url ?? "",
     urlInfo: binding.urlInfo ?? null,
+    sessionIdentity: binding.sessionIdentity ?? null,
     boundAt: binding.boundAt ?? new Date().toISOString()
   };
 }
@@ -511,8 +512,27 @@ function hasBindingConflict(
     return false;
   }
 
-  return (
-    siblingBinding.tabId === candidateBinding.tabId ||
-    siblingBinding.urlInfo?.normalizedUrl === candidateBinding.urlInfo?.normalizedUrl
-  );
+  // P0-1: Check conflict by tabId OR sessionIdentity (for live sessions)
+  if (siblingBinding.tabId === candidateBinding.tabId) {
+    return true;
+  }
+
+  // Check URL-based conflict for persistent URL bindings
+  if (siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
+    if (siblingBinding.urlInfo.normalizedUrl === candidateBinding.urlInfo.normalizedUrl) {
+      return true;
+    }
+  }
+
+  // Check sessionIdentity conflict for live sessions
+  if (siblingBinding.sessionIdentity && candidateBinding.sessionIdentity) {
+    if (siblingBinding.sessionIdentity.kind === "live_session" && 
+        candidateBinding.sessionIdentity.kind === "live_session") {
+      if (siblingBinding.sessionIdentity.tabId === candidateBinding.sessionIdentity.tabId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

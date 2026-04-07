@@ -8,7 +8,11 @@ export function shouldKeepBindingForUrlChange(
   binding: BindingWithUrlInfo | null,
   nextUrlInfo: ChatGptUrlInfo | null
 ): boolean {
-  if (!binding?.urlInfo?.supported || !nextUrlInfo?.supported) {
+  if (!binding?.urlInfo?.supported) {
+    return true;
+  }
+
+  if (!nextUrlInfo?.supported) {
     return false;
   }
 

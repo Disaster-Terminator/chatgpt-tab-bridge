@@ -59,7 +59,36 @@
 - 项目内线程：
   - `https://chatgpt.com/g/<project-id>/c/<conversation-id>`
 
-不支持把根页面 `https://chatgpt.com/` 直接当成已绑定线程。
+### Live Session 绑定（主模型）
+
+插件现在支持两种绑定方式：
+
+1. **Live Session 绑定（主模型）**：绑定任何 ChatGPT 页面作为 live session，无需 URL
+   - 可以绑定根页面 `https://chatgpt.com/` 作为 live session
+   - 可以绑定任意 chatgpt.com 页面，即使没有 `/c/<id>` URL
+   - 绑定后可以通过发送消息让页面成为有内容的 live session
+   - relay 主链路完全支持 live session 工作
+
+2. **Persistent URL 绑定（增强模式）**：绑定具有 thread URL 的页面
+   - 当页面 URL 变成 `/c/<id>` 或 `/g/.../c/<id>` 时，自动升级为 persistent identity
+   - 这是可选增强，不是必须的
+
+### 不登录也能工作
+
+- 不登录时无法生成 persistent thread URL（/c/<id>）
+- 但仍可以将任意 chatgpt.com 页面绑定为 live session
+- 仍可以发送 seed message 进行 relay
+- 仍可以进行真实性验收（基于页面证据而非 URL）
+
+### 失败分层
+
+Relay 失败现在分为以下层级：
+
+1. `bootstrap_seed_not_sent` - seed message 未能发送
+2. `dispatch_rejected` - dispatch 被拒绝
+3. `verification_failed` - 验证失败（payload 相关性检查）
+4. `waiting_before_acceptance` - 进入等待回复前没有独立接受证据
+5. `url_not_available` - 非失败状态，只是 live session 工作（无 persistent URL）
 
 ## 交互形态
 

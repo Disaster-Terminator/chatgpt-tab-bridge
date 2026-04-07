@@ -1,6 +1,9 @@
 // core/background-helpers.ts
 function shouldKeepBindingForUrlChange(binding, nextUrlInfo) {
-  if (!binding?.urlInfo?.supported || !nextUrlInfo?.supported) {
+  if (!binding?.urlInfo?.supported) {
+    return true;
+  }
+  if (!nextUrlInfo?.supported) {
     return false;
   }
   return binding.urlInfo.normalizedUrl === nextUrlInfo.normalizedUrl;
@@ -447,7 +450,7 @@ function cloneState(state) {
   };
 }
 function isBindingValid(binding) {
-  return Boolean(binding?.tabId && binding?.urlInfo?.supported);
+  return Boolean(binding?.tabId && (binding.sessionIdentity !== null || binding.urlInfo?.supported));
 }
 function isBridgeRole(value) {
   return value === ROLE_A || value === ROLE_B;
@@ -465,6 +468,7 @@ function normalizeBinding(binding) {
     title: binding.title ?? "",
     url: binding.url ?? "",
     urlInfo: binding.urlInfo ?? null,
+    sessionIdentity: binding.sessionIdentity ?? null,
     boundAt: binding.boundAt ?? (/* @__PURE__ */ new Date()).toISOString()
   };
 }
@@ -476,7 +480,22 @@ function hasBindingConflict(state, role, candidateBinding) {
   if (!siblingBinding) {
     return false;
   }
-  return siblingBinding.tabId === candidateBinding.tabId || siblingBinding.urlInfo?.normalizedUrl === candidateBinding.urlInfo?.normalizedUrl;
+  if (siblingBinding.tabId === candidateBinding.tabId) {
+    return true;
+  }
+  if (siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
+    if (siblingBinding.urlInfo.normalizedUrl === candidateBinding.urlInfo.normalizedUrl) {
+      return true;
+    }
+  }
+  if (siblingBinding.sessionIdentity && candidateBinding.sessionIdentity) {
+    if (siblingBinding.sessionIdentity.kind === "live_session" && candidateBinding.sessionIdentity.kind === "live_session") {
+      if (siblingBinding.sessionIdentity.tabId === candidateBinding.sessionIdentity.tabId) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // core/relay-core.ts
@@ -900,10 +919,27 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     return;
   }
   const nextState = structuredCloneSafe(state);
+  const currentBinding = nextState.bindings[role];
+  if (!currentBinding) {
+    return;
+  }
+  let sessionIdentity = currentBinding.sessionIdentity;
+  if (urlInfo.supported && sessionIdentity?.kind === "live_session") {
+    sessionIdentity = {
+      kind: "persistent_url",
+      tabId: currentBinding.tabId,
+      role,
+      boundAt: sessionIdentity.boundAt,
+      url: changeInfo.url,
+      urlInfo,
+      currentRound: sessionIdentity.currentRound
+    };
+  }
   nextState.bindings[role] = {
-    ...nextState.bindings[role],
+    ...currentBinding,
     url: changeInfo.url,
-    urlInfo
+    urlInfo,
+    sessionIdentity
   };
   await persistState(nextState, state);
 });
@@ -1019,12 +1055,37 @@ async function bindTabToRole(role, tabId) {
   }
   const tab = await chrome.tabs.get(tabId);
   const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
-  if (!urlInfo.supported) {
-    throw new Error("The selected tab is not a supported ChatGPT thread.");
-  }
+  const sessionIdentity = urlInfo.supported ? {
+    kind: "persistent_url",
+    tabId: tab.id ?? tabId,
+    role,
+    boundAt: (/* @__PURE__ */ new Date()).toISOString(),
+    url: tab.url ?? "",
+    urlInfo,
+    currentRound: 0
+  } : {
+    kind: "live_session",
+    tabId: tab.id ?? tabId,
+    role,
+    boundAt: (/* @__PURE__ */ new Date()).toISOString(),
+    observedSnapshot: null,
+    currentRound: 0
+  };
   const otherBinding = state.bindings[otherRole(role)];
-  if (otherBinding && (otherBinding.tabId === tab.id || otherBinding.urlInfo?.normalizedUrl === urlInfo.normalizedUrl)) {
-    throw new Error("A and B must be bound to different ChatGPT threads.");
+  if (otherBinding) {
+    if (otherBinding.tabId === tab.id) {
+      throw new Error("A and B must be bound to different ChatGPT threads.");
+    }
+    if (urlInfo.supported && otherBinding.urlInfo?.normalizedUrl) {
+      if (urlInfo.normalizedUrl === otherBinding.urlInfo.normalizedUrl) {
+        throw new Error("A and B must be bound to different ChatGPT threads.");
+      }
+    }
+    if (sessionIdentity.kind === "live_session" && otherBinding.sessionIdentity?.kind === "live_session") {
+      if (otherBinding.sessionIdentity.tabId === sessionIdentity.tabId) {
+        throw new Error("A and B must be bound to different ChatGPT threads.");
+      }
+    }
   }
   return updateState({
     type: "set_binding",
@@ -1035,6 +1096,7 @@ async function bindTabToRole(role, tabId) {
       title: tab.title ?? "",
       url: tab.url ?? "",
       urlInfo,
+      sessionIdentity,
       boundAt: (/* @__PURE__ */ new Date()).toISOString()
     }
   });
@@ -1568,14 +1630,6 @@ async function ensureRunnableBinding(role, binding) {
   }
   try {
     const tab = await chrome.tabs.get(binding.tabId);
-    const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
-    if (!urlInfo.supported) {
-      await updateState({
-        type: "invalidate_binding",
-        role
-      });
-      return null;
-    }
     return tab;
   } catch {
     await updateState({

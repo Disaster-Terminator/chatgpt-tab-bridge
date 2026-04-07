@@ -11,7 +11,12 @@ export type StopReason =
   | "binding_invalid"
   | "starter_settle_timeout"
   | "target_settle_timeout"
-  | "submission_not_verified";
+  | "submission_not_verified"
+  | "bootstrap_seed_not_sent"
+  | "dispatch_rejected"
+  | "verification_failed"
+  | "waiting_before_acceptance"
+  | "url_not_available";
 
 export type ErrorReason =
   | "selector_failure"
@@ -68,12 +73,42 @@ export interface UnsupportedChatGptUrlInfo {
 
 export type ChatGptUrlInfo = ChatGptThreadUrlInfo | UnsupportedChatGptUrlInfo;
 
+export type IdentityKind = "live_session" | "persistent_url";
+
+export interface LiveSessionIdentity {
+  kind: "live_session";
+  tabId: number;
+  role: BridgeRole;
+  boundAt: string;
+  observedSnapshot: {
+    userMessageCount: number;
+    assistantMessageCount: number;
+    hasComposer: boolean;
+    latestUserHash: string | null;
+    latestAssistantHash: string | null;
+  } | null;
+  currentRound: number;
+}
+
+export interface PersistentUrlIdentity {
+  kind: "persistent_url";
+  tabId: number;
+  role: BridgeRole;
+  boundAt: string;
+  url: string;
+  urlInfo: ChatGptUrlInfo;
+  currentRound: number;
+}
+
+export type SessionIdentity = LiveSessionIdentity | PersistentUrlIdentity;
+
 export interface RuntimeBinding {
   role: BridgeRole;
   tabId: number;
   title: string;
   url: string;
   urlInfo: ChatGptUrlInfo | null;
+  sessionIdentity: SessionIdentity | null;
   boundAt: string;
 }
 

@@ -442,21 +442,20 @@ export async function expectValueChanged(page, selector, predicate) {
 
 /**
  * Bootstrap an anonymous ChatGPT thread with a prompt.
- * Tries anonymous bootstrap first, only fails on actual error.
+ * Supports two success modes:
+ * 1. Persistent URL: URL transitions to /c/<id> or /g/.../c/<id>
+ * 2. Live session: Page shows seed acceptance evidence without URL transition
  * @param {import("playwright").Page} page
  * @param {string} seedLabel
  * @param {string} prompt
  */
 export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
-  await dismissCookieBanner(page);
-  
-  // Try anonymous bootstrap - send prompt and wait for response
+  await dismissCookieBanner();
+
   try {
-    // Find and use composer
     const composer = await findComposer(page);
     await composer.waitFor({ state: "visible", timeout: 30000 });
-    
-    // Send the prompt
+
     const tagName = await composer.evaluate((node) => node.tagName.toLowerCase());
     if (tagName === "textarea" || tagName === "input") {
       await composer.evaluate((node, value) => {
@@ -470,9 +469,8 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
       await page.keyboard.insertText(prompt);
     }
 
-    await dismissCookieBanner(page);
-    
-    // Click send or press Enter
+    await dismissCookieBanner();
+
     const sendButton = page
       .locator('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="发送"], form button[type="submit"]')
       .first();
@@ -484,7 +482,6 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
         try {
           await sendButton.click({ force: true, timeout: 5000 });
         } catch {
-          // Fall through to alternative submit paths.
         }
 
         dispatched = await waitForPromptDispatch(page, composer, prompt);
@@ -510,45 +507,91 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
       throw new Error("seed_prompt_not_dispatched");
     }
 
-    // Bootstrap success only requires transitioning to a bindable thread URL.
-    await waitUntilSupportedThreadUrl(page, 30000);
+    const baselineUserCount = await getUserMessageCount(page);
 
-    // Assistant generation can be delayed; treat as best-effort evidence only.
-    const locator = page.locator('[data-message-author-role="assistant"]').last();
-    try {
-      await locator.waitFor({ state: "visible", timeout: 15000 });
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 15000) {
-        const text = (await locator.innerText()).trim();
-        if (text) {
-          break;
-        }
-        await page.waitForTimeout(1000);
+    const [hasSupportedUrl, hasAcceptanceEvidence] = await Promise.all([
+      waitForSupportedThreadUrlWithTimeout(page, 30000),
+      waitForAcceptanceEvidenceWithTimeout(page, baselineUserCount, 30000)
+    ]);
+
+    if (hasSupportedUrl) {
+      const locator = page.locator('[data-message-author-role="assistant"]').last();
+      try {
+        await locator.waitFor({ state: "visible", timeout: 15000 });
+      } catch {
       }
-    } catch {
-      // Ignore assistant timeout here. URL transition already proved bootstrap success.
+      return { mode: "persistent_url", url: page.url() };
     }
-    
-    return; // Success!
-    
+
+    if (hasAcceptanceEvidence) {
+      return { mode: "live_session", url: page.url() };
+    }
+
+    throw new Error("bootstrap_timeout_no_evidence");
+
   } catch (bootstrapError) {
-    // Check if we actually got a response despite the error
-    // Use canonical parser to validate URL
     const url = page.url();
     const parsed = parseChatGptThreadUrl(url);
     const hasSupportedUrl = parsed.supported;
-    
-    // If URL is already a supported thread, treat bootstrap as successful.
+
     if (hasSupportedUrl) {
-      return; // Success despite error message
+      return { mode: "persistent_url", url };
     }
-    
-    // Real failure - couldn't create thread
+
     throw new Error(
       `Anonymous bootstrap failed for ${seedLabel}: ${bootstrapError.message}. ` +
       `Root page cannot be bound directly. Bootstrap two threads first or provide existing thread URLs via --url-a and --url-b.`
     );
   }
+}
+
+async function getUserMessageCount(page) {
+  return await page.evaluate(() => {
+    const candidates = document.querySelectorAll('[data-message-author-role="user"]');
+    return candidates.length;
+  });
+}
+
+async function waitForAcceptanceEvidenceWithTimeout(page, baselineUserCount, timeoutMs) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const currentUserCount = await getUserMessageCount(page);
+    if (currentUserCount > baselineUserCount) {
+      return true;
+    }
+
+    const generating = await page.evaluate(() => {
+      return Boolean(
+        document.querySelector('button[data-testid="stop-button"]') ||
+        document.querySelector('button[data-testid="stop-generating-button"]')
+      );
+    });
+    if (generating) {
+      return true;
+    }
+
+    await sleep(500);
+  }
+
+  return false;
+}
+
+async function waitForSupportedThreadUrlWithTimeout(page, timeoutMs) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const url = page.url();
+    const parsed = parseChatGptThreadUrl(url);
+
+    if (parsed.supported) {
+      return true;
+    }
+
+    await sleep(500);
+  }
+
+  return false;
 }
 
 /**
@@ -821,6 +864,25 @@ export async function assertSupportedThreadUrl(page, label) {
       `or provide existing thread URLs via --url-a and --url-b.`
     );
   }
+}
+
+/**
+ * Check if page has at least some session evidence (user message or generation).
+ * Returns true if the page has been used for a conversation.
+ * @param {import("playwright").Page} page
+ * @returns {Promise<boolean>}
+ */
+export async function hasSessionEvidence(page) {
+  return await page.evaluate(() => {
+    const userMessages = document.querySelectorAll('[data-message-author-role="user"]');
+    if (userMessages.length > 0) {
+      return true;
+    }
+
+    const generating = document.querySelector('button[data-testid="stop-button"]') ||
+      document.querySelector('button[data-testid="stop-generating-button"]');
+    return Boolean(generating);
+  });
 }
 
 /**

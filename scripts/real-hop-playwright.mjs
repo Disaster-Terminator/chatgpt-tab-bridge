@@ -40,6 +40,8 @@ import {
   getExtensionId,
   openPopup,
   assertSupportedThreadUrl,
+  hasSessionEvidence,
+  isSupportedThreadUrl,
   sleep
 } from "./_playwright-bridge-helpers.mjs";
 
@@ -577,7 +579,7 @@ try {
     resolvedUrlB = pageB.url();
   } else if (skipBootstrap) {
     bootstrapMode = "manual_skip_bootstrap";
-    logLine("--skip-bootstrap 模式：请手动导航到两个真实线程 URL。\n");
+    logLine("--skip-bootstrap 模式：请手动导航到两个 ChatGPT 页面。\n");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
@@ -586,37 +588,69 @@ try {
     await new Promise((resolve) => {
       process.stdin.once("data", () => resolve());
     });
-    await assertSupportedThreadUrl(pageA, "pageA (manual)");
-    await assertSupportedThreadUrl(pageB, "pageB (manual)");
+
+    const [hasEvidenceA, hasEvidenceB] = await Promise.all([
+      hasSessionEvidence(pageA),
+      hasSessionEvidence(pageB)
+    ]);
+
+    if (!hasEvidenceA) {
+      throw new Error("pageA has no session evidence - send a prompt first");
+    }
+    if (!hasEvidenceB) {
+      throw new Error("pageB has no session evidence - send a prompt first");
+    }
+
+    const [urlAValid, urlBValid] = await Promise.all([
+      isSupportedThreadUrl(pageA),
+      isSupportedThreadUrl(pageB)
+    ]);
+
+    if (urlAValid) {
+      await assertSupportedThreadUrl(pageA, "pageA (manual)");
+    }
+    if (urlBValid) {
+      await assertSupportedThreadUrl(pageB, "pageB (manual)");
+    }
+
     resolvedUrlA = pageA.url();
     resolvedUrlB = pageB.url();
+    logLine(`Manual skip bootstrap: A=${resolvedUrlA} (URL: ${urlAValid}, evidence: ${hasEvidenceA})`);
+    logLine(`Manual skip bootstrap: B=${resolvedUrlB} (URL: ${urlBValid}, evidence: ${hasEvidenceB})`);
   } else {
-    // Default: Use auth state to open authenticated pages, then auto-bootstrap threads
-    bootstrapMode = "authenticated_bootstrap";
-    logLine("使用已导出的认证状态，自动 bootstrap 两个线程。\n");
+    bootstrapMode = "live_session_bootstrap";
+    logLine("Live session bootstrap: send prompts and verify acceptance without URL.\n");
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
     ]);
 
-    // Restore sessionStorage after navigation (as backup to init script)
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
     }
 
-    // Give page time to stabilize after auth restoration
     await sleep(2000);
 
     await bootstrapThreadWithRetry(pageA, "seed-a", "A");
     await bootstrapThreadWithRetry(pageB, "seed-b", "B");
-    await assertSupportedThreadUrl(pageA, "pageA (authenticated-bootstrap)");
-    await assertSupportedThreadUrl(pageB, "pageB (authenticated-bootstrap)");
+
+    const [urlAValid, urlBValid] = await Promise.all([
+      isSupportedThreadUrl(pageA),
+      isSupportedThreadUrl(pageB)
+    ]);
+
+    if (urlAValid) {
+      await assertSupportedThreadUrl(pageA, "pageA (live-session-bootstrap)");
+    }
+    if (urlBValid) {
+      await assertSupportedThreadUrl(pageB, "pageB (live-session-bootstrap)");
+    }
 
     resolvedUrlA = pageA.url();
     resolvedUrlB = pageB.url();
-    logLine(`认证 bootstrap 成功: A=${resolvedUrlA}`);
-    logLine(`认证 bootstrap 成功: B=${resolvedUrlB}`);
+    logLine(`Live session bootstrap: A=${resolvedUrlA} (URL valid: ${urlAValid})`);
+    logLine(`Live session bootstrap: B=${resolvedUrlB} (URL valid: ${urlBValid})`);
   }
 
   await ensureOverlay(pageA);
