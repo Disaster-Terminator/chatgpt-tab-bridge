@@ -151,6 +151,17 @@ export interface CompletedHop {
   round: number;
 }
 
+export type RuntimeHopStage = "pending" | "verifying" | "waiting_reply";
+
+export interface RuntimeHopTruth {
+  sourceRole: BridgeRole;
+  targetRole: BridgeRole;
+  targetTabId: number | null;
+  round: number;
+  hopId: string | null;
+  stage: RuntimeHopStage;
+}
+
 export interface RuntimeState {
   phase: RuntimePhase;
   bindings: Record<BridgeRole, RuntimeBinding | null>;
@@ -164,6 +175,7 @@ export interface RuntimeState {
   requiresTerminalClear: boolean;
   lastStopReason: string | null;
   lastError: string | null;
+  activeHop: RuntimeHopTruth | null;
   lastCompletedHop: CompletedHop | null;
   lastForwardedHashes: Record<BridgeRole, string | null>;
   lastAssistantHashes: Record<BridgeRole, string | null>;
@@ -230,7 +242,34 @@ export type AssistantSnapshotResponse =
   | { ok: true; result: AssistantSnapshot }
   | { ok: false; error: string };
 
+export interface TargetObservationIdentityFacts {
+  url: string;
+  pathname: string;
+  title: string;
+}
+
+export interface TargetObservationMessageFacts {
+  present: boolean;
+  text: string | null;
+  hash: string | null;
+}
+
+export interface TargetObservationComposerFacts {
+  available: boolean;
+  text: string;
+  sendButtonReady: boolean;
+}
+
+export interface TargetObservationSample {
+  identity: TargetObservationIdentityFacts;
+  latestUser: TargetObservationMessageFacts;
+  latestAssistant: TargetObservationMessageFacts;
+  generating: boolean;
+  composer: TargetObservationComposerFacts;
+}
+
 export interface ThreadActivity {
+  sample: TargetObservationSample;
   generating: boolean;
   latestAssistantHash: string | null;
   latestUserHash: string | null;

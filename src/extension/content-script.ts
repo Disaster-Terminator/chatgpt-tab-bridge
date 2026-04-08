@@ -26,7 +26,8 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
   ThreadActivityResponse,
-  ExecutionReadiness
+   ExecutionReadiness,
+   TargetObservationSample
 } from "./shared/types.js";
 import type { ChromePort } from "./shared/globals";
 
@@ -575,55 +576,76 @@ function initOverlayDrag(): void {
 function readAssistantSnapshot():
   | { ok: true; result: { text: string; hash: string } }
   | { ok: false; error: string } {
-  const latest = findLatestAssistantElement();
-  if (!latest) {
+  const observation = readTargetObservationSample();
+  const latestAssistant = observation.result.latestAssistant;
+  if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
     return {
       ok: false,
       error: "assistant_message_not_found"
     };
   }
 
-  const text = normalizeText(latest.textContent || "");
-  if (!text) {
-    return {
-      ok: false,
-      error: "assistant_message_empty"
-    };
-  }
-
   return {
     ok: true,
     result: {
-      text,
-      hash: hashText(text)
+      text: latestAssistant.text,
+      hash: latestAssistant.hash
     }
   };
 }
 
-function readThreadActivity():
-  | { ok: true; result: { generating: boolean; latestAssistantHash: string | null; latestUserHash: string | null; composerText: string; sendButtonReady: boolean; composerAvailable: boolean } }
-  | { ok: false; error: string } {
-  const generating = isGenerationInProgressFromDoc();
-  const latestUserHash = findLatestUserMessageHash();
-  const composer = findBestComposer(document);
-  const composerText = readComposerText(composer);
-  const sendButton = composer ? findSendButton(document, composer) : null;
-  const sendButtonReady = sendButton !== null && !sendButton.disabled;
-  const composerAvailable = composer !== null;
-
-  const latestAssistant = findLatestAssistantElement();
-  const latestAssistantHash = latestAssistant ? hashText(normalizeText(latestAssistant.textContent || "")) : null;
+function readThreadActivity(): ThreadActivityResponse {
+  const observation = readTargetObservationSample();
+  const sample = observation.result;
 
   return {
     ok: true,
     result: {
-      generating,
-      latestAssistantHash,
-      latestUserHash,
-      composerText,
-      sendButtonReady,
-      composerAvailable
+      sample,
+      generating: sample.generating,
+      latestAssistantHash: sample.latestAssistant.hash,
+      latestUserHash: sample.latestUser.hash,
+      composerText: sample.composer.text,
+      sendButtonReady: sample.composer.sendButtonReady,
+      composerAvailable: sample.composer.available
     }
+  };
+}
+
+function readTargetObservationSample(): { ok: true; result: TargetObservationSample } {
+  const latestUser = readLatestMessageFacts("user");
+  const latestAssistant = readLatestMessageFacts("assistant");
+  const composer = findBestComposer(document);
+  const sendButton = composer ? findSendButton(document, composer) : null;
+
+  return {
+    ok: true,
+    result: {
+      identity: {
+        url: window.location.href,
+        pathname: window.location.pathname,
+        title: document.title
+      },
+      latestUser,
+      latestAssistant,
+      generating: isGenerationInProgressFromDoc(),
+      composer: {
+        available: composer !== null,
+        text: readComposerText(composer),
+        sendButtonReady: sendButton !== null && !sendButton.disabled
+      }
+    }
+  };
+}
+
+function readLatestMessageFacts(role: "user" | "assistant"): TargetObservationSample["latestUser"] {
+  const latestMessage = findLatestMessageElement(role);
+  const text = latestMessage ? normalizeText(latestMessage.textContent || "") : null;
+
+  return {
+    present: text !== null,
+    text,
+    hash: text ? hashText(text) : null
   };
 }
 
@@ -1129,29 +1151,9 @@ function findLatestMessageElement(role: "user" | "assistant"): Element | null {
 }
 
 function getLatestUserText(): { ok: true; text: string | null } | { ok: false; error: string } {
-  const selectors = [
-    '[data-message-author-role="user"]',
-    'article [data-message-author-role="user"]',
-    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
-    "main [data-message-author-role='user']"
-  ];
-
-  for (const selector of selectors) {
-    const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
-      normalizeText(element.textContent || "")
-    );
-    if (candidates.length > 0) {
-      const latest = candidates[candidates.length - 1];
-      return {
-        ok: true,
-        text: normalizeText(latest.textContent || "")
-      };
-    }
-  }
-
   return {
     ok: true,
-    text: null
+    text: readTargetObservationSample().result.latestUser.text
   };
 }
 

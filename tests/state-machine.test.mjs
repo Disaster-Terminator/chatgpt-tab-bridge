@@ -77,7 +77,85 @@ test("two live sessions with same normalized root URL can both bind if tabIds di
   assert.ok(state.bindings.B);
 });
 
-test("pause and resume preserve round while allowing one-shot override", () => {
+test("resume with override A applies only at a between-hop boundary", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+
+  state = reduceState(state, {
+    type: "hop_completed",
+    sourceRole: "A",
+    targetRole: "B",
+    sourceHash: "h1",
+    targetHash: "h2"
+  });
+  state = reduceState(state, { type: "pause" });
+
+  assert.equal(state.phase, PHASES.PAUSED);
+  assert.equal(state.round, 1);
+  assert.equal(canWriteOverride(state), true);
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "B",
+    targetRole: "A",
+    targetTabId: 1,
+    round: 2,
+    hopId: null,
+    stage: "pending"
+  });
+
+  state = reduceState(state, { type: "set_next_hop_override", role: "A" });
+  assert.equal(state.nextHopOverride, "A");
+
+  state = reduceState(state, { type: "resume" });
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.round, 1);
+  assert.equal(state.nextHopSource, "A");
+  assert.equal(state.nextHopOverride, null);
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 2,
+    hopId: null,
+    stage: "pending"
+  });
+});
+
+test("resume with override B applies only at a between-hop boundary", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, { type: "pause" });
+
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: null,
+    stage: "pending"
+  });
+
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  state = reduceState(state, { type: "resume" });
+
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.round, 0);
+  assert.equal(state.nextHopSource, "B");
+  assert.equal(state.nextHopOverride, null);
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "B",
+    targetRole: "A",
+    targetTabId: 1,
+    round: 1,
+    hopId: null,
+    stage: "pending"
+  });
+});
+
+test("resume without override preserves the canonical next hop", () => {
   let state = createInitialState();
   state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
   state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
@@ -91,18 +169,100 @@ test("pause and resume preserve round while allowing one-shot override", () => {
   });
   state = reduceState(state, { type: "pause" });
 
-  assert.equal(state.phase, PHASES.PAUSED);
-  assert.equal(state.round, 1);
-  assert.equal(canWriteOverride(state), true);
+  const pausedHop = structuredClone(state.activeHop);
+  state = reduceState(state, { type: "resume" });
 
-  state = reduceState(state, { type: "set_next_hop_override", role: "A" });
-  assert.equal(state.nextHopOverride, "A");
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.nextHopSource, "B");
+  assert.equal(state.nextHopOverride, null);
+  assert.deepEqual(state.activeHop, pausedHop);
+});
+
+test("canonical active hop carries verification identity independently of override fallback", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+
+  state = reduceState(state, {
+    type: "set_execution_hop",
+    hop: {
+      sourceRole: "A",
+      targetRole: "B",
+      targetTabId: 2,
+      round: 1,
+      hopId: "hop-1",
+      stage: "verifying"
+    }
+  });
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: "hop-1",
+    stage: "verifying"
+  });
+
+  state = reduceState(state, { type: "pause" });
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  assert.equal(state.nextHopOverride, "B");
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: "hop-1",
+    stage: "verifying"
+  });
 
   state = reduceState(state, { type: "resume" });
   assert.equal(state.phase, PHASES.RUNNING);
-  assert.equal(state.round, 1);
   assert.equal(state.nextHopSource, "A");
-  assert.equal(state.nextHopOverride, null);
+  assert.equal(state.nextHopOverride, "B");
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: "hop-1",
+    stage: "verifying"
+  });
+});
+
+test("pause and resume preserve waiting-reply hop identity before applying override", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+
+  state = reduceState(state, {
+    type: "set_execution_hop",
+    hop: {
+      sourceRole: "A",
+      targetRole: "B",
+      targetTabId: 2,
+      round: 1,
+      hopId: "hop-2",
+      stage: "waiting_reply"
+    }
+  });
+
+  state = reduceState(state, { type: "pause" });
+  state = reduceState(state, { type: "set_next_hop_override", role: "B" });
+  state = reduceState(state, { type: "resume" });
+
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.nextHopSource, "A");
+  assert.equal(state.nextHopOverride, "B");
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: "hop-2",
+    stage: "waiting_reply"
+  });
 });
 
 test("override writes are ignored outside paused", () => {

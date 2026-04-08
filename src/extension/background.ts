@@ -59,6 +59,7 @@ import type {
   RuntimeState,
   SessionIdentity,
   StopReason,
+  TargetObservationSample,
   ThreadActivityResponse
 } from "./shared/types.js";
 
@@ -72,10 +73,6 @@ type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | Overla
 type SettledReplyResult =
   | AssistantSnapshotResponse
   | { ok: false; reason: "loop_cancelled" | StopReason };
-
-type LatestUserTextResponse =
-  | { ok: true; text: string | null }
-  | { ok: false; error: string };
 
 interface WaitForSettledReplyInput {
   tabId: number;
@@ -507,14 +504,14 @@ async function resumeSession(): Promise<RuntimeState> {
   if (next.phase === PHASES.RUNNING) {
     const started = await runStarterPreflight(next);
     if (started) {
-      startRelayLoop(await getState());
+      startRelayLoop(next);
     }
   }
   return getState();
 }
 
 async function runStarterPreflight(state: RuntimeState): Promise<boolean> {
-  const sourceRole = state.nextHopSource;
+  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopSource;
   const sourceBinding = state.bindings[sourceRole];
   
   if (!sourceBinding) {
@@ -690,8 +687,17 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       return;
     }
 
-    const sourceRole = state.nextHopSource;
-    const targetRole = otherRole(sourceRole);
+    const activeHop = state.activeHop;
+    if (!activeHop) {
+      await updateState({
+        type: "runtime_error",
+        reason: `${ERROR_REASONS.INTERNAL_ERROR}:missing_active_hop`
+      });
+      return;
+    }
+
+    const sourceRole = activeHop.sourceRole;
+    const targetRole = activeHop.targetRole;
     const sourceBinding = state.bindings[sourceRole];
     const targetBinding = state.bindings[targetRole];
 
@@ -701,7 +707,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         step: `reading ${sourceRole}`,
         sourceRole,
         targetRole,
-        pendingRound: state.round + 1,
+        pendingRound: activeHop.round,
         transport: null,
         selector: null
       }
@@ -774,10 +780,10 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       return;
     }
 
-    const verificationHopId = createVerificationHopId(state.sessionId, state.round + 1);
+    const verificationHopId = createVerificationHopId(state.sessionId, activeHop.round);
     const envelope = buildRelayEnvelope({
       sourceRole,
-      round: state.round + 1,
+      round: activeHop.round,
       message: sourceText,
       hopId: verificationHopId,
       continueMarker: settings.continueMarker
@@ -789,7 +795,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         step: `sending ${sourceRole} -> ${targetRole}`,
         sourceRole,
         targetRole,
-        pendingRound: state.round + 1,
+        pendingRound: activeHop.round,
         transport: "sending",
         selector: "ok"
       }
@@ -805,7 +811,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         phaseStep: "baseline_capture_failed",
         sourceRole,
         targetRole,
-        round: state.round + 1,
+        round: activeHop.round,
         dispatchReadbackSummary: "baseline_capture_failed",
         sendTriggerMode: "not_triggered",
         verificationBaseline: `hop:${verificationHopId}`,
@@ -820,9 +826,9 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       return;
     }
 
-    const baselineUserHash = baselineCapture.userHash;
-    const baselineGenerating = baselineCapture.generating;
-    const baselineLatestUserText = baselineCapture.latestUserText;
+    const baselineUserHash = baselineCapture.sample.latestUser.hash;
+    const baselineGenerating = baselineCapture.sample.generating;
+    const baselineLatestUserText = baselineCapture.sample.latestUser.text;
     const verificationBaselineSummary = formatVerificationBaseline(
       baselineUserHash,
       baselineGenerating,
@@ -834,7 +840,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       phaseStep: "pre_send_baseline",
       sourceRole,
       targetRole,
-      round: state.round + 1,
+      round: activeHop.round,
       dispatchReadbackSummary: "baseline_captured",
       sendTriggerMode: "not_triggered",
       verificationBaseline: verificationBaselineSummary,
@@ -852,7 +858,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         phaseStep: "dispatch_rejected",
         sourceRole,
         targetRole,
-        round: state.round + 1,
+        round: activeHop.round,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode ?? "unknown",
         verificationBaseline: verificationBaselineSummary,
@@ -871,12 +877,23 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       phaseStep: "dispatch_accepted",
       sourceRole,
       targetRole,
-      round: state.round + 1,
+      round: activeHop.round,
       dispatchReadbackSummary,
       sendTriggerMode: sendResult.mode,
       verificationBaseline: verificationBaselineSummary,
       verificationPollSample: dispatchEvidenceSummary,
       verificationVerdict: "observation_window_opened"
+    });
+
+    const verifyingHop = {
+      ...activeHop,
+      targetTabId: targetBinding.tabId,
+      hopId: verificationHopId,
+      stage: "verifying" as const
+    };
+    await updateState({
+      type: "set_execution_hop",
+      hop: verifyingHop
     });
 
     await updateState({
@@ -885,7 +902,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         step: `verifying ${targetRole} submission`,
         sourceRole,
         targetRole,
-        pendingRound: state.round + 1,
+        pendingRound: activeHop.round,
         transport: "verifying",
         selector: "pending"
       }
@@ -910,15 +927,15 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
 
       await sleep(verificationPollIntervalMs);
 
-      const activity = await requestThreadActivity(targetBinding.tabId);
-      if (!activity.ok) {
+      const observation = await requestTargetObservationSample(targetBinding.tabId);
+      if (!observation.ok) {
         await updateState({
           type: "set_runtime_activity",
           activity: {
             step: `verifying ${targetRole} submission`,
             sourceRole,
             targetRole,
-            pendingRound: currentState.round + 1,
+            pendingRound: currentState.activeHop?.round ?? activeHop.round,
             transport: "verifying",
             selector: "activity_check_failed"
           }
@@ -926,37 +943,25 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         continue;
       }
 
-      const currentLatestUserTextResult = await getTargetLatestUserText(targetBinding.tabId);
-      const currentLatestUserText = currentLatestUserTextResult.ok
-        ? currentLatestUserTextResult.text
-        : null;
-      const currentLatestUserTextError = currentLatestUserTextResult.ok
-        ? null
-        : ("error" in currentLatestUserTextResult
-            ? currentLatestUserTextResult.error
-            : "latest_user_text_unavailable");
-
       const verificationResult = evaluateSubmissionVerification({
         baselineUserHash,
         baselineGenerating,
         baselineLatestUserText,
-        currentUserHash: activity.result.latestUserHash,
-        currentGenerating: activity.result.generating,
-        currentLatestUserText,
+        currentUserHash: observation.result.latestUser.hash,
+        currentGenerating: observation.result.generating,
+        currentLatestUserText: observation.result.latestUser.text,
         relayPayloadText: envelope,
         expectedHopId: verificationHopId
       });
       const acceptanceGate = evaluateSubmissionAcceptanceGate(verificationResult);
 
       const verificationPollSampleBase = formatVerificationPollSample(
-        activity.result.latestUserHash,
-        activity.result.generating,
-        currentLatestUserText
+        observation.result.latestUser.hash,
+        observation.result.generating,
+        observation.result.latestUser.text
       );
       const verificationPollSample = [
-        currentLatestUserTextError === null
-          ? verificationPollSampleBase
-          : `${verificationPollSampleBase}|text_error:${currentLatestUserTextError}`,
+        verificationPollSampleBase,
         `gate:${acceptanceGate.reason}`,
         `hop_binding:${verificationResult.hopBindingStrength}`,
         `payload:${verificationResult.payloadCorrelationStrength}`,
@@ -971,7 +976,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
           phaseStep: "verification_passed",
           sourceRole,
           targetRole,
-          round: state.round + 1,
+          round: activeHop.round,
           dispatchReadbackSummary,
           sendTriggerMode: sendResult.mode,
           verificationBaseline: verificationBaselineSummary,
@@ -986,7 +991,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         phaseStep: "verifying",
         sourceRole,
         targetRole,
-        round: state.round + 1,
+        round: activeHop.round,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode,
         verificationBaseline: verificationBaselineSummary,
@@ -1000,7 +1005,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
           step: `verifying ${targetRole} submission`,
           sourceRole,
           targetRole,
-          pendingRound: currentState.round + 1,
+          pendingRound: currentState.activeHop?.round ?? activeHop.round,
           transport: "verifying",
           selector: acceptanceGate.reason
         }
@@ -1012,7 +1017,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         phaseStep: "verification_failed",
         sourceRole,
         targetRole,
-        round: state.round + 1,
+        round: activeHop.round,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode,
         verificationBaseline: verificationBaselineSummary,
@@ -1026,7 +1031,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
           step: `verifying ${targetRole} submission`,
           sourceRole,
           targetRole,
-          pendingRound: state.round + 1,
+          pendingRound: activeHop.round,
           transport: "verifying",
           selector: "acceptance_not_established"
         }
@@ -1040,12 +1045,20 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
     }
 
     await updateState({
+      type: "set_execution_hop",
+      hop: {
+        ...verifyingHop,
+        stage: "waiting_reply"
+      }
+    });
+
+    await updateState({
       type: "set_runtime_activity",
       activity: {
         step: `waiting ${targetRole} reply`,
         sourceRole,
         targetRole,
-        pendingRound: state.round + 1,
+        pendingRound: activeHop.round,
         transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
         selector: "waiting_reply"
       }
@@ -1055,7 +1068,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
       phaseStep: "waiting_reply",
       sourceRole,
       targetRole,
-      round: state.round + 1,
+      round: activeHop.round,
       dispatchReadbackSummary,
       sendTriggerMode: sendResult.mode,
       verificationBaseline: verificationBaselineSummary,
@@ -1079,7 +1092,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
         phaseStep: "reply_timeout",
         sourceRole,
         targetRole,
-        round: state.round + 1,
+        round: activeHop.round,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode,
         verificationBaseline: verificationBaselineSummary,
@@ -1093,7 +1106,7 @@ async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<v
           step: `waiting ${targetRole} reply`,
           sourceRole,
           targetRole,
-          pendingRound: state.round + 1,
+          pendingRound: activeHop.round,
           transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
           selector: "reply_timeout"
         }
@@ -1185,29 +1198,24 @@ async function requestThreadActivity(tabId: number): Promise<ThreadActivityRespo
   }
 }
 
-async function getTargetLatestUserText(tabId: number): Promise<LatestUserTextResponse> {
-  try {
-    const response = await chrome.tabs.sendMessage<LatestUserTextResponse>(tabId, {
-      type: MESSAGE_TYPES.GET_LATEST_USER_TEXT
-    });
-
-    if (response?.ok === true) {
-      return {
-        ok: true,
-        text: response.text
-      };
-    }
-
+async function requestTargetObservationSample(
+  tabId: number
+): Promise<
+  | { ok: true; result: TargetObservationSample }
+  | { ok: false; error: string }
+> {
+  const activity = await requestThreadActivity(tabId);
+  if (!activity.ok) {
     return {
       ok: false,
-      error: response?.error ?? "latest_user_text_unavailable"
-    };
-  } catch {
-    return {
-      ok: false,
-      error: "latest_user_text_unavailable"
+      error: "error" in activity ? activity.error : "target_observation_unavailable"
     };
   }
+
+  return {
+    ok: true,
+    result: activity.result.sample
+  };
 }
 
 async function captureSubmissionVerificationBaseline(
@@ -1217,9 +1225,7 @@ async function captureSubmissionVerificationBaseline(
 ): Promise<
   | {
       ok: true;
-      userHash: string | null;
-      generating: boolean;
-      latestUserText: string | null;
+      sample: TargetObservationSample;
     }
   | {
       ok: false;
@@ -1230,25 +1236,16 @@ async function captureSubmissionVerificationBaseline(
   let lastReason = "thread_activity_unavailable";
 
   while (Date.now() - startedAt < timeoutMs) {
-    const activity = await requestThreadActivity(tabId);
-    if (!activity.ok) {
-      lastReason = `thread_activity:${"error" in activity ? activity.error : "unavailable"}`;
-      await sleep(pollIntervalMs);
-      continue;
-    }
-
-    const latestUserText = await getTargetLatestUserText(tabId);
-    if (!latestUserText.ok) {
-      lastReason = `latest_user_text:${"error" in latestUserText ? latestUserText.error : "unavailable"}`;
+    const observation = await requestTargetObservationSample(tabId);
+    if (!observation.ok) {
+      lastReason = `target_observation:${"error" in observation ? observation.error : "unavailable"}`;
       await sleep(pollIntervalMs);
       continue;
     }
 
     return {
       ok: true,
-      userHash: activity.result.latestUserHash,
-      generating: activity.result.generating,
-      latestUserText: latestUserText.text
+      sample: observation.result
     };
   }
 
@@ -1358,7 +1355,7 @@ async function getPopupModel(activeTabId: number | null): Promise<PopupModel> {
       }
     : null;
 
-  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
   const sourceBinding = state.bindings[sourceRole];
   let sourceThreadActivity = null;
   
@@ -1436,7 +1433,7 @@ async function buildOverlaySnapshot(
   tabId: number | null,
   overlaySettings: OverlaySettings
 ): Promise<OverlayModel> {
-  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
   const sourceBinding = state.bindings[sourceRole];
   let sourceThreadActivity = null;
   
@@ -1452,7 +1449,7 @@ async function buildOverlaySnapshot(
   return {
     phase: state.phase,
     round: state.round,
-    nextHop: formatNextHop(state.nextHopOverride ?? state.nextHopSource),
+    nextHop: formatNextHop(state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource),
     requiresTerminalClear: state.requiresTerminalClear,
     assignedRole: findRoleByTabId(state, tabId),
     starter: state.starter,

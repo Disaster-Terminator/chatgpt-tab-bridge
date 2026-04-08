@@ -18,7 +18,7 @@ export function computeReadiness(
   state: RuntimeState,
   sourceThreadActivity: ThreadActivity | null
 ): ExecutionReadiness {
-  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
   const starterRole = state.starter;
   
   const checkRole = state.phase === PHASES.READY ? starterRole : sourceRole;
@@ -51,7 +51,7 @@ export function computeReadiness(
 }
 
 export function buildDisplay(state: RuntimeState): RuntimeDisplay {
-  const sourceRole = state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
   
   const normalStopReasons = new Set([
     STOP_REASONS.STOP_MARKER,

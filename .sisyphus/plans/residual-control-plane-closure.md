@@ -113,7 +113,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 > Implementation + Test = ONE task. Never separate.
 > EVERY task MUST have: Agent Profile + Parallelization + QA Scenarios.
 
-- [ ] 1. Introduce canonical hop-truth contract
+- [x] 1. Introduce canonical hop-truth contract
 
   **What to do**: Add a hop-scoped pending execution/observation contract to background-owned runtime state so the system can represent one concrete in-flight hop (`sessionId`, `round`, `sourceRole`, `targetRole`, `targetTabId`, verification hop id, baseline facts, phase/status). Keep this contract reducer-owned, persist it atomically with state, and make it the only execution truth for post-dispatch verify/wait phases.
   **Must NOT do**: Do not rewrite unrelated extension architecture, add new persistence layers, or move canonical truth into popup/overlay state.
@@ -153,7 +153,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `refactor(control-plane): introduce canonical hop truth` | Files: `["src/extension/shared/types.ts", "src/extension/core/state-machine.ts", "src/extension/background.ts"]`
 
-- [ ] 2. Lock pause/resume override semantics to between-hop intent
+- [x] 2. Lock pause/resume override semantics to between-hop intent
 
   **What to do**: Rework pause/resume semantics so `nextHopOverride` is one-shot **between-hop** intent only. If pause occurs after a hop has already opened verify/wait, resume must honor that pending hop instead of silently redirecting source/target. Consume and clear override only when a fresh hop is actually selected, not merely when resume is clicked.
   **Must NOT do**: Do not remove override entirely, do not change round-reset semantics, and do not weaken `clearTerminal -> ready -> start` as the fresh-session gate.
@@ -194,7 +194,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `fix(control-plane): honor pending hop across resume` | Files: `["src/extension/core/state-machine.ts", "src/extension/background.ts", "tests/state-machine.test.mjs"]`
 
-- [ ] 3. Align popup and overlay with canonical execution truth
+- [x] 3. Align popup and overlay with canonical execution truth
 
   **What to do**: Update popup/overlay display and readiness logic so they present canonical hop truth instead of inferring `sourceRole` from `nextHopOverride ?? nextHopSource`. Keep override as an editable preview only when paused between hops; when a pending hop exists, the UI must display the actual executing/waited hop and block contradictory controls.
   **Must NOT do**: Do not add UX redesign work, do not derive execution truth from `activeTab`, and do not mask discrepancies with copy-only changes.
@@ -234,7 +234,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `fix(control-plane): align popup with canonical hop truth` | Files: `["src/extension/core/popup-model.ts", "src/extension/background.ts", "tests/popup-preflight.test.mjs"]`
 
-- [ ] 4. Expand branch-locking tests for control-plane semantics
+- [x] 4. Expand branch-locking tests for control-plane semantics
 
   **What to do**: Add or refactor targeted Node tests that lock the new contract semantics before Wave 2 refactors rely on them: resume A/B/default, override clearing timing, pending-hop precedence, and UI blocking during preflight/verify/wait. Prefer explicit regression names tied to the four user-reported failures.
   **Must NOT do**: Do not rely only on existing happy-path assertions, and do not fake correctness by snapshotting text without phase/role assertions.
@@ -274,7 +274,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `test(control-plane): lock resume and readiness branches` | Files: `["tests/state-machine.test.mjs", "tests/popup-preflight.test.mjs"]`
 
-- [ ] 5. Consolidate target observation into one coherent sample contract
+- [x] 5. Consolidate target observation into one coherent sample contract
 
   **What to do**: Introduce a single content-script observation RPC (or equivalent unified sampling path) that returns bound-thread facts needed by verification and settle polling in one sample window: target identity checks, latest user fact, latest assistant fact, generation flag, composer availability, and any observation error classification needed by background. Keep existing helper behavior reusable where possible.
   **Must NOT do**: Do not remove Task 4/5 acceptance logic, do not collapse target/user/assistant facts into runtime text only, and do not use multiple asynchronous RPCs for one logical sample after this refactor.

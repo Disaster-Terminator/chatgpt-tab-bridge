@@ -15,6 +15,51 @@ const {
   parseBridgeDirective
 } = await importExtensionModule("core/relay-core");
 
+function buildVerificationInputFromObservationSamples({ baseline, current, relayPayloadText, expectedHopId }) {
+  return {
+    baselineUserHash: baseline.latestUser.hash,
+    baselineGenerating: baseline.generating,
+    baselineLatestUserText: baseline.latestUser.text,
+    currentUserHash: current.latestUser.hash,
+    currentGenerating: current.generating,
+    currentLatestUserText: current.latestUser.text,
+    relayPayloadText,
+    expectedHopId
+  };
+}
+
+function createObservationSample({
+  latestUserText = null,
+  latestAssistantText = null,
+  generating = false,
+  composerAvailable = true,
+  sendButtonReady = true
+} = {}) {
+  return {
+    identity: {
+      url: "https://chatgpt.com/c/test-thread",
+      pathname: "/c/test-thread",
+      title: "ChatGPT"
+    },
+    latestUser: {
+      present: latestUserText !== null,
+      text: latestUserText,
+      hash: latestUserText ? hashText(latestUserText) : null
+    },
+    latestAssistant: {
+      present: latestAssistantText !== null,
+      text: latestAssistantText,
+      hash: latestAssistantText ? hashText(latestAssistantText) : null
+    },
+    generating,
+    composer: {
+      available: composerAvailable,
+      text: "",
+      sendButtonReady
+    }
+  };
+}
+
 test("buildRelayEnvelope includes bridge context, payload, and machine-readable tail instructions", () => {
   const hopId = "s1-r3-abc123";
   const envelope = buildRelayEnvelope({
@@ -353,4 +398,65 @@ test("evaluateSubmissionAcceptanceGate allows progress for strong hop-bound gene
   assert.equal(gate.waitingReplyAllowed, true);
   assert.equal(gate.weakCorrelationOnly, false);
   assert.equal(gate.reason, "acceptance_established_generation_started");
+});
+
+test("unified observation samples preserve strong acceptance semantics", () => {
+  const hopId = "s9-r4-hop7";
+  const relayPayloadText = `[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: ${hopId}\nbridged content`;
+  const baseline = createObservationSample({
+    latestUserText: "before hop",
+    latestAssistantText: "previous assistant",
+    generating: false
+  });
+  const current = createObservationSample({
+    latestUserText: `${relayPayloadText}\n[BRIDGE_INSTRUCTION]`,
+    latestAssistantText: "previous assistant",
+    generating: true
+  });
+
+  const verification = evaluateSubmissionVerification(
+    buildVerificationInputFromObservationSamples({
+      baseline,
+      current,
+      relayPayloadText,
+      expectedHopId: hopId
+    })
+  );
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(verification.verified, true);
+  assert.equal(verification.hopBindingStrength, "strong");
+  assert.equal(verification.payloadCorrelationStrength, "strong");
+  assert.equal(gate.acceptedEquivalentEvidence, true);
+  assert.equal(gate.waitingReplyAllowed, true);
+});
+
+test("unified observation samples keep weak correlation out of acceptance", () => {
+  const relayPayloadText = "[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: s8-r4-hop9\nrelay text";
+  const baseline = createObservationSample({
+    latestUserText: "before hop",
+    latestAssistantText: "assistant before hop",
+    generating: false
+  });
+  const current = createObservationSample({
+    latestUserText: "[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: different-hop\nrelay text",
+    latestAssistantText: "assistant before hop",
+    generating: false
+  });
+
+  const verification = evaluateSubmissionVerification(
+    buildVerificationInputFromObservationSamples({
+      baseline,
+      current,
+      relayPayloadText,
+      expectedHopId: "s8-r4-hop9"
+    })
+  );
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(verification.verified, false);
+  assert.equal(verification.hopBindingStrength, "weak");
+  assert.equal(gate.acceptedEquivalentEvidence, false);
+  assert.equal(gate.waitingReplyAllowed, false);
+  assert.equal(gate.reason, "acceptance_not_established_weak_correlation");
 });

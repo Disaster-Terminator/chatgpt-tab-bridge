@@ -1148,48 +1148,69 @@ function initOverlayDrag() {
   });
 }
 function readAssistantSnapshot() {
-  const latest = findLatestAssistantElement();
-  if (!latest) {
+  const observation = readTargetObservationSample();
+  const latestAssistant = observation.result.latestAssistant;
+  if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
     return {
       ok: false,
       error: "assistant_message_not_found"
     };
   }
-  const text = normalizeText(latest.textContent || "");
-  if (!text) {
-    return {
-      ok: false,
-      error: "assistant_message_empty"
-    };
-  }
   return {
     ok: true,
     result: {
-      text,
-      hash: hashText(text)
+      text: latestAssistant.text,
+      hash: latestAssistant.hash
     }
   };
 }
 function readThreadActivity() {
-  const generating = isGenerationInProgressFromDoc();
-  const latestUserHash = findLatestUserMessageHash();
-  const composer = findBestComposer(document);
-  const composerText = readComposerText(composer);
-  const sendButton = composer ? findSendButton(document, composer) : null;
-  const sendButtonReady = sendButton !== null && !sendButton.disabled;
-  const composerAvailable = composer !== null;
-  const latestAssistant = findLatestAssistantElement();
-  const latestAssistantHash = latestAssistant ? hashText(normalizeText(latestAssistant.textContent || "")) : null;
+  const observation = readTargetObservationSample();
+  const sample = observation.result;
   return {
     ok: true,
     result: {
-      generating,
-      latestAssistantHash,
-      latestUserHash,
-      composerText,
-      sendButtonReady,
-      composerAvailable
+      sample,
+      generating: sample.generating,
+      latestAssistantHash: sample.latestAssistant.hash,
+      latestUserHash: sample.latestUser.hash,
+      composerText: sample.composer.text,
+      sendButtonReady: sample.composer.sendButtonReady,
+      composerAvailable: sample.composer.available
     }
+  };
+}
+function readTargetObservationSample() {
+  const latestUser = readLatestMessageFacts("user");
+  const latestAssistant = readLatestMessageFacts("assistant");
+  const composer = findBestComposer(document);
+  const sendButton = composer ? findSendButton(document, composer) : null;
+  return {
+    ok: true,
+    result: {
+      identity: {
+        url: window.location.href,
+        pathname: window.location.pathname,
+        title: document.title
+      },
+      latestUser,
+      latestAssistant,
+      generating: isGenerationInProgressFromDoc(),
+      composer: {
+        available: composer !== null,
+        text: readComposerText(composer),
+        sendButtonReady: sendButton !== null && !sendButton.disabled
+      }
+    }
+  };
+}
+function readLatestMessageFacts(role) {
+  const latestMessage = findLatestMessageElement(role);
+  const text = latestMessage ? normalizeText(latestMessage.textContent || "") : null;
+  return {
+    present: text !== null,
+    text,
+    hash: text ? hashText(text) : null
   };
 }
 async function sendRelayMessage(text) {
@@ -1497,23 +1518,6 @@ function validateComposerReadback(composerText, expectedText) {
   const overlap = matchCount / expectedWords.length;
   return overlap >= 0.8;
 }
-function findLatestAssistantElement() {
-  const selectors = [
-    '[data-message-author-role="assistant"]',
-    'article [data-message-author-role="assistant"]',
-    '[data-testid*="conversation-turn"] [data-message-author-role="assistant"]',
-    "main [data-message-author-role='assistant']"
-  ];
-  for (const selector of selectors) {
-    const candidates = Array.from(document.querySelectorAll(selector)).filter(
-      (element) => normalizeText(element.textContent || "")
-    );
-    if (candidates.length > 0) {
-      return candidates[candidates.length - 1];
-    }
-  }
-  return null;
-}
 function captureSubmissionBaseline(expectedText) {
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
@@ -1561,28 +1565,27 @@ async function waitForSendButton({
     });
   });
 }
-function getLatestUserText() {
+function findLatestMessageElement(role) {
   const selectors = [
-    '[data-message-author-role="user"]',
-    'article [data-message-author-role="user"]',
-    '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
-    "main [data-message-author-role='user']"
+    `[data-message-author-role="${role}"]`,
+    `article [data-message-author-role="${role}"]`,
+    `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
+    `main [data-message-author-role='${role}']`
   ];
   for (const selector of selectors) {
     const candidates = Array.from(document.querySelectorAll(selector)).filter(
       (element) => normalizeText(element.textContent || "")
     );
     if (candidates.length > 0) {
-      const latest = candidates[candidates.length - 1];
-      return {
-        ok: true,
-        text: normalizeText(latest.textContent || "")
-      };
+      return candidates[candidates.length - 1];
     }
   }
+  return null;
+}
+function getLatestUserText() {
   return {
     ok: true,
-    text: null
+    text: readTargetObservationSample().result.latestUser.text
   };
 }
 function sleep(durationMs) {

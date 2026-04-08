@@ -10,6 +10,7 @@ import {
 import type {
   BridgeRole,
   ErrorReason,
+  RuntimeHopTruth,
   RuntimeActivity,
   RuntimeBinding,
   RuntimePhase,
@@ -87,6 +88,11 @@ interface SetRuntimeActivityEvent {
   activity: Partial<RuntimeActivity>;
 }
 
+interface SetExecutionHopEvent {
+  type: "set_execution_hop";
+  hop: RuntimeHopTruth | null;
+}
+
 export type RuntimeStateEvent =
   | SetBindingEvent
   | InvalidateBindingEvent
@@ -101,7 +107,8 @@ export type RuntimeStateEvent =
   | StopConditionEvent
   | SelectorFailureEvent
   | RuntimeErrorEvent
-  | SetRuntimeActivityEvent;
+  | SetRuntimeActivityEvent
+  | SetExecutionHopEvent;
 
 export function createInitialState(): RuntimeState {
   return {
@@ -122,6 +129,7 @@ export function createInitialState(): RuntimeState {
     requiresTerminalClear: false,
     lastStopReason: null,
     lastError: null,
+    activeHop: null,
     lastCompletedHop: null,
     lastForwardedHashes: {
       A: null,
@@ -180,6 +188,8 @@ export function reduceState(
       return toError(state, event.reason ?? ERROR_REASONS.INTERNAL_ERROR);
     case "set_runtime_activity":
       return reduceSetRuntimeActivity(state, event);
+    case "set_execution_hop":
+      return reduceSetExecutionHop(state, event);
     default:
       return state;
   }
@@ -247,6 +257,7 @@ function reduceClearTerminal(state: RuntimeState): RuntimeState {
   state.lastError = null;
   state.lastStopReason = null;
   state.nextHopOverride = null;
+  state.activeHop = null;
   state.pendingFreshSession = true;
   state.phase = hasValidBindings(state) ? PHASES.READY : PHASES.IDLE;
   return state;
@@ -271,21 +282,6 @@ function reduceStart(state: RuntimeState): RuntimeState {
     return state;
   }
 
-  state.phase = PHASES.RUNNING;
-  state.nextHopSource = state.starter;
-  state.nextHopOverride = null;
-  state.lastError = null;
-  state.lastStopReason = null;
-  state.runtimeActivity = {
-    step: "starting",
-    sourceRole: state.starter,
-    targetRole: otherRole(state.starter),
-    pendingRound: state.round + 1,
-    lastActionAt: new Date().toISOString(),
-    transport: null,
-    selector: null
-  };
-
   if (state.pendingFreshSession) {
     state.round = 0;
     state.sessionId += 1;
@@ -300,6 +296,22 @@ function reduceStart(state: RuntimeState): RuntimeState {
     };
     state.pendingFreshSession = false;
   }
+
+  state.phase = PHASES.RUNNING;
+  state.nextHopSource = state.starter;
+  state.nextHopOverride = null;
+  state.lastError = null;
+  state.lastStopReason = null;
+  state.activeHop = createPendingHop(state, state.starter);
+  state.runtimeActivity = {
+    step: "starting",
+    sourceRole: state.starter,
+    targetRole: otherRole(state.starter),
+    pendingRound: state.round + 1,
+    lastActionAt: new Date().toISOString(),
+    transport: null,
+    selector: null
+  };
 
   return state;
 }
@@ -324,16 +336,40 @@ function reduceResume(state: RuntimeState): RuntimeState {
   }
 
   state.phase = PHASES.RUNNING;
-  if (state.nextHopOverride) {
-    state.nextHopSource = state.nextHopOverride;
-    state.nextHopOverride = null;
+  const currentActiveHop = state.activeHop;
+
+  if (isFreshPendingHop(currentActiveHop, state)) {
+    const resumeSource = state.nextHopOverride ?? currentActiveHop.sourceRole;
+    state.nextHopSource = resumeSource;
+    state.activeHop =
+      resumeSource === currentActiveHop.sourceRole
+        ? { ...currentActiveHop }
+        : createPendingHop(state, resumeSource);
+
+    if (state.nextHopOverride) {
+      state.nextHopOverride = null;
+    }
+  } else if (currentActiveHop) {
+    state.nextHopSource = currentActiveHop.sourceRole;
+  } else {
+    const resumeSource = state.nextHopOverride ?? state.nextHopSource;
+    state.nextHopSource = resumeSource;
+    state.activeHop = createPendingHop(state, resumeSource);
+
+    if (state.nextHopOverride) {
+      state.nextHopOverride = null;
+    }
   }
+
+  const runtimeSourceRole = state.activeHop?.sourceRole ?? state.nextHopSource;
+  const runtimeTargetRole = state.activeHop?.targetRole ?? otherRole(runtimeSourceRole);
+  const pendingRound = state.activeHop?.round ?? state.round + 1;
   state.runtimeActivity = {
     ...state.runtimeActivity,
     step: "resuming",
-    sourceRole: state.nextHopSource,
-    targetRole: otherRole(state.nextHopSource),
-    pendingRound: state.round + 1,
+    sourceRole: runtimeSourceRole,
+    targetRole: runtimeTargetRole,
+    pendingRound,
     lastActionAt: new Date().toISOString()
   };
 
@@ -364,6 +400,7 @@ function reduceHopCompleted(state: RuntimeState, event: HopCompletedEvent): Runt
 
   state.round += 1;
   state.nextHopSource = event.targetRole ?? otherRole(event.sourceRole);
+  state.activeHop = createPendingHop(state, state.nextHopSource);
   state.lastCompletedHop = {
     sourceRole: event.sourceRole,
     targetRole: event.targetRole ?? otherRole(event.sourceRole),
@@ -406,6 +443,11 @@ function reduceSetRuntimeActivity(
   return state;
 }
 
+function reduceSetExecutionHop(state: RuntimeState, event: SetExecutionHopEvent): RuntimeState {
+  state.activeHop = event.hop ? { ...event.hop } : null;
+  return state;
+}
+
 function toStopped(state: RuntimeState, reason: StopReason): RuntimeState {
   if (state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED) {
     return state;
@@ -415,6 +457,7 @@ function toStopped(state: RuntimeState, reason: StopReason): RuntimeState {
   state.lastStopReason = reason;
   state.lastError = null;
   state.nextHopOverride = null;
+  state.activeHop = null;
   state.requiresTerminalClear = true;
   state.runtimeActivity = {
     ...state.runtimeActivity,
@@ -437,6 +480,7 @@ function toError(state: RuntimeState, reason: ErrorReason | string): RuntimeStat
   state.lastError = reason;
   state.lastStopReason = null;
   state.nextHopOverride = null;
+  state.activeHop = null;
   state.requiresTerminalClear = true;
   state.runtimeActivity = {
     ...state.runtimeActivity,
@@ -457,6 +501,7 @@ function cloneState(state: RuntimeState): RuntimeState {
     settings: {
       ...state.settings
     },
+    activeHop: state.activeHop ? { ...state.activeHop } : null,
     lastCompletedHop: state.lastCompletedHop ? { ...state.lastCompletedHop } : null,
     lastForwardedHashes: {
       ...state.lastForwardedHashes
@@ -496,6 +541,30 @@ function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): 
     sessionIdentity: binding.sessionIdentity ?? null,
     boundAt: binding.boundAt ?? new Date().toISOString()
   };
+}
+
+function createPendingHop(state: RuntimeState, sourceRole: BridgeRole): RuntimeHopTruth {
+  const targetRole = otherRole(sourceRole);
+  return {
+    sourceRole,
+    targetRole,
+    targetTabId: state.bindings[targetRole]?.tabId ?? null,
+    round: state.round + 1,
+    hopId: null,
+    stage: "pending"
+  };
+}
+
+function isFreshPendingHop(
+  activeHop: RuntimeHopTruth | null | undefined,
+  state: RuntimeState
+): boolean {
+  return Boolean(
+    activeHop &&
+      activeHop.stage === "pending" &&
+      activeHop.hopId === null &&
+      activeHop.round === state.round + 1
+  );
 }
 
 function hasBindingConflict(

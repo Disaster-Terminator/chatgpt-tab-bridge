@@ -230,3 +230,207 @@ test("starterReady is true when source is not generating", () => {
   const readiness = computeReadiness(state, { generating: false });
   assert.equal(readiness.starterReady, true);
 });
+
+// =============================================================================
+// Task 3: Canonical activeHop alignment with preflight
+// =============================================================================
+
+test("computeReadiness uses canonical activeHop in verifying stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "verifying"
+    },
+    runtimeActivity: {
+      step: "verifying B -> A",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "observe",
+      selector: "observation_window"
+    }
+  });
+
+  const readiness = computeReadiness(state, null);
+  assert.equal(readiness.sourceRole, "B", "Should use canonical activeHop in verifying stage");
+});
+
+test("computeReadiness uses canonical activeHop in waiting_reply stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "waiting_reply"
+    },
+    runtimeActivity: {
+      step: "waiting B reply",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "sent",
+      selector: "waiting_reply"
+    }
+  });
+
+  const readiness = computeReadiness(state, null);
+  assert.equal(readiness.sourceRole, "B", "Should use canonical activeHop in waiting_reply stage");
+});
+
+test("buildDisplay uses canonical activeHop in verifying stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "verifying"
+    },
+    runtimeActivity: {
+      step: "verifying B -> A",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "observe",
+      selector: "observation_window"
+    }
+  });
+
+  const display = buildDisplay(state);
+  assert.equal(display.nextHop, "B -> A", "Should use canonical activeHop for display in verifying stage");
+});
+
+test("buildDisplay uses canonical activeHop in waiting_reply stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "waiting_reply"
+    },
+    runtimeActivity: {
+      step: "waiting B reply",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "sent",
+      selector: "waiting_reply"
+    }
+  });
+
+  const display = buildDisplay(state);
+  assert.equal(display.nextHop, "B -> A", "Should use canonical activeHop for display in waiting_reply stage");
+});
+
+test("deferred nextHopOverride does not affect display when activeHop is active", () => {
+  const state = createTestState({
+    phase: PHASES.PAUSED,
+    nextHopSource: "A",
+    nextHopOverride: "B", // Deferred override - should NOT affect display
+    activeHop: {
+      sourceRole: "A", // Canonical activeHop from before pause
+      targetRole: "B",
+      round: 1,
+      hopId: "hop-1",
+      stage: "pending"
+    }
+  });
+
+  const display = buildDisplay(state);
+  // Should show A -> B from activeHop, not B -> A from override
+  assert.equal(display.nextHop, "A -> B", "Override should not rewrite display when activeHop exists");
+});
+
+test("deferred nextHopOverride does not affect readiness when activeHop is active", () => {
+  const state = createTestState({
+    phase: PHASES.PAUSED,
+    nextHopSource: "A",
+    nextHopOverride: "B", // Deferred override - should NOT affect readiness
+    activeHop: {
+      sourceRole: "A", // Canonical activeHop from before pause
+      targetRole: "B",
+      round: 1,
+      hopId: "hop-1",
+      stage: "pending"
+    }
+  });
+
+  const readiness = computeReadiness(state, null);
+  assert.equal(readiness.sourceRole, "A", "Override should not rewrite readiness when activeHop exists");
+});
+
+test("deriveControls consistent with activeHop semantics in verifying stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "verifying"
+    },
+    runtimeActivity: {
+      step: "verifying B -> A",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "observe",
+      selector: "observation_window"
+    }
+  });
+
+  const readiness = computeReadiness(state, null);
+  const controls = deriveControls(state, readiness);
+  
+  // Verify: activeHop in verifying stage should NOT allow setOverride
+  // because there's a canonical claimed hop
+  assert.equal(controls.canSetOverride, false, "Should not allow override when canonical hop is verifying");
+});
+
+test("deriveControls consistent with activeHop semantics in waiting_reply stage", () => {
+  const state = createTestState({
+    phase: PHASES.RUNNING,
+    nextHopSource: "A",
+    nextHopOverride: null,
+    activeHop: {
+      sourceRole: "B",
+      targetRole: "A",
+      round: 1,
+      hopId: "hop-1",
+      stage: "waiting_reply"
+    },
+    runtimeActivity: {
+      step: "waiting B reply",
+      sourceRole: "B",
+      targetRole: "A",
+      pendingRound: 1,
+      transport: "sent",
+      selector: "waiting_reply"
+    }
+  });
+
+  const readiness = computeReadiness(state, null);
+  const controls = deriveControls(state, readiness);
+  
+  // waiting_reply: should NOT allow setOverride because hop is in-flight
+  assert.equal(controls.canSetOverride, false, "Should not allow override when canonical hop is waiting_reply");
+});
