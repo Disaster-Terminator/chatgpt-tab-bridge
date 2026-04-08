@@ -73,22 +73,22 @@
    - 当页面 URL 变成 `/c/<id>` 或 `/g/.../c/<id>` 时，自动升级为 persistent identity
    - 这是可选增强，不是必须的
 
-### 不登录也能工作
+### 不登录 / 无 URL 的产品语义
 
-- 不登录时无法生成 persistent thread URL（/c/<id>）
-- 但仍可以将任意 chatgpt.com 页面绑定为 live session
-- 仍可以发送 seed message 进行 relay
-- 仍可以进行真实性验收（基于页面证据而非 URL）
+- 产品主链路仍遵循 session-first：没有 persistent thread URL（/c/<id>）时，页面仍可作为 live session 绑定
+- 这说明 URL 不是 relay 主链路前提；URL 只是在后续出现时提供 persistent identity 增强
+- 但当前仓库里的 Playwright harness（尤其 `pnpm run test:real-hop` / `pnpm run test:e2e`）默认要求已导出的 auth 文件；缺失时脚本会在启动前退出
+- 因此“无 URL 可工作”描述的是产品 / 扩展身份模型，不等于“当前自动化脚本已支持无 auth 文件直接执行”
 
-### 失败分层
+### 运行时可见的失败 / 诊断层级
 
-Relay 失败现在分为以下层级：
+当前 README 这里描述的是**运行时可见类别**，不要求每一项都与 stop reason 常量同名：
 
-1. `bootstrap_seed_not_sent` - seed message 未能发送
-2. `dispatch_rejected` - dispatch 被拒绝
-3. `verification_failed` - 验证失败（payload 相关性检查）
-4. `waiting_before_acceptance` - 进入等待回复前没有独立接受证据
-5. `url_not_available` - 非失败状态，只是 live session 工作（无 persistent URL）
+1. `message_send_failed:<dispatch_code>` - 发送 / trigger 阶段失败；popup `lastIssue` 与终止态通常会落在这一类错误，runtime evidence 链里常伴随 `dispatch_rejected`
+2. `submission_not_verified` - 已打开观察窗口，但在验证窗口内没有拿到独立页面接受证据；runtime evidence 链里对应 `verification_failed`
+3. `hop_timeout` - 已进入 `waiting <role> reply`，但目标侧 assistant 回复未在超时窗口内稳定落地
+4. `binding_invalid` / `starter_settle_timeout` / `target_settle_timeout` - 绑定失效或前置就绪条件失败
+5. `url_not_available` 目前不是 stop / error 常量；它只是“当前仍是 live session、尚未升级到 persistent URL”的说明，不应单独视为主链路失败
 
 ## 交互形态
 
@@ -181,6 +181,8 @@ pnpm run test:e2e:auth
 pnpm run test:real-hop -- --auth-state /path/to/auth.json --session-state /path/to/session.json
 ```
 
+**当前 harness 前提**：`pnpm run test:real-hop` 与 `pnpm run test:e2e` 现在都会先校验导出的 auth 文件是否存在；`--skip-bootstrap` / `--root-only` 只改变 bootstrap 方式，不会绕过这一前置检查。
+
 ### 认证测试参数
 
 | 参数 | 说明 | 默认值 |
@@ -193,12 +195,17 @@ pnpm run test:real-hop -- --auth-state /path/to/auth.json --session-state /path/
 
 ### 验收层级
 
-- **smoke**：扩展加载
-- **semi**：控制流辅助验证
-- **e2e**：辅助场景脚本
-- **real-hop**：**主链路真实性验收（唯一）**
+| 层级 | 定位 | 真实性验证 |
+|------|------|-----------|
+| **real-hop** | **主链路真实性验收（唯一）** | ✅ 基于页面证据（目标页 user message 变化） |
+| e2e | 辅助场景脚本 | ❌ 基于运行时事件，非独立页面证据 |
+| semi | 控制流辅助验证 | ❌ 仅验证控制流，不验证发送真实性 |
+| smoke | 扩展加载冒烟 | ❌ 仅验证扩展加载与注入 |
 
-real-hop 是唯一验证真实 first-hop 发送的测试，使用独立页面证据（目标页 user message 变化）而非运行时事件作为通过标准。
+**核心原则：real-hop 是唯一使用页面事实（page-fact-first）作为验收标准的测试。**
+- smoke/semi/e2e 使用运行时事件或脚本自报作为判断依据
+- real-hop 使用目标页面的独立 DOM 观察作为验收依据
+- 低层级脚本通过不等于主链路可用
 
 ## 目录说明
 
@@ -300,12 +307,16 @@ pnpm run test:e2e:auth       # 使用 auth 运行 e2e
   - `summary.json`
   - `run.log`
 
-结论分层：
+### 验收层级结论
 
-- smoke：扩展加载
-- semi：控制流辅助
-- e2e：辅助场景
-- real-hop：主链路真实性验收（唯一）
+| 层级 | 定位 | 是否为主链路验收 |
+|------|------|------------------|
+| **real-hop** | **主链路真实性验收（唯一）** | ✅ 唯一 |
+| e2e | 辅助场景脚本 | ❌ |
+| semi | 控制流辅助验证 | ❌ |
+| smoke | 扩展加载冒烟 | ❌ |
+
+**明确规则：只有 real-hop 通过 = 主链路可用。任何低层级脚本通过 ≠ 主链路可用。**
 
 ## 在 Edge 里加载
 
@@ -313,3 +324,32 @@ pnpm run test:e2e:auth       # 使用 auth 运行 e2e
 2. 开启"开发人员模式"
 3. 点击"加载已解压的扩展"
 4. 选择目录 [`dist/extension`](/home/raystorm/projects/meta/dist/extension)
+
+## 成熟化考量
+
+### 长期运行风险
+
+以下风险在使用扩展进行长时间 relay 会话时需要关注：
+
+1. **MV3 Service Worker 挂起**：浏览器可能挂起长时间不活跃的 service worker，导致消息传递延迟或丢失。扩展已实现重试逻辑，但极端情况下可能需要手动刷新页面。
+
+2. **页面实例陈化**：ChatGPT 页面在后台长时间运行后，DOM 状态可能与实际会话不同步。如果遇到异常行为，尝试刷新被绑定的页面。
+
+3. **标签页可达性**：浏览器可能在内存紧张时回收后台标签页。确保重要 relay 会话涉及的标签页不会被意外关闭。
+
+### URL 升级的定位
+
+- **Live Session 绑定是默认模型**：无需 URL，任何 chatgpt.com 页面都可以作为 relay 端点
+- **Persistent URL 是增强而非前提**：只有当页面已经拥有 `/c/<id>` 或 `/g/.../c/<id>` 时才会记录持久身份
+- **不依赖 URL 升级也能完成 relay**：session-first 路径已在 real-hop 验收中验证
+
+### 回归测试层级
+
+| 层级 | 用途 | 验证方式 |
+|------|------|----------|
+| **真实性回归** | 验证消息真正送达目标页面 | 基于页面 DOM 变化证据 (real-hop) |
+| **控制流回归** | 验证状态机与用户交互正确性 | 运行时事件序列 (semi) |
+| **场景回归** | 验证多场景覆盖 | 场景矩阵脚本 (e2e) |
+| **诊断回归** | 验证扩展加载与基础注入 | 冒烟测试 (smoke) |
+
+真实性和其他层级是包含关系而非互替：控制流/场景/诊断通过 ≠ 主链路可用。

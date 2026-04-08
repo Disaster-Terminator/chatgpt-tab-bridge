@@ -483,7 +483,8 @@ function hasBindingConflict(state, role, candidateBinding) {
   if (siblingBinding.tabId === candidateBinding.tabId) {
     return true;
   }
-  if (siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
+  const bothAreLiveSessions = siblingBinding.sessionIdentity?.kind === "live_session" && candidateBinding.sessionIdentity?.kind === "live_session";
+  if (!bothAreLiveSessions && siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
     if (siblingBinding.urlInfo.normalizedUrl === candidateBinding.urlInfo.normalizedUrl) {
       return true;
     }
@@ -648,37 +649,140 @@ function extractHopIdFromPayload(relayPayload) {
   const match = normalizeAssistantText(relayPayload).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
   return match?.[1] ?? null;
 }
-function verifyPayloadCorrelation(latestUserText, relayPayload, expectedHopId) {
-  if (!latestUserText || !relayPayload) {
-    return false;
+function analyzeHopBinding(latestUserText, relayPayload, expectedHopId) {
+  if (!latestUserText) {
+    return { hopBindingStrength: "none", containsBridgeContext: false, extractedHopId: null };
   }
   const normalizedLatest = normalizeAssistantText(latestUserText);
   const normalizedPayload = normalizeAssistantText(relayPayload);
-  if (!normalizedLatest || !normalizedPayload) {
-    return false;
-  }
-  const hopId = normalizeAssistantText(expectedHopId ?? "") || extractHopIdFromPayload(normalizedPayload);
-  if (hopId) {
+  const containsBridgeContext = containsBridgeEnvelope(normalizedLatest);
+  const extractedHopId = extractHopIdFromPayload(normalizedPayload);
+  const normalizedExpectedHopId = normalizeAssistantText(expectedHopId ?? "");
+  if (normalizedExpectedHopId && extractedHopId) {
     const latestLower = normalizedLatest.toLowerCase();
-    const expectedMarker = `hop: ${hopId}`.toLowerCase();
-    return latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker);
+    const expectedMarker = `hop: ${normalizedExpectedHopId}`.toLowerCase();
+    if (latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker)) {
+      return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
+    }
   }
-  if (containsBridgeEnvelope(normalizedLatest)) {
-    return true;
+  if (containsBridgeContext && extractedHopId) {
+    const latestLower = normalizedLatest.toLowerCase();
+    const payloadHopMarker = `hop: ${extractedHopId}`.toLowerCase();
+    if (latestLower.includes(payloadHopMarker)) {
+      return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
+    }
+    return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
   }
+  if (containsBridgeContext) {
+    return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
+  }
+  return { hopBindingStrength: "none", containsBridgeContext: false, extractedHopId };
+}
+function analyzePayloadCorrelation(latestUserText, relayPayloadText, hopBindingStrength) {
+  if (!latestUserText || !relayPayloadText) {
+    return "none";
+  }
+  if (hopBindingStrength === "strong") {
+    return "strong";
+  }
+  const normalizedLatest = normalizeAssistantText(latestUserText);
+  const normalizedPayload = normalizeAssistantText(relayPayloadText);
   const overlap = calculateTextOverlap(normalizedLatest, normalizedPayload);
   if (overlap >= 0.5) {
-    return true;
+    return "weak";
   }
-  return false;
+  return "none";
 }
-function hasLatestUserTextChanged(baselineLatestUserText, currentLatestUserText) {
+function analyzeUserTurnChange(baselineLatestUserText, currentLatestUserText) {
   const baselineNormalized = normalizeAssistantText(baselineLatestUserText ?? "");
   const currentNormalized = normalizeAssistantText(currentLatestUserText ?? "");
   if (!currentNormalized) {
     return false;
   }
   return baselineNormalized !== currentNormalized;
+}
+function analyzeUserTurnHopBinding(baselineLatestUserText, currentLatestUserText, expectedHopId, relayPayloadText) {
+  if (!analyzeUserTurnChange(baselineLatestUserText, currentLatestUserText)) {
+    return "none";
+  }
+  const analysis = analyzeHopBinding(currentLatestUserText, relayPayloadText, expectedHopId);
+  return analysis.hopBindingStrength;
+}
+function analyzeGenerationSettlement(baselineGenerating, currentGenerating) {
+  if (!baselineGenerating && currentGenerating) {
+    return "strong";
+  }
+  if (baselineGenerating && !currentGenerating) {
+    return "weak";
+  }
+  return "none";
+}
+function evaluateSubmissionAcceptanceGate(result) {
+  const userHashChanged = result.details.currentUserHash !== null && result.details.currentUserHash !== result.details.baselineUserHash;
+  const acceptedEquivalentEvidence = result.userTurnChanged && result.hopBindingStrength === "strong" && result.payloadCorrelationStrength === "strong";
+  if (acceptedEquivalentEvidence) {
+    if (userHashChanged) {
+      return {
+        acceptedEquivalentEvidence: true,
+        waitingReplyAllowed: true,
+        weakCorrelationOnly: false,
+        reason: "acceptance_established_user_hash_changed"
+      };
+    }
+    if (result.generationSettlementStrength === "strong") {
+      return {
+        acceptedEquivalentEvidence: true,
+        waitingReplyAllowed: true,
+        weakCorrelationOnly: false,
+        reason: "acceptance_established_generation_started"
+      };
+    }
+    return {
+      acceptedEquivalentEvidence: true,
+      waitingReplyAllowed: true,
+      weakCorrelationOnly: false,
+      reason: "acceptance_established_hop_bound_payload"
+    };
+  }
+  const weakCorrelationOnly = result.hopBindingStrength === "weak" || result.payloadCorrelationStrength === "weak" || result.userTurnHopBinding === "weak";
+  if (weakCorrelationOnly) {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: true,
+      reason: "acceptance_not_established_weak_correlation"
+    };
+  }
+  if (!result.userTurnChanged) {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_no_user_turn_change"
+    };
+  }
+  if (result.hopBindingStrength === "none") {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_hop_binding_missing"
+    };
+  }
+  if (result.payloadCorrelationStrength === "none") {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_payload_not_correlated"
+    };
+  }
+  return {
+    acceptedEquivalentEvidence: false,
+    waitingReplyAllowed: false,
+    weakCorrelationOnly: false,
+    reason: "acceptance_not_established"
+  };
 }
 function evaluateSubmissionVerification(input) {
   const {
@@ -691,38 +795,105 @@ function evaluateSubmissionVerification(input) {
     relayPayloadText,
     expectedHopId
   } = input;
-  const latestUserTextChanged = hasLatestUserTextChanged(
+  const userTurnChanged = analyzeUserTurnChange(baselineLatestUserText, currentLatestUserText);
+  const userTurnHopBinding = analyzeUserTurnHopBinding(
     baselineLatestUserText,
-    currentLatestUserText
+    currentLatestUserText,
+    expectedHopId,
+    relayPayloadText
   );
-  const payloadCorrelated = verifyPayloadCorrelation(
+  const hopBindingAnalysis = analyzeHopBinding(currentLatestUserText, relayPayloadText, expectedHopId);
+  const hopBindingStrength = hopBindingAnalysis.hopBindingStrength;
+  const containsBridgeContext = hopBindingAnalysis.containsBridgeContext;
+  const extractedHopId = hopBindingAnalysis.extractedHopId;
+  const payloadCorrelationStrength = analyzePayloadCorrelation(
     currentLatestUserText,
     relayPayloadText,
-    expectedHopId
+    hopBindingStrength
   );
-  if (!latestUserTextChanged || !payloadCorrelated) {
+  const generationSettlementStrength = analyzeGenerationSettlement(
+    baselineGenerating,
+    currentGenerating
+  );
+  const textOverlapRatio = calculateTextOverlap(
+    normalizeAssistantText(currentLatestUserText ?? ""),
+    normalizeAssistantText(relayPayloadText)
+  );
+  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
+  const baseDetails = {
+    baselineUserHash,
+    currentUserHash,
+    baselineGenerating,
+    currentGenerating,
+    baselineLatestUserText,
+    currentLatestUserText,
+    textOverlapRatio,
+    containsBridgeContext,
+    extractedHopId,
+    expectedHopId: expectedHopId ?? null
+  };
+  if (!userTurnChanged || payloadCorrelationStrength === "none") {
     return {
       verified: false,
-      reason: "not_verified"
+      reason: "not_verified",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
-  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
-  const generationTransitioned = !baselineGenerating && currentGenerating;
-  if (userHashChanged) {
+  if (userHashChanged && hopBindingStrength === "strong") {
     return {
       verified: true,
-      reason: "payload_accepted"
+      reason: "payload_accepted_strong",
+      hopBindingStrength,
+      payloadCorrelationStrength: "strong",
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
-  if (generationTransitioned) {
+  if (userHashChanged && hopBindingStrength === "weak") {
+    return {
+      verified: false,
+      reason: "not_verified_weak_correlation",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
+    };
+  }
+  if (generationSettlementStrength === "strong" && userTurnChanged && payloadCorrelationStrength === "strong") {
     return {
       verified: true,
-      reason: "generation_with_user_changed"
+      reason: "generation_started_with_hop_bound_payload",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
   return {
     verified: false,
-    reason: "not_verified"
+    reason: "not_verified",
+    hopBindingStrength,
+    payloadCorrelationStrength,
+    generationSettlementStrength,
+    userTurnChanged,
+    userTurnHopBinding,
+    assistantSettlementStrength: "unavailable",
+    details: baseDetails
   };
 }
 
@@ -1196,7 +1367,7 @@ async function runTargetPreflight(targetRole, targetBinding, state, token) {
         selector: "activity_check_failed"
       }
     });
-  } else if (!threadActivity.result.generating && threadActivity.result.sendButtonReady) {
+  } else if (!threadActivity.result.generating && threadActivity.result.composerAvailable) {
     return true;
   }
   const timeoutMs = state.settings?.hopTimeoutMs ?? DEFAULT_SETTINGS.hopTimeoutMs;
@@ -1227,7 +1398,7 @@ async function runTargetPreflight(targetRole, targetBinding, state, token) {
       await sleep(pollIntervalMs);
       continue;
     }
-    if (!activity.result.generating && activity.result.sendButtonReady) {
+    if (!activity.result.generating && activity.result.composerAvailable) {
       return true;
     }
     if (activity.result.generating) {
@@ -1242,7 +1413,7 @@ async function runTargetPreflight(targetRole, targetBinding, state, token) {
           selector: "target_generating"
         }
       });
-    } else if (!activity.result.sendButtonReady) {
+    } else if (!activity.result.composerAvailable) {
       await updateState({
         type: "set_runtime_activity",
         activity: {
@@ -1342,7 +1513,8 @@ async function runRelayLoop(token, settings) {
       return;
     }
     const baselineTarget = await requestAssistantSnapshot(targetBinding.tabId);
-    if (!baselineTarget.ok) {
+    const targetHasNoAssistantMessage = baselineTarget.ok === false && (baselineTarget.error?.includes("not_found") || baselineTarget.error?.includes("empty"));
+    if (!baselineTarget.ok && !targetHasNoAssistantMessage) {
       await updateState({
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target:${targetRole}`
@@ -1439,7 +1611,7 @@ async function runRelayLoop(token, settings) {
       sendTriggerMode: sendResult.mode,
       verificationBaseline: verificationBaselineSummary,
       verificationPollSample: dispatchEvidenceSummary,
-      verificationVerdict: "dispatch_accepted"
+      verificationVerdict: "observation_window_opened"
     });
     await updateState({
       type: "set_runtime_activity",
@@ -1455,8 +1627,9 @@ async function runRelayLoop(token, settings) {
     const verificationTimeoutMs = 1e4;
     const verificationPollIntervalMs = 500;
     const verificationStartTime = Date.now();
-    let verificationPassed = false;
+    let acceptanceEstablished = false;
     let lastVerificationPollSample = "no_poll_sample";
+    let lastAcceptanceGateReason = "acceptance_not_established_observation_window_only";
     while (Date.now() - verificationStartTime < verificationTimeoutMs) {
       if (token !== activeLoopToken) {
         return;
@@ -1494,14 +1667,23 @@ async function runRelayLoop(token, settings) {
         relayPayloadText: envelope,
         expectedHopId: verificationHopId
       });
+      const acceptanceGate = evaluateSubmissionAcceptanceGate(verificationResult);
       const verificationPollSampleBase = formatVerificationPollSample(
         activity.result.latestUserHash,
         activity.result.generating,
         currentLatestUserText
       );
-      const verificationPollSample = currentLatestUserTextError === null ? verificationPollSampleBase : `${verificationPollSampleBase}|text_error:${currentLatestUserTextError}`;
+      const verificationPollSample = [
+        currentLatestUserTextError === null ? verificationPollSampleBase : `${verificationPollSampleBase}|text_error:${currentLatestUserTextError}`,
+        `gate:${acceptanceGate.reason}`,
+        `hop_binding:${verificationResult.hopBindingStrength}`,
+        `payload:${verificationResult.payloadCorrelationStrength}`,
+        `generation:${verificationResult.generationSettlementStrength}`,
+        `user_turn_changed:${verificationResult.userTurnChanged}`
+      ].join("|");
       lastVerificationPollSample = verificationPollSample;
-      if (verificationResult.verified) {
+      lastAcceptanceGateReason = acceptanceGate.reason;
+      if (acceptanceGate.acceptedEquivalentEvidence) {
         addRuntimeEvent({
           phaseStep: "verification_passed",
           sourceRole,
@@ -1511,9 +1693,9 @@ async function runRelayLoop(token, settings) {
           sendTriggerMode: sendResult.mode,
           verificationBaseline: verificationBaselineSummary,
           verificationPollSample,
-          verificationVerdict: verificationResult.reason
+          verificationVerdict: acceptanceGate.reason
         });
-        verificationPassed = true;
+        acceptanceEstablished = true;
         break;
       }
       addRuntimeEvent({
@@ -1525,7 +1707,7 @@ async function runRelayLoop(token, settings) {
         sendTriggerMode: sendResult.mode,
         verificationBaseline: verificationBaselineSummary,
         verificationPollSample,
-        verificationVerdict: verificationResult.reason
+        verificationVerdict: acceptanceGate.reason
       });
       await updateState({
         type: "set_runtime_activity",
@@ -1535,11 +1717,11 @@ async function runRelayLoop(token, settings) {
           targetRole,
           pendingRound: currentState.round + 1,
           transport: "verifying",
-          selector: verificationResult.reason
+          selector: acceptanceGate.reason
         }
       });
     }
-    if (!verificationPassed) {
+    if (!acceptanceEstablished) {
       addRuntimeEvent({
         phaseStep: "verification_failed",
         sourceRole,
@@ -1549,7 +1731,18 @@ async function runRelayLoop(token, settings) {
         sendTriggerMode: sendResult.mode,
         verificationBaseline: verificationBaselineSummary,
         verificationPollSample: lastVerificationPollSample,
-        verificationVerdict: "submission_not_verified"
+        verificationVerdict: lastAcceptanceGateReason
+      });
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `verifying ${targetRole} submission`,
+          sourceRole,
+          targetRole,
+          pendingRound: state.round + 1,
+          transport: "verifying",
+          selector: "acceptance_not_established"
+        }
       });
       await updateState({
         type: "stop_condition",
@@ -1577,11 +1770,11 @@ async function runRelayLoop(token, settings) {
       sendTriggerMode: sendResult.mode,
       verificationBaseline: verificationBaselineSummary,
       verificationPollSample: lastVerificationPollSample,
-      verificationVerdict: "waiting_reply"
+      verificationVerdict: "waiting_reply_after_acceptance"
     });
     const settled = await waitForSettledReply({
       tabId: targetBinding.tabId,
-      baselineHash: baselineTarget.result.hash,
+      baselineHash: baselineTarget.ok ? baselineTarget.result.hash : null,
       settings,
       token
     });
@@ -1589,6 +1782,28 @@ async function runRelayLoop(token, settings) {
       return;
     }
     if ("reason" in settled && settled.reason === STOP_REASONS.HOP_TIMEOUT) {
+      addRuntimeEvent({
+        phaseStep: "reply_timeout",
+        sourceRole,
+        targetRole,
+        round: state.round + 1,
+        dispatchReadbackSummary,
+        sendTriggerMode: sendResult.mode,
+        verificationBaseline: verificationBaselineSummary,
+        verificationPollSample: lastVerificationPollSample,
+        verificationVerdict: "reply_timeout"
+      });
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `waiting ${targetRole} reply`,
+          sourceRole,
+          targetRole,
+          pendingRound: state.round + 1,
+          transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
+          selector: "reply_timeout"
+        }
+      });
       await updateState({
         type: "stop_condition",
         reason: STOP_REASONS.HOP_TIMEOUT
@@ -1751,8 +1966,16 @@ async function waitForSettledReply({
     }
     await sleep(settings.pollIntervalMs);
     const snapshot = await requestAssistantSnapshot(tabId);
+    const retryableErrors = [
+      "assistant_message_not_found",
+      "assistant_message_empty"
+    ];
     if (!snapshot.ok) {
-      return snapshot;
+      const error = "error" in snapshot ? snapshot.error : "unknown";
+      if (!retryableErrors.includes(error)) {
+        return snapshot;
+      }
+      continue;
     }
     const currentHash = snapshot.result.hash;
     if (!currentHash || currentHash === baselineHash) {
@@ -1866,7 +2089,8 @@ async function buildOverlaySnapshot(state, tabId, overlaySettings) {
     controls: deriveControls(state, readiness),
     display: buildDisplay(state),
     overlaySettings,
-    readiness
+    readiness,
+    currentTabId: tabId
   };
 }
 function findRoleByTabId(state, tabId) {

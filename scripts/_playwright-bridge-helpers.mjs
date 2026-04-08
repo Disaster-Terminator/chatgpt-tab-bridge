@@ -135,6 +135,7 @@ export async function launchBrowserWithExtension(options = {}) {
   // Build launch options
   const launchOptions = {
     headless: false,
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
     ...(storageStatePath ? { storageState: storageStatePath } : {}),
     args: [
@@ -142,6 +143,7 @@ export async function launchBrowserWithExtension(options = {}) {
       `--load-extension=${extensionPath}`,
       "--no-first-run",
       "--no-default-browser-check",
+      "--disable-blink-features=AutomationControlled",
       "--enable-unsafe-extension-debugging"
     ]
   };
@@ -275,13 +277,73 @@ export async function ensureOverlay(page) {
 
 /**
  * Click overlay bind button for specified role.
+ * Waits for button to be enabled, clicks with fallback, then confirms
+ * bind success via the button's data-active attribute (locale-agnostic).
  * @param {import("playwright").Page} page
  * @param {"A"|"B"} role
  */
 export async function clickOverlayBind(page, role) {
-  const selector = `[data-bind-role="${role}"]`;
-  await page.waitForSelector(selector, { state: "visible", timeout: 30000 });
-  await page.locator(selector).click();
+  const selector = `.chatgpt-bridge-overlay:not([hidden]) [data-bind-role="${role}"]`;
+  const bindButton = page.locator(selector).first();
+
+  // Wait for currentTabId to be ready before attempting bind
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector(".chatgpt-bridge-overlay");
+      return el?.dataset?.tabId !== "";
+    },
+    { timeout: 10000 }
+  );
+
+  const isAlreadyActive = await page
+    .evaluate((targetRole) => {
+      const btn = document.querySelector(`.chatgpt-bridge-overlay:not([hidden]) [data-bind-role="${targetRole}"]`);
+      return btn?.getAttribute("data-active") === "true";
+    }, role)
+    .catch(() => false);
+
+  if (isAlreadyActive) {
+    return;
+  }
+
+  await bindButton.waitFor({ state: "visible", timeout: 30000 });
+  const enabled = await waitForEnabledButton(bindButton, 15000);
+  if (!enabled) {
+    throw new Error(
+      `Overlay bind button for role ${role} never became enabled within 15s. ` +
+      `Bind handshake cannot proceed.`
+    );
+  }
+
+  try {
+    await bindButton.click({ force: true, timeout: 5000 });
+  } catch {
+    await bindButton.evaluate((node) => node.click()).catch(() => {});
+  }
+
+  // Post-click confirmation: check data-active attribute (locale-agnostic)
+  await page
+    .waitForFunction(
+      ({ targetRole }) => {
+        const btn = document.querySelector(`.chatgpt-bridge-overlay:not([hidden]) [data-bind-role="${targetRole}"]`);
+        return btn?.getAttribute("data-active") === "true";
+      },
+      { targetRole: role },
+      { timeout: 15000 }
+    )
+    .catch(async () => {
+      const debug = await page.evaluate(() => {
+        const roleText = document.querySelector('.chatgpt-bridge-overlay:not([hidden]) [data-slot="role"]')?.textContent?.trim() || "missing";
+        const issue = document.querySelector('[data-slot="issue"]')?.textContent?.trim() || "";
+        const a = document.querySelector('[data-bind-role="A"]')?.getAttribute('data-active') || "missing";
+        const b = document.querySelector('[data-bind-role="B"]')?.getAttribute('data-active') || "missing";
+        return { roleText, issue, a, b };
+      });
+      throw new Error(
+        `Overlay bind for role ${role} did not become active within 15s. ` +
+          `Bind handshake failed. roleText='${debug.roleText}', issue='${debug.issue}', activeA='${debug.a}', activeB='${debug.b}'`
+      );
+    });
 }
 
 /**
@@ -450,7 +512,7 @@ export async function expectValueChanged(page, selector, predicate) {
  * @param {string} prompt
  */
 export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
-  await dismissCookieBanner();
+  await dismissCookieBanner(page);
 
   try {
     const composer = await findComposer(page);
@@ -469,7 +531,7 @@ export async function bootstrapAnonymousThread(page, seedLabel, prompt) {
       await page.keyboard.insertText(prompt);
     }
 
-    await dismissCookieBanner();
+    await dismissCookieBanner(page);
 
     const sendButton = page
       .locator('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="发送"], form button[type="submit"]')
@@ -700,6 +762,55 @@ export async function waitForAssistantReply(page, seedLabel) {
 
   await dumpBootstrapDiagnostics(page, seedLabel);
   throw new Error("Timed out waiting for a stable assistant reply.");
+}
+
+/**
+ * Wait for assistant reply to be settled (generation stopped + text stable).
+ * Used before collecting baseline to ensure source payload is ready for relay.
+ * @param {import("playwright").Page} page
+ * @param {string} seedLabel
+ * @returns {Promise<string>} The settled assistant reply text
+ */
+export async function waitForSettledAssistantReply(page, seedLabel) {
+  const locator = page.locator('[data-message-author-role="assistant"]').last();
+
+  await locator.waitFor({ state: "visible", timeout: 60000 });
+
+  const startedAt = Date.now();
+  const stabilityWindowMs = 3000;
+  let lastText = "";
+  let lastStableTime = 0;
+
+  while (Date.now() - startedAt < 60000) {
+    const isGenerating = await page.evaluate(() => {
+      const stopBtn = document.querySelector('button[data-testid="stop-generating-button"]') ||
+                      document.querySelector('button[data-testid="stop-button"]');
+      return Boolean(stopBtn);
+    });
+
+    if (isGenerating) {
+      await page.waitForTimeout(1500);
+      continue;
+    }
+
+    const currentText = (await locator.innerText()).trim();
+
+    if (currentText && currentText === lastText) {
+      if (lastStableTime === 0) {
+        lastStableTime = Date.now();
+      } else if (Date.now() - lastStableTime >= stabilityWindowMs) {
+        return currentText;
+      }
+    } else {
+      lastText = currentText;
+      lastStableTime = 0;
+    }
+
+    await page.waitForTimeout(1500);
+  }
+
+  await dumpBootstrapDiagnostics(page, seedLabel);
+  throw new Error("Timed out waiting for settled assistant reply (generation stopped + text stable).");
 }
 
 /**
@@ -1151,5 +1262,181 @@ export function assertStatesConsistent(popupState, overlayState) {
   const result = compareStates(popupState, overlayState);
   if (!result.consistent) {
     assert.fail(`State mismatch: ${result.mismatches.join(", ")}`);
+  }
+}
+
+/**
+ * Read current tab id from the overlay DOM in page context.
+ * @param {import("playwright").Page} page - Page with overlay injected
+ * @returns {Promise<{tabId: number, error?: string}>}
+ */
+export async function getTabIdFromPage(page) {
+  try {
+    const result = await page.evaluate(async () => {
+      const overlay = document.querySelector(`.chatgpt-bridge-overlay`);
+      if (!overlay) {
+        return { error: "Overlay not found" };
+      }
+      const tabIdAttr = overlay.dataset.tabId;
+      if (!tabIdAttr) {
+        return { error: "No tabId in overlay dataset" };
+      }
+      const tabId = parseInt(tabIdAttr, 10);
+      if (isNaN(tabId)) {
+        return { error: "Invalid tabId: " + tabIdAttr };
+      }
+      return { tabId };
+    });
+    return result;
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+/**
+ * Send SET_BINDING from popup page runtime context.
+ * @param {import("playwright").Page} popupPage - The extension popup page
+ * @param {"A"|"B"} role - Role to bind
+ * @param {number} tabId - Tab id to bind
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function bindFromPopup(popupPage, role, tabId) {
+  try {
+    const result = await popupPage.evaluate(async ({ role: targetRole, tabId: targetTabId }) => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "SET_BINDING",
+          role: targetRole,
+          tabId: targetTabId
+        });
+        return { ok: response.ok, error: response.error };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }, { role, tabId });
+    return result;
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+/**
+ * Bind a page role by reading tab id from page DOM then sending SET_BINDING from popup.
+ * @param {import("playwright").Page} page - Page with overlay injected
+ * @param {import("playwright").Page} popupPage - The extension popup page
+ * @param {"A"|"B"} role - Role to bind
+ * @returns {Promise<{ok: boolean, tabId?: number, error?: string}>}
+ */
+export async function bindFromPage(page, popupPage, role) {
+  // Step 1: Read tabId from page DOM
+  const tabIdResult = await getTabIdFromPage(page);
+  if (tabIdResult.error) {
+    return { ok: false, error: "getTabIdFromPage: " + tabIdResult.error };
+  }
+
+  const tabId = tabIdResult.tabId;
+
+  // Step 2: Send SET_BINDING from popup context
+  const bindResult = await bindFromPopup(popupPage, role, tabId);
+
+  return {
+    ok: bindResult.ok,
+    error: bindResult.error,
+    tabId: tabId,
+    role: role
+  };
+}
+
+/**
+ * Get real runtime state from the popup page context.
+ * The popup is an extension page with full chrome.runtime access,
+ * unlike chatgpt.com pages which Playwright isolates.
+ * @param {import("playwright").Page} popupPage - The extension popup page
+ * @returns {Promise<{phase: string, bindings: {A: unknown, B: unknown}, error?: string}>}
+ */
+export async function getRuntimeState(popupPage) {
+  try {
+    const result = await popupPage.evaluate(async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "GET_RUNTIME_STATE"
+        });
+        if (!response.ok) {
+          return { error: response.error };
+        }
+        const state = response.result;
+        return {
+          phase: state?.phase || "unknown",
+          bindings: {
+            A: state?.bindings?.A,
+            B: state?.bindings?.B
+          }
+        };
+      } catch (error) {
+        return { error: error.message };
+      }
+    });
+
+    return result;
+  } catch (error) {
+    return { phase: "error", error: error.message };
+  }
+}
+
+/**
+ * Check if bindings are established by querying popup model via the popup page.
+ * @param {import("playwright").Page} popupPage - The extension popup page
+ * @returns {Promise<{bindingA: boolean, bindingB: boolean, phase: string}>}
+ */
+export async function checkBindingsViaPopupPage(popupPage) {
+  try {
+    const result = await popupPage.evaluate(async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "GET_POPUP_MODEL"
+        });
+        if (!response.ok) {
+          return { error: response.error };
+        }
+        const model = response.result;
+        return {
+          bindingA: model?.state?.bindings?.A !== null && model?.state?.bindings?.A !== undefined,
+          bindingB: model?.state?.bindings?.B !== null && model?.state?.bindings?.B !== undefined,
+          phase: model?.state?.phase || "unknown"
+        };
+      } catch (error) {
+        return { error: error.message };
+      }
+    });
+
+    return result;
+  } catch (error) {
+    return { bindingA: false, bindingB: false, phase: "error", error: error.message };
+  }
+}
+
+/**
+ * Fetch runtime events from popup page context (has proper chrome.runtime access).
+ * @param {import("playwright").Page} popupPage - The extension popup page
+ * @returns {Promise<{ok: boolean, events: unknown[], error?: string}>}
+ */
+export async function fetchRuntimeEventsFromPopup(popupPage) {
+  try {
+    const result = await popupPage.evaluate(async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "GET_RECENT_RUNTIME_EVENTS"
+        });
+        if (response && response.ok === true && Array.isArray(response.result)) {
+          return { ok: true, events: response.result };
+        }
+        return { ok: false, events: [], error: response?.error || "invalid_response" };
+      } catch (error) {
+        return { ok: false, events: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    return result;
+  } catch (error) {
+    return { ok: false, events: [], error: error.message };
   }
 }

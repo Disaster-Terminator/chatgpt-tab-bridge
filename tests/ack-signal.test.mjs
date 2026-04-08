@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   checkAckSignals,
+  evaluateDispatchAcceptanceSignal,
   isComposerTrulyCleared,
   isGenerationInProgressFromDoc,
   stillContainsExpectedPayload
@@ -297,6 +298,70 @@ test("REGRESSION: composer_cleared alone returns auxiliary_only evidence", async
   } finally {
     globalThis.document = originalGlobal;
   }
+});
+
+test("REGRESSION: dispatch acceptance treats payload release as trigger_consumed even before page ack arrives", () => {
+  const acceptedSignal = evaluateDispatchAcceptanceSignal({
+    ack: {
+      ok: true,
+      signal: "composer_cleared",
+      evidence: "auxiliary_only"
+    },
+    baselineUserHash: "h1",
+    currentUserHash: "h1",
+    payloadReleased: true,
+    textChanged: true,
+    buttonStateChanged: false
+  });
+
+  assert.equal(acceptedSignal, "trigger_consumed");
+});
+
+test("REGRESSION: dispatch acceptance does not require payloadReleased once generation_started is paired with other trigger-consumed evidence", () => {
+  const acceptedSignal = evaluateDispatchAcceptanceSignal({
+    ack: {
+      ok: true,
+      signal: "generation_started",
+      evidence: "strong"
+    },
+    baselineUserHash: "h1",
+    currentUserHash: "h1",
+    payloadReleased: false,
+    textChanged: false,
+    buttonStateChanged: true
+  });
+
+  assert.equal(acceptedSignal, "generation_started");
+});
+
+test("dispatch acceptance still prefers user_message_added when user turn changed", () => {
+  const acceptedSignal = evaluateDispatchAcceptanceSignal({
+    ack: {
+      ok: true,
+      signal: "user_message_added",
+      evidence: "strong"
+    },
+    baselineUserHash: "h1",
+    currentUserHash: "h2",
+    payloadReleased: false,
+    textChanged: false,
+    buttonStateChanged: false
+  });
+
+  assert.equal(acceptedSignal, "user_message_added");
+});
+
+test("dispatch acceptance stays closed when there is neither trigger-consumed evidence nor page ack", () => {
+  const acceptedSignal = evaluateDispatchAcceptanceSignal({
+    ack: null,
+    baselineUserHash: "h1",
+    currentUserHash: "h1",
+    payloadReleased: false,
+    textChanged: false,
+    buttonStateChanged: false
+  });
+
+  assert.equal(acceptedSignal, null);
 });
 
 test("REGRESSION: strong signal + composer_cleared returns strong_with_auxiliary", async () => {

@@ -20,13 +20,10 @@ import {
   addSessionStorageInitScript,
   restoreSessionStorage,
   ensureOverlay,
-  clickOverlayBind,
   clickOverlayAction,
   expectOverlayActionEnabled,
   expectPopupPhaseState,
-  expectBindingState,
   expectPopupControlState,
-  expectValueChanged,
   bootstrapAnonymousThread,
   buildBootstrapPrompt,
   getExtensionId,
@@ -34,10 +31,16 @@ import {
   readPopupState,
   readOverlayState,
   compareStates,
-  assertStatesConsistent,
   cleanupBrowser,
   sleep,
-  assertSupportedThreadUrl
+  assertSupportedThreadUrl,
+  isSupportedThreadUrl,
+  bindFromPage,
+  getRuntimeState,
+  fetchRuntimeEventsFromPopup,
+  ensureComposer,
+  sendPrompt,
+  waitForSettledAssistantReply
 } from "./_playwright-bridge-helpers.mjs";
 
 const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
@@ -46,6 +49,7 @@ const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const scenarioFilter = readFlag("--scenario");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
+const rootOnly = process.argv.includes("--root-only");
 
 // Auth state options
 const authStateArg = readFlag("--auth-state");
@@ -78,6 +82,212 @@ const scenarios = {
   "popup-overlay-sync": runPopupOverlaySync,
   "source-busy-before-hop": runSourceBusyBeforeHop
 };
+
+function normalizeText(value) {
+  return String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
+}
+
+function hasWaitingLikeStep(stepText) {
+  return normalizeText(stepText).toLowerCase().startsWith("waiting ");
+}
+
+async function collectThreadObservation(page) {
+  return await page.evaluate(() => {
+    const normalize = (value) => String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
+    const hashText = (value) => {
+      const text = normalize(value);
+      let hash = 2166136261;
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return text ? `h${(hash >>> 0).toString(16)}` : null;
+    };
+
+    const latestByRole = (role) => {
+      const nodes = Array.from(document.querySelectorAll(`[data-message-author-role="${role}"]`));
+      const latest = nodes.at(-1) || null;
+      const text = normalize(latest?.textContent || "");
+      return {
+        count: nodes.length,
+        text: text || null,
+        hash: hashText(text)
+      };
+    };
+
+    const latestUser = latestByRole("user");
+    const latestAssistant = latestByRole("assistant");
+
+    return {
+      latestUserText: latestUser.text,
+      latestUserHash: latestUser.hash,
+      userMessageCount: latestUser.count,
+      latestAssistantText: latestAssistant.text,
+      latestAssistantHash: latestAssistant.hash,
+      assistantMessageCount: latestAssistant.count,
+      bridgeContext: normalize(latestUser.text || "").includes("[BRIDGE_CONTEXT]"),
+      hopMarker: /(?:^|\n)hop:\s*[^\s\n]+/i.test(normalize(latestUser.text || ""))
+    };
+  });
+}
+
+async function ensureBoundRole(page, popupPage, role) {
+  let lastError = "bind_not_attempted";
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const bindResult = await bindFromPage(page, popupPage, role);
+    if (!bindResult.ok) {
+      lastError = bindResult.error || "bind_failed";
+    }
+
+    await sleep(1000);
+    const runtimeState = await getRuntimeState(popupPage);
+    if (runtimeState.bindings?.[role]) {
+      return runtimeState;
+    }
+
+    lastError = runtimeState.error || lastError;
+  }
+
+  throw new Error(`Failed to bind role ${role}: ${lastError}`);
+}
+
+async function ensureSourceAssistantSeed(page) {
+  const baseline = await collectThreadObservation(page);
+  if (baseline.latestAssistantHash) {
+    return baseline;
+  }
+
+  await ensureComposer(page);
+  await sendPrompt(page, "Hello, respond briefly and end with [BRIDGE_STATE] CONTINUE.");
+  await waitForSettledAssistantReply(page, "e2e-source-seed");
+  return collectThreadObservation(page);
+}
+
+function classifyHopFailure({
+  expectedRound,
+  dispatchRejectedEvent,
+  verificationFailedEvent,
+  waitingReplyEvent,
+  replyTimeoutEvent,
+  pageAccepted
+}) {
+  if (replyTimeoutEvent) {
+    return `round_${replyTimeoutEvent.round}_beat_5_reply_timeout:${replyTimeoutEvent.verificationVerdict || "reply_timeout"}`;
+  }
+
+  if (dispatchRejectedEvent) {
+    return `round_${expectedRound}_beat_3_dispatch_rejected:${dispatchRejectedEvent.verificationVerdict || "dispatch_rejected"}`;
+  }
+
+  if (verificationFailedEvent) {
+    return `round_${expectedRound}_beat_4_page_acceptance_failed:${verificationFailedEvent.verificationVerdict || "verification_failed"}`;
+  }
+
+  if (waitingReplyEvent && !pageAccepted) {
+    return `round_${expectedRound}_beat_4_waiting_before_page_acceptance`;
+  }
+
+  return `round_${expectedRound}_beat_4_acceptance_timeout`;
+}
+
+async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expectedRound, targetRole }) {
+  const startedAt = Date.now();
+  let sawPageAcceptance = false;
+
+  while (Date.now() - startedAt < 90000) {
+    const [popupState, runtimeResult, targetObservation] = await Promise.all([
+      readPopupState(popupPage).catch(() => ({})),
+      fetchRuntimeEventsFromPopup(popupPage),
+      collectThreadObservation(targetPage)
+    ]);
+
+    const runtimeEvents = runtimeResult.ok ? runtimeResult.events : [];
+    const roundEvents = runtimeEvents.filter((event) => event.round === expectedRound && event.targetRole === targetRole);
+    const dispatchRejectedEvent = roundEvents.find((event) => event.phaseStep === "dispatch_rejected") || null;
+    const verificationFailedEvent = roundEvents.find((event) => event.phaseStep === "verification_failed") || null;
+    const verificationPassedEvent = roundEvents.find((event) => event.phaseStep === "verification_passed") || null;
+    const waitingReplyEvent = roundEvents.find((event) => event.phaseStep === "waiting_reply") || null;
+    const replyTimeoutEvent = runtimeEvents.find((event) => {
+      if (event.phaseStep !== "reply_timeout") {
+        return false;
+      }
+
+      return expectedRound === 1 ? event.round === 1 : event.round === expectedRound - 1;
+    }) || null;
+
+    const userHashChanged =
+      targetObservation.latestUserHash !== null &&
+      targetObservation.latestUserHash !== baselineTarget.latestUserHash;
+    const userCountIncreased = targetObservation.userMessageCount > baselineTarget.userMessageCount;
+    const latestUserTextChanged =
+      Boolean(targetObservation.latestUserText) &&
+      normalizeText(targetObservation.latestUserText) !== normalizeText(baselineTarget.latestUserText);
+    const pageAccepted =
+      latestUserTextChanged &&
+      targetObservation.bridgeContext &&
+      targetObservation.hopMarker &&
+      (userHashChanged || userCountIncreased);
+
+    sawPageAcceptance ||= pageAccepted;
+
+    if (pageAccepted && (verificationPassedEvent || waitingReplyEvent)) {
+      return {
+        ok: true,
+        evidence: {
+          round: expectedRound,
+          targetRole,
+          popupPhase: popupState.phase || null,
+          popupStep: popupState.currentStep || null,
+          gateReason:
+            verificationPassedEvent?.verificationVerdict ||
+            waitingReplyEvent?.verificationVerdict ||
+            null,
+          latestUserHash: targetObservation.latestUserHash,
+          latestUserPreview: normalizeText(targetObservation.latestUserText).slice(0, 160)
+        }
+      };
+    }
+
+    if (dispatchRejectedEvent || verificationFailedEvent || replyTimeoutEvent || (waitingReplyEvent && !pageAccepted)) {
+      return {
+        ok: false,
+        reason: classifyHopFailure({
+          expectedRound,
+          dispatchRejectedEvent,
+          verificationFailedEvent,
+          waitingReplyEvent,
+          replyTimeoutEvent,
+          pageAccepted
+        }),
+        context: {
+          popupPhase: popupState.phase || null,
+          popupStep: popupState.currentStep || null,
+          sawPageAcceptance,
+          latestUserHash: targetObservation.latestUserHash,
+          latestUserPreview: normalizeText(targetObservation.latestUserText).slice(0, 160)
+        }
+      };
+    }
+
+    await sleep(1200);
+  }
+
+  return {
+    ok: false,
+    reason: classifyHopFailure({
+      expectedRound,
+      dispatchRejectedEvent: null,
+      verificationFailedEvent: null,
+      waitingReplyEvent: null,
+      replyTimeoutEvent: null,
+      pageAccepted: sawPageAcceptance
+    }),
+    context: {
+      sawPageAcceptance
+    }
+  };
+}
 
 /**
  * Run a scenario with proper lifecycle:
@@ -250,9 +460,10 @@ async function createEnv() {
     await new Promise(resolve => {
       process.stdin.once("data", () => resolve());
     });
-    // Validate URLs after user navigation
-    await assertSupportedThreadUrl(pageA, "pageA (manual)");
-    await assertSupportedThreadUrl(pageB, "pageB (manual)");
+    if (!rootOnly) {
+      await assertSupportedThreadUrl(pageA, "pageA (manual)");
+      await assertSupportedThreadUrl(pageB, "pageB (manual)");
+    }
   } else {
     // Default: Use auth state for authenticated bootstrap
     console.log("  Using exported auth state for authenticated bootstrap...");
@@ -269,24 +480,36 @@ async function createEnv() {
     
     // Give page time to stabilize
     await sleep(2000);
-    
-    await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
-    await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
+
+    if (!rootOnly) {
+      await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
+      await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
+    } else {
+      const [pageAHasUrl, pageBHasUrl] = await Promise.all([
+        isSupportedThreadUrl(pageA),
+        isSupportedThreadUrl(pageB)
+      ]);
+      console.log(
+        `  Root-only mode: skipping thread bootstrap (A URL supported: ${pageAHasUrl}, B URL supported: ${pageBHasUrl})`
+      );
+    }
   }
   
   // Wait for overlay
   await ensureOverlay(pageA);
   await ensureOverlay(pageB);
-  
-  // Bind A and B
-  await clickOverlayBind(pageA, "A");
-  await clickOverlayBind(pageB, "B");
-  
+
   // Open popup
   const extensionId = await getExtensionId(pageA);
   const popupPage = await openPopup(context, extensionId);
-  
-  // Wait for ready
+
+  await ensureBoundRole(pageA, popupPage, "A");
+  await ensureBoundRole(pageB, popupPage, "B");
+
+  const runtimeState = await getRuntimeState(popupPage);
+  assert.ok(runtimeState.bindings?.A, "Expected runtime binding for A");
+  assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
+
   await expectPopupPhaseState(popupPage, "ready");
   
   return {
@@ -313,46 +536,14 @@ async function cleanupEnv(env) {
 
 async function runHappyPath(env) {
   const { pageA, pageB, popupPage } = env;
-  
-  // P0-5: Capture comprehensive initial state for proof of real submission
-  const initialRound = await popupPage.locator("#roundValue").innerText();
-  
-  const initialTargetState = await pageB.evaluate(() => {
-    const result = { userText: null, userHash: null, assistantHash: null, bridgeContext: false };
-    
-    // Get latest user message
-    const userMessages = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-    if (userMessages.length > 0) {
-      const latestUser = userMessages[userMessages.length - 1];
-      result.userText = latestUser.textContent?.trim() || "";
-      if (result.userText) {
-        let hash = 2166136261;
-        for (let i = 0; i < result.userText.length; i++) {
-          hash ^= result.userText.charCodeAt(i);
-          hash = Math.imul(hash, 16777619);
-        }
-        result.userHash = "h" + (hash >>> 0).toString(16);
-        result.bridgeContext = result.userText.includes("[BRIDGE_CONTEXT]") || result.userText.includes("[来自");
-      }
-    }
-    
-    // Get latest assistant message for activity evidence
-    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    if (assistantMessages.length > 0) {
-      const latestAssistant = assistantMessages[assistantMessages.length - 1];
-      const assistantText = latestAssistant.textContent?.trim() || "";
-      if (assistantText) {
-        let hash = 2166136261;
-        for (let i = 0; i < assistantText.length; i++) {
-          hash ^= assistantText.charCodeAt(i);
-          hash = Math.imul(hash, 16777619);
-        }
-        result.assistantHash = "h" + (hash >>> 0).toString(16);
-      }
-    }
-    
-    return result;
-  });
+
+  await ensureSourceAssistantSeed(pageA);
+
+  const initialRound = Number(await popupPage.locator("#roundValue").innerText());
+  const [baselineTargetB, baselineTargetA] = await Promise.all([
+    collectThreadObservation(pageB),
+    collectThreadObservation(pageA)
+  ]);
 
   await expectOverlayActionEnabled(pageA, "start");
   await clickOverlayAction(pageA, "start");
@@ -365,72 +556,49 @@ async function runHappyPath(env) {
     overrideSelectEnabled: false
   });
 
-  // P0-5: Wait for real first-hop submission proof
-  // Not just round change - need compound evidence
-  await sleep(10000);
-
-  const newRound = await popupPage.locator("#roundValue").innerText();
-  
-  const newTargetState = await pageB.evaluate(() => {
-    const result = { userText: null, userHash: null, assistantHash: null, bridgeContext: false };
-    
-    const userMessages = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-    if (userMessages.length > 0) {
-      const latestUser = userMessages[userMessages.length - 1];
-      result.userText = latestUser.textContent?.trim() || "";
-      if (result.userText) {
-        let hash = 2166136261;
-        for (let i = 0; i < result.userText.length; i++) {
-          hash ^= result.userText.charCodeAt(i);
-          hash = Math.imul(hash, 16777619);
-        }
-        result.userHash = "h" + (hash >>> 0).toString(16);
-        result.bridgeContext = result.userText.includes("[BRIDGE_CONTEXT]") || result.userText.includes("[来自");
-      }
-    }
-    
-    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    if (assistantMessages.length > 0) {
-      const latestAssistant = assistantMessages[assistantMessages.length - 1];
-      const assistantText = latestAssistant.textContent?.trim() || "";
-      if (assistantText) {
-        let hash = 2166136261;
-        for (let i = 0; i < assistantText.length; i++) {
-          hash ^= assistantText.charCodeAt(i);
-          hash = Math.imul(hash, 16777619);
-        }
-        result.assistantHash = "h" + (hash >>> 0).toString(16);
-      }
-    }
-    
-    return result;
+  const roundOne = await waitForAcceptedHop({
+    popupPage,
+    targetPage: pageB,
+    baselineTarget: baselineTargetB,
+    expectedRound: initialRound + 1,
+    targetRole: "B"
   });
-
-  // P0-5: Compound success criteria - not just round OR message, but both for real proof
-  const roundChanged = newRound !== initialRound && parseInt(newRound, 10) > parseInt(initialRound, 10);
-  const userMessageChanged = newTargetState.userHash !== null && newTargetState.userHash !== initialTargetState.userHash;
-  const payloadAdoption = newTargetState.bridgeContext || (
-    newTargetState.userText && initialTargetState.userText &&
-    calculateOverlap(newTargetState.userText, initialTargetState.userText) >= 0.3
-  );
-  const assistantActivity = newTargetState.assistantHash !== null && newTargetState.assistantHash !== initialTargetState.assistantHash;
-
-  // P0-5: Strong proof requires either:
-  // 1. bridge context (unambiguous relay marker)
-  // 2. OR (user message changed AND (round changed OR assistant activity))
-  const realSubmission = newTargetState.bridgeContext || 
-    (userMessageChanged && (roundChanged || assistantActivity));
-
-  if (!realSubmission) {
-    const popupState = await readPopupState(popupPage).catch(() => ({}));
-    throw new Error(
-      `First hop did not prove real submission.\n` +
-      `Initial: round=${initialRound}, userHash=${initialTargetState.userHash}, assistantHash=${initialTargetState.assistantHash}, bridgeCtx=${initialTargetState.bridgeContext}\n` +
-      `After: round=${newRound}, userHash=${newTargetState.userHash}, assistantHash=${newTargetState.assistantHash}, bridgeCtx=${newTargetState.bridgeContext}\n` +
-      `Round changed: ${roundChanged}, User changed: ${userMessageChanged}, Payload adopted: ${payloadAdoption}, Assistant active: ${assistantActivity}\n` +
-      `Popup state: ${JSON.stringify(popupState)}`
-    );
+  if (!roundOne.ok) {
+    throw new Error(`Round 1 acceptance failed: ${roundOne.reason} ${JSON.stringify(roundOne.context || {})}`);
   }
+
+  const roundTwo = await waitForAcceptedHop({
+    popupPage,
+    targetPage: pageA,
+    baselineTarget: baselineTargetA,
+    expectedRound: initialRound + 2,
+    targetRole: "A"
+  });
+  if (!roundTwo.ok) {
+    throw new Error(`Round 2 acceptance failed: ${roundTwo.reason} ${JSON.stringify(roundTwo.context || {})}`);
+  }
+
+  const runtimeEvents = await fetchRuntimeEventsFromPopup(popupPage);
+  const verificationPassRounds = runtimeEvents.ok
+    ? runtimeEvents.events
+        .filter((event) => event.phaseStep === "verification_passed")
+        .map((event) => event.round)
+    : [];
+  assert.ok(
+    verificationPassRounds.includes(initialRound + 1),
+    `Expected verification_passed for round ${initialRound + 1}, got ${JSON.stringify(verificationPassRounds)}`
+  );
+  assert.ok(
+    verificationPassRounds.includes(initialRound + 2),
+    `Expected verification_passed for round ${initialRound + 2}, got ${JSON.stringify(verificationPassRounds)}`
+  );
+
+  const finalPopupState = await readPopupState(popupPage);
+  assert.equal(finalPopupState.phase, "running");
+  assert.ok(
+    String(finalPopupState.currentStep || "").toLowerCase().includes("waiting"),
+    `Expected multi-round run to remain in a waiting step after round 2 acceptance, got ${JSON.stringify(finalPopupState)}`
+  );
 
   await expectPopupControlState(popupPage, {
     canPause: true,
@@ -475,19 +643,6 @@ async function runHappyPath(env) {
   return { success: true };
 }
 
-// Helper for text overlap calculation
-function calculateOverlap(textA, textB) {
-  if (!textA || !textB) return 0;
-  const wordsA = textA.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  const wordsB = textB.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  if (wordsA.length === 0 || wordsB.length === 0) return 0;
-  let matches = 0;
-  for (const w of wordsA) {
-    if (wordsB.some(bw => bw.includes(w) || w.includes(bw))) matches++;
-  }
-  return matches / Math.max(wordsA.length, wordsB.length);
-}
-
 async function runStarterBusyBeforeStart(env) {
   const { pageA, popupPage } = env;
   
@@ -503,21 +658,23 @@ async function runStarterBusyBeforeStart(env) {
   await expectOverlayActionEnabled(pageA, "start");
   await clickOverlayAction(pageA, "start");
 
-  // PHASE 1: Must enter waiting/settle/preflight FIRST
-  // Wait a short time and check if we're in a waiting state
+  // STEP 1: runtime phase stays `running`; waiting/preflight is expressed via currentStep.
   await sleep(1000);
-  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
-  
-  // Must be in waiting/preflight first, NOT directly running
+  const popupStateDuringStarterSettle = await readPopupState(popupPage);
+
+  assert.equal(
+    popupStateDuringStarterSettle.phase,
+    "running",
+    `Expected phase to remain running while starter settle is expressed via currentStep, got: ${JSON.stringify(popupStateDuringStarterSettle)}`
+  );
   assert.ok(
-    ["waiting", "preflight", "settling"].includes(phase),
-    `Expected waiting/preflight/settling first when starting with busy starter, got: ${phase}`
+    hasWaitingLikeStep(popupStateDuringStarterSettle.currentStep),
+    `Expected currentStep to carry the waiting/preflight signal when starting with busy starter, got: ${JSON.stringify(popupStateDuringStarterSettle)}`
   );
 
-  // PHASE 2: Then should eventually go to running after settle completes
-  // Wait longer for settle to complete
+  // STEP 2: Then should eventually go to a stable allowed phase after settle completes.
   await sleep(5000);
-  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
   
   // Should eventually be running
   assert.ok(
@@ -563,18 +720,23 @@ async function runStarterBusyBeforeResume(env) {
   await expectOverlayActionEnabled(pageA, "resume");
   await clickOverlayAction(pageA, "resume");
 
-  // PHASE 1: Must enter waiting/settle/preflight FIRST
+  // STEP 1: runtime phase stays `running`; waiting/preflight is expressed via currentStep.
   await sleep(1000);
-  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
-  
+  const popupStateDuringResumeSettle = await readPopupState(popupPage);
+
+  assert.equal(
+    popupStateDuringResumeSettle.phase,
+    "running",
+    `Expected phase to remain running while resume settle is expressed via currentStep, got: ${JSON.stringify(popupStateDuringResumeSettle)}`
+  );
   assert.ok(
-    ["waiting", "preflight", "settling"].includes(phase),
-    `Expected waiting/preflight/settling first when resuming with busy starter, got: ${phase}`
+    hasWaitingLikeStep(popupStateDuringResumeSettle.currentStep),
+    `Expected currentStep to carry the waiting/preflight signal when resuming with busy starter, got: ${JSON.stringify(popupStateDuringResumeSettle)}`
   );
 
-  // PHASE 2: Then should eventually go to running after settle completes
+  // STEP 2: Then should eventually go to a stable allowed phase after settle completes.
   await sleep(5000);
-  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
   
   assert.ok(
     ["running", "paused", "stopped", "error"].includes(phase),
@@ -640,22 +802,22 @@ async function runSourceBusyBeforeHop(env) {
 
   await sleep(3000);
 
-  // PHASE 1: Must enter waiting/settle/preflight FIRST
-  // This is the core assertion: if source is busy during hop, we MUST see waiting phase
-  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
-  
-  // MUST see waiting/preflight/settling - NOT allowed to go directly to running/paused/stopped
-  // The scenario name "source-busy-before-hop" implies hop was attempted and source was busy
-  // If we don't see waiting phase, the test fails - this is a strict requirement
+  // STEP 1: runtime phase stays `running`; waiting/preflight is expressed via currentStep.
+  const popupStateDuringBusySource = await readPopupState(popupPage);
+
+  assert.equal(
+    popupStateDuringBusySource.phase,
+    "running",
+    `Expected phase to remain running while source-busy handling is expressed via currentStep, got: ${JSON.stringify(popupStateDuringBusySource)}`
+  );
   assert.ok(
-    ["waiting", "preflight", "settling"].includes(phase),
-    `Expected waiting/preflight/settling in phase 1 when source is busy during hop, got: ${phase}. ` +
-    `This scenario expects the hop to enter waiting phase due to busy source.`
+    hasWaitingLikeStep(popupStateDuringBusySource.currentStep),
+    `Expected currentStep to carry the waiting/preflight signal when source is busy during hop, got: ${JSON.stringify(popupStateDuringBusySource)}`
   );
 
-  // PHASE 2: Wait longer to see final state after waiting/settle completes
+  // STEP 2: Wait longer to see final state after waiting/settle completes.
   await sleep(5000);
-  phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
+  let phase = await popupPage.locator("#phaseBadge").getAttribute("data-phase");
   
   // Should eventually be running or a terminal state (after waiting settles)
   assert.ok(
@@ -675,8 +837,10 @@ async function runSourceBusyBeforeHop(env) {
 
 async function main() {
   const results = [];
-  const scenarioNames = scenarioFilter 
-    ? [scenarioFilter] 
+const scenarioNames = scenarioFilter
+  ? [scenarioFilter]
+  : rootOnly
+    ? ["happy-path"]
     : Object.keys(scenarios);
 
   console.log("E2E Bridge Test Runner");

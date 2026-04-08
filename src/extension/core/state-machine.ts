@@ -517,8 +517,12 @@ function hasBindingConflict(
     return true;
   }
 
-  // Check URL-based conflict for persistent URL bindings
-  if (siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
+  // URL conflict check skipped when both are live sessions (root pages can share same normalized URL)
+  const bothAreLiveSessions =
+    siblingBinding.sessionIdentity?.kind === "live_session" &&
+    candidateBinding.sessionIdentity?.kind === "live_session";
+
+  if (!bothAreLiveSessions && siblingBinding.urlInfo?.normalizedUrl && candidateBinding.urlInfo?.normalizedUrl) {
     if (siblingBinding.urlInfo.normalizedUrl === candidateBinding.urlInfo.normalizedUrl) {
       return true;
     }

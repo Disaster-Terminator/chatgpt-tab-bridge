@@ -1,6 +1,7 @@
 import {
   applyComposerText,
   checkAckSignals,
+  evaluateDispatchAcceptanceSignal,
   findBestComposer,
   findLatestUserMessageHash,
   findSendButton,
@@ -67,7 +68,8 @@ let overlaySnapshot: OverlayModel = {
     preflightPending: false,
     blockReason: null,
     sourceRole: "A"
-  }
+  },
+  currentTabId: null
 };
 
 let lastAckDebug: any = null;
@@ -177,14 +179,14 @@ function bindOverlayEvents(): void {
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='A']").addEventListener("click", () => {
     const action = overlaySnapshot.assignedRole === "A"
       ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "A" as const }
-      : { type: MESSAGE_TYPES.SET_BINDING, role: "A" as const, tabId: void 0 };
+      : { type: MESSAGE_TYPES.SET_BINDING, role: "A" as const, tabId: overlaySnapshot.currentTabId };
     void dispatchOverlayAction(action);
   });
 
   requireOverlayElement<HTMLButtonElement>("[data-bind-role='B']").addEventListener("click", () => {
     const action = overlaySnapshot.assignedRole === "B"
       ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "B" as const }
-      : { type: MESSAGE_TYPES.SET_BINDING, role: "B" as const, tabId: void 0 };
+      : { type: MESSAGE_TYPES.SET_BINDING, role: "B" as const, tabId: overlaySnapshot.currentTabId };
     void dispatchOverlayAction(action);
   });
 
@@ -243,7 +245,7 @@ function bindOverlayEvents(): void {
 
 async function dispatchOverlayAction(message: RuntimeMessage): Promise<void> {
   try {
-    await chrome.runtime.sendMessage(message);
+    const response = await chrome.runtime.sendMessage(message);
   } finally {
     await refreshOverlayModel();
   }
@@ -392,6 +394,10 @@ function renderOverlay(): void {
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
+
+  // Expose currentTabId as DOM signal for runner synchronization
+  const overlayRoot = overlay as HTMLElement;
+  overlayRoot.dataset.tabId = overlaySnapshot.currentTabId !== null ? String(overlaySnapshot.currentTabId) : "";
 
   requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
 
@@ -595,7 +601,7 @@ function readAssistantSnapshot():
 }
 
 function readThreadActivity():
-  | { ok: true; result: { generating: boolean; latestAssistantHash: string | null; latestUserHash: string | null; composerText: string; sendButtonReady: boolean } }
+  | { ok: true; result: { generating: boolean; latestAssistantHash: string | null; latestUserHash: string | null; composerText: string; sendButtonReady: boolean; composerAvailable: boolean } }
   | { ok: false; error: string } {
   const generating = isGenerationInProgressFromDoc();
   const latestUserHash = findLatestUserMessageHash();
@@ -603,6 +609,7 @@ function readThreadActivity():
   const composerText = readComposerText(composer);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const composerAvailable = composer !== null;
 
   const latestAssistant = findLatestAssistantElement();
   const latestAssistantHash = latestAssistant ? hashText(normalizeText(latestAssistant.textContent || "")) : null;
@@ -614,7 +621,8 @@ function readThreadActivity():
       latestAssistantHash,
       latestUserHash,
       composerText,
-      sendButtonReady
+      sendButtonReady,
+      composerAvailable
     }
   };
 }
@@ -841,7 +849,7 @@ interface DispatchAcceptanceInput {
 
 interface DispatchAcceptanceResult {
   accepted: true;
-  signal: "user_message_added" | "generation_started";
+  signal: "user_message_added" | "generation_started" | "trigger_consumed";
   evidence: RelayDispatchEvidence;
 }
 
@@ -925,8 +933,18 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
       lastSignal = ack.signal;
     }
 
-    const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
-    const hasSubmissionTransition = textChanged || payloadReleased || hasUserThreadChange;
+    const acceptedSignal = evaluateDispatchAcceptanceSignal({
+      ack,
+      baselineUserHash: input.baseline.userHash,
+      currentUserHash,
+      payloadReleased,
+      textChanged,
+      buttonStateChanged
+    });
+
+    if (acceptedSignal) {
+      lastSignal = acceptedSignal;
+    }
 
     lastEvidence = {
       baselineUserHash: input.baseline.userHash,
@@ -940,22 +958,14 @@ async function waitForDispatchAcceptance(input: DispatchAcceptanceInput): Promis
       textChanged,
       payloadReleased,
       buttonStateChanged,
-      ackSignal: ack?.signal ?? lastSignal,
+      ackSignal: acceptedSignal ?? ack?.signal ?? lastSignal,
       attempts
     };
 
-    if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+    if (acceptedSignal) {
       return {
         accepted: true,
-        signal: ack.signal,
-        evidence: lastEvidence
-      };
-    }
-
-    if (ack?.ok && ack.signal === "generation_started" && hasSubmissionTransition && payloadReleased) {
-      return {
-        accepted: true,
-        signal: ack.signal,
+        signal: acceptedSignal,
         evidence: lastEvidence
       };
     }
@@ -1035,6 +1045,7 @@ function captureSubmissionBaseline(expectedText: string): {
   composerText: string;
   generating: boolean;
   sendButtonReady: boolean;
+  composerAvailable: boolean;
   userHash: string | null;
   latestUserText: string | null;
   expectedHash: string;
@@ -1042,12 +1053,14 @@ function captureSubmissionBaseline(expectedText: string): {
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const composerAvailable = composer !== null;
   const latestUserTextResponse = getLatestUserText();
   
   return {
     composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
     sendButtonReady,
+    composerAvailable,
     userHash: findLatestUserMessageHash(),
     latestUserText: latestUserTextResponse.ok ? latestUserTextResponse.text : null,
     expectedHash: hashText(expectedText)

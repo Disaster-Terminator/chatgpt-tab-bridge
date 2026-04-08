@@ -118,6 +118,7 @@ export function findLatestUserMessageHash(): string | null {
 
 export type AckSignal = "user_message_added" | "generation_started";
 export type AuxiliarySignal = "composer_cleared";
+export type DispatchAcceptanceSignal = AckSignal | "trigger_consumed";
 
 export interface CheckAckSignalsInput {
   baselineGenerating?: boolean;
@@ -133,6 +134,37 @@ export type CheckAckSignalsResult =
   | { ok: true; signal: AckSignal; evidence: "strong" | "strong_with_auxiliary" }
   | { ok: true; signal: AuxiliarySignal; evidence: "auxiliary_only" }
   | null;
+
+export interface EvaluateDispatchAcceptanceInput {
+  ack: CheckAckSignalsResult;
+  baselineUserHash: string | null;
+  currentUserHash: string | null;
+  payloadReleased: boolean;
+  textChanged: boolean;
+  buttonStateChanged: boolean;
+}
+
+export function evaluateDispatchAcceptanceSignal(
+  input: EvaluateDispatchAcceptanceInput
+): DispatchAcceptanceSignal | null {
+  const { ack, baselineUserHash, currentUserHash, payloadReleased, textChanged, buttonStateChanged } = input;
+  const hasUserThreadChange = currentUserHash !== null && currentUserHash !== baselineUserHash;
+  const triggerConsumed = payloadReleased || textChanged || buttonStateChanged;
+
+  if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+    return "user_message_added";
+  }
+
+  if (ack?.ok && ack.signal === "generation_started" && triggerConsumed) {
+    return "generation_started";
+  }
+
+  if (triggerConsumed) {
+    return "trigger_consumed";
+  }
+
+  return null;
+}
 
 /**
  * Find the text content of the latest user message in the conversation.

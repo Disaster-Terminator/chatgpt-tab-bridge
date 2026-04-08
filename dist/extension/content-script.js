@@ -76,6 +76,21 @@ function findLatestUserMessageHash() {
   }
   return null;
 }
+function evaluateDispatchAcceptanceSignal(input) {
+  const { ack, baselineUserHash, currentUserHash, payloadReleased, textChanged, buttonStateChanged } = input;
+  const hasUserThreadChange = currentUserHash !== null && currentUserHash !== baselineUserHash;
+  const triggerConsumed = payloadReleased || textChanged || buttonStateChanged;
+  if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+    return "user_message_added";
+  }
+  if (ack?.ok && ack.signal === "generation_started" && triggerConsumed) {
+    return "generation_started";
+  }
+  if (triggerConsumed) {
+    return "trigger_consumed";
+  }
+  return null;
+}
 function findLatestUserMessageText() {
   const selectors = [
     '[data-message-author-role="user"]',
@@ -696,7 +711,8 @@ var overlaySnapshot = {
     preflightPending: false,
     blockReason: null,
     sourceRole: "A"
-  }
+  },
+  currentTabId: null
 };
 var lastAckDebug = null;
 var overlayLocale = readUiLocale();
@@ -787,11 +803,11 @@ function connectKeepAlivePort() {
 }
 function bindOverlayEvents() {
   requireOverlayElement("[data-bind-role='A']").addEventListener("click", () => {
-    const action = overlaySnapshot.assignedRole === "A" ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "A" } : { type: MESSAGE_TYPES.SET_BINDING, role: "A", tabId: void 0 };
+    const action = overlaySnapshot.assignedRole === "A" ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "A" } : { type: MESSAGE_TYPES.SET_BINDING, role: "A", tabId: overlaySnapshot.currentTabId };
     void dispatchOverlayAction(action);
   });
   requireOverlayElement("[data-bind-role='B']").addEventListener("click", () => {
-    const action = overlaySnapshot.assignedRole === "B" ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "B" } : { type: MESSAGE_TYPES.SET_BINDING, role: "B", tabId: void 0 };
+    const action = overlaySnapshot.assignedRole === "B" ? { type: MESSAGE_TYPES.CLEAR_BINDING, role: "B" } : { type: MESSAGE_TYPES.SET_BINDING, role: "B", tabId: overlaySnapshot.currentTabId };
     void dispatchOverlayAction(action);
   });
   requireOverlayElement("[data-action='open-popup']").addEventListener("click", () => {
@@ -841,7 +857,7 @@ function bindOverlayEvents() {
 }
 async function dispatchOverlayAction(message) {
   try {
-    await chrome.runtime.sendMessage(message);
+    const response = await chrome.runtime.sendMessage(message);
   } finally {
     await refreshOverlayModel();
   }
@@ -985,6 +1001,8 @@ function renderOverlay() {
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
+  const overlayRoot = overlay;
+  overlayRoot.dataset.tabId = overlaySnapshot.currentTabId !== null ? String(overlaySnapshot.currentTabId) : "";
   requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   const roleDot = requireOverlayElement("[data-slot='role-dot']");
   if (overlaySnapshot.assignedRole) {
@@ -1159,6 +1177,7 @@ function readThreadActivity() {
   const composerText = readComposerText(composer);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const composerAvailable = composer !== null;
   const latestAssistant = findLatestAssistantElement();
   const latestAssistantHash = latestAssistant ? hashText(normalizeText(latestAssistant.textContent || "")) : null;
   return {
@@ -1168,7 +1187,8 @@ function readThreadActivity() {
       latestAssistantHash,
       latestUserHash,
       composerText,
-      sendButtonReady
+      sendButtonReady,
+      composerAvailable
     }
   };
 }
@@ -1403,8 +1423,17 @@ async function waitForDispatchAcceptance(input) {
     if (ack?.signal) {
       lastSignal = ack.signal;
     }
-    const hasUserThreadChange = currentUserHash !== null && currentUserHash !== input.baseline.userHash;
-    const hasSubmissionTransition = textChanged || payloadReleased || hasUserThreadChange;
+    const acceptedSignal = evaluateDispatchAcceptanceSignal({
+      ack,
+      baselineUserHash: input.baseline.userHash,
+      currentUserHash,
+      payloadReleased,
+      textChanged,
+      buttonStateChanged
+    });
+    if (acceptedSignal) {
+      lastSignal = acceptedSignal;
+    }
     lastEvidence = {
       baselineUserHash: input.baseline.userHash,
       currentUserHash,
@@ -1417,20 +1446,13 @@ async function waitForDispatchAcceptance(input) {
       textChanged,
       payloadReleased,
       buttonStateChanged,
-      ackSignal: ack?.signal ?? lastSignal,
+      ackSignal: acceptedSignal ?? ack?.signal ?? lastSignal,
       attempts
     };
-    if (ack?.ok && ack.signal === "user_message_added" && hasUserThreadChange) {
+    if (acceptedSignal) {
       return {
         accepted: true,
-        signal: ack.signal,
-        evidence: lastEvidence
-      };
-    }
-    if (ack?.ok && ack.signal === "generation_started" && hasSubmissionTransition && payloadReleased) {
-      return {
-        accepted: true,
-        signal: ack.signal,
+        signal: acceptedSignal,
         evidence: lastEvidence
       };
     }
@@ -1496,11 +1518,13 @@ function captureSubmissionBaseline(expectedText) {
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
   const sendButtonReady = sendButton !== null && !sendButton.disabled;
+  const composerAvailable = composer !== null;
   const latestUserTextResponse = getLatestUserText();
   return {
     composerText: readComposerText(composer),
     generating: isGenerationInProgressFromDoc(),
     sendButtonReady,
+    composerAvailable,
     userHash: findLatestUserMessageHash(),
     latestUserText: latestUserTextResponse.ok ? latestUserTextResponse.text : null,
     expectedHash: hashText(expectedText)

@@ -7,6 +7,7 @@ const {
   buildRelayEnvelope,
   evaluatePostHopGuard,
   evaluatePreSendGuard,
+  evaluateSubmissionAcceptanceGate,
   evaluateSubmissionVerification,
   formatNextHop,
   guardReasonToStopReason,
@@ -93,6 +94,7 @@ test("evaluateSubmissionVerification fails when latest user text did not change"
 
   assert.equal(result.verified, false);
   assert.equal(result.reason, "not_verified");
+  assert.equal(result.userTurnChanged, false);
 });
 
 test("evaluateSubmissionVerification fails when latest user text is unrelated to payload", () => {
@@ -110,7 +112,7 @@ test("evaluateSubmissionVerification fails when latest user text is unrelated to
   assert.equal(result.reason, "not_verified");
 });
 
-test("evaluateSubmissionVerification passes when user hash changed with payload correlation", () => {
+test("evaluateSubmissionVerification passes when user hash changed with STRONG hop binding", () => {
   const hopId = "s7-r2-hop1";
   const payload = `[BRIDGE_CONTEXT]\nsource: A\nround: 2\nhop: ${hopId}\nhello relay`;
   const result = evaluateSubmissionVerification({
@@ -125,10 +127,13 @@ test("evaluateSubmissionVerification passes when user hash changed with payload 
   });
 
   assert.equal(result.verified, true);
-  assert.equal(result.reason, "payload_accepted");
+  assert.equal(result.hopBindingStrength, "strong");
+  assert.equal(result.payloadCorrelationStrength, "strong");
+  assert.equal(result.userTurnHopBinding, "strong");
+  assert.equal(result.userTurnChanged, true);
 });
 
-test("evaluateSubmissionVerification generation branch requires text change with payload correlation", () => {
+test("evaluateSubmissionVerification passes when generation started with payload correlation (strong hop binding)", () => {
   const hopId = "s7-r3-hop2";
   const payload = `[BRIDGE_CONTEXT]\nsource: B\nround: 3\nhop: ${hopId}\nforwarded content`;
   const result = evaluateSubmissionVerification({
@@ -143,10 +148,11 @@ test("evaluateSubmissionVerification generation branch requires text change with
   });
 
   assert.equal(result.verified, true);
-  assert.equal(result.reason, "generation_with_user_changed");
+  assert.equal(result.generationSettlementStrength, "strong");
+  assert.equal(result.hopBindingStrength, "strong");
 });
 
-test("evaluateSubmissionVerification fails when expected hop marker is missing", () => {
+test("evaluateSubmissionVerification fails when expected hop marker is missing (weak correlation)", () => {
   const payload = "[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: s8-r4-hop9\nrelay text";
   const result = evaluateSubmissionVerification({
     baselineUserHash: "h1",
@@ -160,5 +166,191 @@ test("evaluateSubmissionVerification fails when expected hop marker is missing",
   });
 
   assert.equal(result.verified, false);
-  assert.equal(result.reason, "not_verified");
+  assert.equal(result.hopBindingStrength, "weak");
+  assert.equal(result.userTurnHopBinding, "weak");
+});
+
+test("evaluateSubmissionVerification: weak text overlap without hop binding exposes as weak correlation", () => {
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: "some overlapping text from the relay payload that is similar enough",
+    relayPayloadText: "some overlapping text from the relay payload that is similar enough but no bridge context"
+  });
+
+  assert.equal(result.verified, false);
+  assert.equal(result.hopBindingStrength, "none");
+  assert.equal(result.payloadCorrelationStrength, "weak");
+  assert.equal(result.userTurnChanged, true);
+});
+
+test("evaluateSubmissionVerification: generation transition alone does not become hop-bound proof without payload correlation", () => {
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: "user text changed but no payload correlation",
+    relayPayloadText: "completely different payload text"
+  });
+
+  assert.equal(result.verified, false);
+  assert.equal(result.generationSettlementStrength, "strong");
+  assert.equal(result.payloadCorrelationStrength, "none");
+});
+
+test("evaluateSubmissionVerification: weak hop binding returns verified=false despite user hash change", () => {
+  const payload = "[BRIDGE_CONTEXT]\nsource: A\nround: 1\nsome content";
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: "[BRIDGE_CONTEXT]\nsource: A\nround: 1\nsome content",
+    relayPayloadText: payload,
+    expectedHopId: "s1-r1-hop1"
+  });
+
+  assert.equal(result.verified, false);
+  assert.equal(result.hopBindingStrength, "weak");
+  assert.equal(result.userTurnHopBinding, "weak");
+  assert.equal(result.userTurnChanged, true);
+});
+
+test("evaluateSubmissionVerification: assistantSettlementStrength is unavailable (as specified)", () => {
+  const hopId = "s7-r2-hop1";
+  const payload = `[BRIDGE_CONTEXT]\nsource: A\nround: 2\nhop: ${hopId}\nhello relay`;
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old baseline",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: `${payload}\n[BRIDGE_INSTRUCTION]`,
+    relayPayloadText: payload,
+    expectedHopId: hopId
+  });
+
+  assert.equal(result.assistantSettlementStrength, "unavailable");
+});
+
+test("evaluateSubmissionVerification: details contain all evidence fields", () => {
+  const hopId = "test-hop-id";
+  const payload = `[BRIDGE_CONTEXT]\nsource: A\nround: 1\nhop: ${hopId}\ntest`;
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "baseline",
+    currentUserHash: "h2",
+    currentGenerating: true,
+    currentLatestUserText: `${payload}\ninstruction`,
+    relayPayloadText: payload,
+    expectedHopId: hopId
+  });
+
+  assert.ok(result.details.baselineUserHash);
+  assert.ok(result.details.currentUserHash);
+  assert.ok(result.details.expectedHopId);
+  assert.ok(result.details.textOverlapRatio >= 0);
+  assert.ok(result.details.containsBridgeContext === true || result.details.containsBridgeContext === false);
+});
+
+test("REGRESSION: generation start with weak correlation only must NOT verify", () => {
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: "some overlapping text from the payload",
+    relayPayloadText: "some overlapping text from the payload but no bridge context"
+  });
+
+  assert.equal(result.verified, false, "generation start with weak correlation must not verify");
+  assert.equal(result.generationSettlementStrength, "strong");
+  assert.equal(result.payloadCorrelationStrength, "weak");
+  assert.equal(result.hopBindingStrength, "none");
+});
+
+test("evaluateSubmissionAcceptanceGate keeps weak correlation out of verification-passed semantics", () => {
+  const verification = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before hop",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: "[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: different-hop\nrelay text",
+    relayPayloadText: "[BRIDGE_CONTEXT]\nsource: A\nround: 4\nhop: s8-r4-hop9\nrelay text",
+    expectedHopId: "s8-r4-hop9"
+  });
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(gate.acceptedEquivalentEvidence, false);
+  assert.equal(gate.waitingReplyAllowed, false);
+  assert.equal(gate.weakCorrelationOnly, true);
+  assert.equal(gate.reason, "acceptance_not_established_weak_correlation");
+});
+
+test("evaluateSubmissionAcceptanceGate forbids waiting-reply before acceptance exists", () => {
+  const verification = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "same text",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: "same text",
+    relayPayloadText: "[BRIDGE_CONTEXT]\nsource: A"
+  });
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(gate.acceptedEquivalentEvidence, false);
+  assert.equal(gate.waitingReplyAllowed, false);
+  assert.equal(gate.reason, "acceptance_not_established_no_user_turn_change");
+});
+
+test("evaluateSubmissionAcceptanceGate allows progress for strong hop-bound acceptance with user-hash change", () => {
+  const hopId = "s7-r2-hop1";
+  const payload = `[BRIDGE_CONTEXT]\nsource: A\nround: 2\nhop: ${hopId}\nhello relay`;
+  const verification = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old baseline",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: `${payload}\n[BRIDGE_INSTRUCTION]`,
+    relayPayloadText: payload,
+    expectedHopId: hopId
+  });
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(gate.acceptedEquivalentEvidence, true);
+  assert.equal(gate.waitingReplyAllowed, true);
+  assert.equal(gate.weakCorrelationOnly, false);
+  assert.equal(gate.reason, "acceptance_established_user_hash_changed");
+});
+
+test("evaluateSubmissionAcceptanceGate allows progress for strong hop-bound generation start", () => {
+  const hopId = "s7-r3-hop2";
+  const payload = `[BRIDGE_CONTEXT]\nsource: B\nround: 3\nhop: ${hopId}\nforwarded content`;
+  const verification = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "before hop",
+    currentUserHash: "h1",
+    currentGenerating: true,
+    currentLatestUserText: `${payload}\nextra line`,
+    relayPayloadText: payload,
+    expectedHopId: hopId
+  });
+  const gate = evaluateSubmissionAcceptanceGate(verification);
+
+  assert.equal(gate.acceptedEquivalentEvidence, true);
+  assert.equal(gate.waitingReplyAllowed, true);
+  assert.equal(gate.weakCorrelationOnly, false);
+  assert.equal(gate.reason, "acceptance_established_generation_started");
 });

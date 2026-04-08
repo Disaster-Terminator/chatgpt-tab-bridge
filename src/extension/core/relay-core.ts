@@ -196,9 +196,42 @@ export interface SubmissionVerificationInput {
   expectedHopId?: string | null;
 }
 
+export type HopBindingStrength = "strong" | "weak" | "none";
+
+export type PayloadCorrelationStrength = "strong" | "weak" | "none";
+
+export type GenerationSettlementStrength = "strong" | "weak" | "none";
+
+export type AssistantSettlementStrength = "strong" | "weak" | "none" | "unavailable";
+
 export interface SubmissionVerificationResult {
   verified: boolean;
-  reason: "payload_accepted" | "generation_with_user_changed" | "not_verified";
+  reason: string;
+  hopBindingStrength: HopBindingStrength;
+  payloadCorrelationStrength: PayloadCorrelationStrength;
+  generationSettlementStrength: GenerationSettlementStrength;
+  userTurnChanged: boolean;
+  userTurnHopBinding: HopBindingStrength;
+  assistantSettlementStrength: AssistantSettlementStrength;
+  details: {
+    baselineUserHash: string | null;
+    currentUserHash: string | null;
+    baselineGenerating: boolean;
+    currentGenerating: boolean;
+    baselineLatestUserText: string | null;
+    currentLatestUserText: string | null;
+    textOverlapRatio: number;
+    containsBridgeContext: boolean;
+    extractedHopId: string | null;
+    expectedHopId: string | null;
+  };
+}
+
+export interface SubmissionAcceptanceGateResult {
+  acceptedEquivalentEvidence: boolean;
+  waitingReplyAllowed: boolean;
+  weakCorrelationOnly: boolean;
+  reason: string;
 }
 
 function containsBridgeEnvelope(text: string): boolean {
@@ -235,42 +268,74 @@ function extractHopIdFromPayload(relayPayload: string): string | null {
   return match?.[1] ?? null;
 }
 
-function verifyPayloadCorrelation(
+function analyzeHopBinding(
   latestUserText: string | null,
   relayPayload: string,
   expectedHopId: string | null | undefined
-): boolean {
-  if (!latestUserText || !relayPayload) {
-    return false;
+): {
+  hopBindingStrength: HopBindingStrength;
+  containsBridgeContext: boolean;
+  extractedHopId: string | null;
+} {
+  if (!latestUserText) {
+    return { hopBindingStrength: "none", containsBridgeContext: false, extractedHopId: null };
   }
 
   const normalizedLatest = normalizeAssistantText(latestUserText);
   const normalizedPayload = normalizeAssistantText(relayPayload);
+  const containsBridgeContext = containsBridgeEnvelope(normalizedLatest);
+  const extractedHopId = extractHopIdFromPayload(normalizedPayload);
+  const normalizedExpectedHopId = normalizeAssistantText(expectedHopId ?? "");
 
-  if (!normalizedLatest || !normalizedPayload) {
-    return false;
-  }
-
-  const hopId = normalizeAssistantText(expectedHopId ?? "") || extractHopIdFromPayload(normalizedPayload);
-  if (hopId) {
+  if (normalizedExpectedHopId && extractedHopId) {
     const latestLower = normalizedLatest.toLowerCase();
-    const expectedMarker = `hop: ${hopId}`.toLowerCase();
-    return latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker);
+    const expectedMarker = `hop: ${normalizedExpectedHopId}`.toLowerCase();
+    if (latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker)) {
+      return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
+    }
   }
-  
-  if (containsBridgeEnvelope(normalizedLatest)) {
-    return true;
+
+  if (containsBridgeContext && extractedHopId) {
+    const latestLower = normalizedLatest.toLowerCase();
+    const payloadHopMarker = `hop: ${extractedHopId}`.toLowerCase();
+    if (latestLower.includes(payloadHopMarker)) {
+      return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
+    }
+    return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
   }
-  
-  const overlap = calculateTextOverlap(normalizedLatest, normalizedPayload);
-  if (overlap >= 0.5) {
-    return true;
+
+  if (containsBridgeContext) {
+    return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
   }
-  
-  return false;
+
+  return { hopBindingStrength: "none", containsBridgeContext: false, extractedHopId };
 }
 
-function hasLatestUserTextChanged(
+function analyzePayloadCorrelation(
+  latestUserText: string | null,
+  relayPayloadText: string,
+  hopBindingStrength: HopBindingStrength
+): PayloadCorrelationStrength {
+  if (!latestUserText || !relayPayloadText) {
+    return "none";
+  }
+
+  if (hopBindingStrength === "strong") {
+    return "strong";
+  }
+
+  const normalizedLatest = normalizeAssistantText(latestUserText);
+  const normalizedPayload = normalizeAssistantText(relayPayloadText);
+  const overlap = calculateTextOverlap(normalizedLatest, normalizedPayload);
+
+  if (overlap >= 0.5) {
+    return "weak";
+  }
+
+  return "none";
+}
+
+function analyzeUserTurnChange(
   baselineLatestUserText: string | null,
   currentLatestUserText: string | null
 ): boolean {
@@ -282,6 +347,120 @@ function hasLatestUserTextChanged(
   }
 
   return baselineNormalized !== currentNormalized;
+}
+
+function analyzeUserTurnHopBinding(
+  baselineLatestUserText: string | null,
+  currentLatestUserText: string | null,
+  expectedHopId: string | null | undefined,
+  relayPayloadText: string
+): HopBindingStrength {
+  if (!analyzeUserTurnChange(baselineLatestUserText, currentLatestUserText)) {
+    return "none";
+  }
+
+  const analysis = analyzeHopBinding(currentLatestUserText, relayPayloadText, expectedHopId);
+  return analysis.hopBindingStrength;
+}
+
+function analyzeGenerationSettlement(
+  baselineGenerating: boolean,
+  currentGenerating: boolean
+): GenerationSettlementStrength {
+  if (!baselineGenerating && currentGenerating) {
+    return "strong";
+  }
+  if (baselineGenerating && !currentGenerating) {
+    return "weak";
+  }
+  return "none";
+}
+
+export function evaluateSubmissionAcceptanceGate(
+  result: SubmissionVerificationResult
+): SubmissionAcceptanceGateResult {
+  const userHashChanged =
+    result.details.currentUserHash !== null &&
+    result.details.currentUserHash !== result.details.baselineUserHash;
+  const acceptedEquivalentEvidence =
+    result.userTurnChanged &&
+    result.hopBindingStrength === "strong" &&
+    result.payloadCorrelationStrength === "strong";
+
+  if (acceptedEquivalentEvidence) {
+    if (userHashChanged) {
+      return {
+        acceptedEquivalentEvidence: true,
+        waitingReplyAllowed: true,
+        weakCorrelationOnly: false,
+        reason: "acceptance_established_user_hash_changed"
+      };
+    }
+
+    if (result.generationSettlementStrength === "strong") {
+      return {
+        acceptedEquivalentEvidence: true,
+        waitingReplyAllowed: true,
+        weakCorrelationOnly: false,
+        reason: "acceptance_established_generation_started"
+      };
+    }
+
+    return {
+      acceptedEquivalentEvidence: true,
+      waitingReplyAllowed: true,
+      weakCorrelationOnly: false,
+      reason: "acceptance_established_hop_bound_payload"
+    };
+  }
+
+  const weakCorrelationOnly =
+    result.hopBindingStrength === "weak" ||
+    result.payloadCorrelationStrength === "weak" ||
+    result.userTurnHopBinding === "weak";
+
+  if (weakCorrelationOnly) {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: true,
+      reason: "acceptance_not_established_weak_correlation"
+    };
+  }
+
+  if (!result.userTurnChanged) {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_no_user_turn_change"
+    };
+  }
+
+  if (result.hopBindingStrength === "none") {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_hop_binding_missing"
+    };
+  }
+
+  if (result.payloadCorrelationStrength === "none") {
+    return {
+      acceptedEquivalentEvidence: false,
+      waitingReplyAllowed: false,
+      weakCorrelationOnly: false,
+      reason: "acceptance_not_established_payload_not_correlated"
+    };
+  }
+
+  return {
+    acceptedEquivalentEvidence: false,
+    waitingReplyAllowed: false,
+    weakCorrelationOnly: false,
+    reason: "acceptance_not_established"
+  };
 }
 
 export function evaluateSubmissionVerification(input: SubmissionVerificationInput): SubmissionVerificationResult {
@@ -296,42 +475,115 @@ export function evaluateSubmissionVerification(input: SubmissionVerificationInpu
     expectedHopId
   } = input;
 
-  const latestUserTextChanged = hasLatestUserTextChanged(
+  const userTurnChanged = analyzeUserTurnChange(baselineLatestUserText, currentLatestUserText);
+  const userTurnHopBinding = analyzeUserTurnHopBinding(
     baselineLatestUserText,
-    currentLatestUserText
+    currentLatestUserText,
+    expectedHopId,
+    relayPayloadText
   );
-  const payloadCorrelated = verifyPayloadCorrelation(
+  
+  const hopBindingAnalysis = analyzeHopBinding(currentLatestUserText, relayPayloadText, expectedHopId);
+  const hopBindingStrength = hopBindingAnalysis.hopBindingStrength;
+  const containsBridgeContext = hopBindingAnalysis.containsBridgeContext;
+  const extractedHopId = hopBindingAnalysis.extractedHopId;
+  
+  const payloadCorrelationStrength = analyzePayloadCorrelation(
     currentLatestUserText,
     relayPayloadText,
-    expectedHopId
+    hopBindingStrength
+  );
+  
+  const generationSettlementStrength = analyzeGenerationSettlement(
+    baselineGenerating,
+    currentGenerating
+  );
+  
+  const textOverlapRatio = calculateTextOverlap(
+    normalizeAssistantText(currentLatestUserText ?? ""),
+    normalizeAssistantText(relayPayloadText)
   );
 
-  if (!latestUserTextChanged || !payloadCorrelated) {
+  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
+
+  const baseDetails = {
+    baselineUserHash,
+    currentUserHash,
+    baselineGenerating,
+    currentGenerating,
+    baselineLatestUserText,
+    currentLatestUserText,
+    textOverlapRatio,
+    containsBridgeContext,
+    extractedHopId,
+    expectedHopId: expectedHopId ?? null
+  };
+
+  if (!userTurnChanged || payloadCorrelationStrength === "none") {
     return {
       verified: false,
-      reason: "not_verified"
+      reason: "not_verified",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
 
-  const userHashChanged = currentUserHash !== null && currentUserHash !== baselineUserHash;
-  const generationTransitioned = !baselineGenerating && currentGenerating;
-
-  if (userHashChanged) {
+  if (userHashChanged && hopBindingStrength === "strong") {
     return {
       verified: true,
-      reason: "payload_accepted"
+      reason: "payload_accepted_strong",
+      hopBindingStrength,
+      payloadCorrelationStrength: "strong",
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
 
-  if (generationTransitioned) {
+  if (userHashChanged && hopBindingStrength === "weak") {
+    return {
+      verified: false,
+      reason: "not_verified_weak_correlation",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
+    };
+  }
+
+  if (generationSettlementStrength === "strong" && userTurnChanged && payloadCorrelationStrength === "strong") {
     return {
       verified: true,
-      reason: "generation_with_user_changed"
+      reason: "generation_started_with_hop_bound_payload",
+      hopBindingStrength,
+      payloadCorrelationStrength,
+      generationSettlementStrength,
+      userTurnChanged,
+      userTurnHopBinding,
+      assistantSettlementStrength: "unavailable",
+      details: baseDetails
     };
   }
 
   return {
     verified: false,
-    reason: "not_verified"
+    reason: "not_verified",
+    hopBindingStrength,
+    payloadCorrelationStrength,
+    generationSettlementStrength,
+    userTurnChanged,
+    userTurnHopBinding,
+    assistantSettlementStrength: "unavailable",
+    details: baseDetails
   };
 }

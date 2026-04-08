@@ -218,6 +218,7 @@ export interface OverlayModel {
   display: RuntimeDisplay;
   overlaySettings: OverlaySettings;
   readiness: ExecutionReadiness;
+  currentTabId: number | null;
 }
 
 export interface AssistantSnapshot {
@@ -235,6 +236,7 @@ export interface ThreadActivity {
   latestUserHash: string | null;
   composerText: string;
   sendButtonReady: boolean;
+  composerAvailable: boolean;
 }
 
 export type ThreadActivityResponse =
@@ -259,6 +261,7 @@ export type RelaySendMode = "button" | "form_submit" | "button_missing" | "butto
 export type RelayDispatchSignal =
   | "user_message_added"
   | "generation_started"
+  | "trigger_consumed"
   | "composer_cleared"
   | "none";
 

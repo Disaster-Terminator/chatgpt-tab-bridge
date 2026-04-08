@@ -17,7 +17,26 @@ function createBinding(role, tabId, url = `https://chatgpt.com/c/${role.toLowerC
     tabId,
     title: `${role} thread`,
     url,
-    urlInfo: parseChatGptThreadUrl(url)
+    urlInfo: parseChatGptThreadUrl(url),
+    sessionIdentity: null
+  };
+}
+
+function createLiveSessionBinding(role, tabId) {
+  return {
+    role,
+    tabId,
+    title: `${role} session`,
+    url: "https://chatgpt.com/",
+    urlInfo: parseChatGptThreadUrl("https://chatgpt.com/"),
+    sessionIdentity: {
+      kind: "live_session",
+      tabId,
+      role,
+      boundAt: new Date().toISOString(),
+      observedSnapshot: null,
+      currentRound: 0
+    }
   };
 }
 
@@ -46,6 +65,16 @@ test("binding conflict does not allow the same thread to satisfy both roles", ()
 
   assert.equal(state.phase, PHASES.IDLE);
   assert.equal(state.bindings.B, null);
+});
+
+test("two live sessions with same normalized root URL can both bind if tabIds differ", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createLiveSessionBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createLiveSessionBinding("B", 2) });
+
+  assert.equal(state.phase, PHASES.READY);
+  assert.ok(state.bindings.A);
+  assert.ok(state.bindings.B);
 });
 
 test("pause and resume preserve round while allowing one-shot override", () => {
