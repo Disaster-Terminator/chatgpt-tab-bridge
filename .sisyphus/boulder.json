@@ -51,7 +51,24 @@
     "ses_28f71484fffeOOWk5P1cTx6jxw",
     "ses_28f6de171ffeQOG6L6VgJZtBpk",
     "ses_28f6de16cffeYv31m9ffTi5AOX",
-    "ses_28f6bae00ffe8dKAeqafTKhqtH"
+    "ses_28f6bae00ffe8dKAeqafTKhqtH",
+    "ses_28eee2879ffehG0wj4ph5LXjTs",
+    "ses_28eedfcf9ffe5WugmTPy82B4ON",
+    "ses_28eede803ffe4GcX2JYaAMgDe9",
+    "ses_28eed7907ffeYawU1fSF6cpOoZ",
+    "ses_28eee26f9ffe9aCXE4aXJjk1sX",
+    "ses_28ebf6d42ffe03XvvM8FwTlOsz",
+    "ses_28e12fd7bffejSVhiaCgNUrvqK",
+    "ses_28e12fd0fffeqL2mhrccnr6q6A",
+    "ses_28df471e0ffe1efK8EbmyvOkK0",
+    "ses_28dc1b99cffegyS7tBAPPg0UzL",
+    "ses_28dc1b997ffeN6tkrnhxE7IHy7",
+    "ses_28daa4c25ffeA7g4uaY3dAhWHL",
+    "ses_28daa4c21ffeAyPLipyBni7xgJ",
+    "ses_28da88790ffeLbn0eDZCpcJfS0",
+    "ses_28d9d5b1bffetbm7Zc62veaClx",
+    "ses_28d935ffeffer0gOKnx1Trl1l4",
+    "ses_28d893f5cffe0LiPhPNtsOVTgT"
   ],
   "plan_name": "residual-control-plane-closure",
   "agent": "atlas",
@@ -132,10 +149,19 @@
       "task_key": "todo:9",
       "task_label": "9",
       "task_title": "Extend Playwright control-flow coverage for resume and continuation semantics",
-      "session_id": "ses_28f6bae00ffe8dKAeqafTKhqtH",
+      "session_id": "ses_28d935ffeffer0gOKnx1Trl1l4",
       "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-09T04:53:38.109Z"
+      "category": "writing",
+      "updated_at": "2026-04-09T13:32:45.445Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "Plan Compliance Audit — oracle",
+      "session_id": "ses_28d893f5cffe0LiPhPNtsOVTgT",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-09T13:38:55.834Z"
     }
   }
 }

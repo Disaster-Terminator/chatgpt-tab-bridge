@@ -1,6 +1,6 @@
 /**
  * E2E Bridge Test Runner with Scenario Matrix.
- * Auto-bootstraps two ChatGPT threads if no URLs provided.
+ * Defaults to an anonymous/live-session baseline unless auth is explicitly provided.
  * Runner creates env once, scenarios receive env and return result.
  */
 
@@ -25,7 +25,6 @@ import {
   expectOverlayActionEnabled,
   expectPopupPhaseState,
   expectPopupControlState,
-  bootstrapAnonymousThread,
   buildBootstrapPrompt,
   getExtensionId,
   openPopup,
@@ -41,7 +40,10 @@ import {
   fetchRuntimeEventsFromPopup,
   ensureComposer,
   sendPrompt,
-  waitForSettledAssistantReply
+  collectThreadObservation,
+  waitForAssistantReplyAfter,
+  ensureAnonymousSourceSeedWithBlocker,
+  isHarnessBlocker
 } from "./_playwright-bridge-helpers.mjs";
 
 const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
@@ -51,6 +53,13 @@ const urlB = readFlag("--url-b");
 const scenarioFilter = readFlag("--scenario");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
 const rootOnly = process.argv.includes("--root-only");
+const TASK9_SCENARIOS = new Set([
+  "resume-with-override-a",
+  "resume-with-override-b",
+  "resume-default",
+  "continuation-without-focus-switch",
+  "task9-suite"
+]);
 
 // Auth state options
 const authStateArg = readFlag("--auth-state");
@@ -62,18 +71,21 @@ const authOptions = resolveAuthOptions({
   sessionStateArg
 });
 
-// Validate auth files before starting
-const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
-if (!authValidation.valid) {
-  console.error(`[e2e] ERROR: ${authValidation.error}`);
-  console.error("[e2e] To skip auth, provide --url-a and --url-b for existing threads.");
-  process.exit(1);
-}
+let sessionStorageData = null;
+if (authOptions.useAuth) {
+  const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
+  if (!authValidation.valid) {
+    console.error(`[e2e] ERROR: ${authValidation.error}`);
+    console.error("[e2e] Auth is opt-in. Fix the provided auth paths or omit --auth-state/--session-state to use the anonymous baseline.");
+    process.exit(1);
+  }
 
-// Load sessionStorage data
-const sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
-console.log(`[e2e] Auth state: ${authOptions.storageStatePath}`);
-console.log(`[e2e] Session storage: ${authOptions.sessionStoragePath} (${sessionStorageData ? "loaded" : "not found"})`);
+  sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
+  console.log(`[e2e] Auth mode: enabled (${authOptions.storageStatePath || "session-only"})`);
+  console.log(`[e2e] Session storage: ${authOptions.sessionStoragePath || "not provided"} (${sessionStorageData ? "loaded" : "not found"})`);
+} else {
+  console.log("[e2e] Auth mode: disabled by default; using anonymous/live-session baseline.");
+}
 
 // Scenario registry - each receives env and returns { success: true } or throws
 const scenarios = {
@@ -85,7 +97,8 @@ const scenarios = {
   "resume-with-override-a": runResumeWithOverrideA,
   "resume-with-override-b": runResumeWithOverrideB,
   "resume-default": runResumeDefault,
-  "continuation-without-focus-switch": runContinuationWithoutFocusSwitch
+  "continuation-without-focus-switch": runContinuationWithoutFocusSwitch,
+  "task9-suite": runTask9Suite
 };
 
 function normalizeText(value) {
@@ -94,46 +107,6 @@ function normalizeText(value) {
 
 function hasWaitingLikeStep(stepText) {
   return normalizeText(stepText).toLowerCase().startsWith("waiting ");
-}
-
-async function collectThreadObservation(page) {
-  return await page.evaluate(() => {
-    const normalize = (value) => String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
-    const hashText = (value) => {
-      const text = normalize(value);
-      let hash = 2166136261;
-      for (let index = 0; index < text.length; index += 1) {
-        hash ^= text.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-      }
-      return text ? `h${(hash >>> 0).toString(16)}` : null;
-    };
-
-    const latestByRole = (role) => {
-      const nodes = Array.from(document.querySelectorAll(`[data-message-author-role="${role}"]`));
-      const latest = nodes.at(-1) || null;
-      const text = normalize(latest?.textContent || "");
-      return {
-        count: nodes.length,
-        text: text || null,
-        hash: hashText(text)
-      };
-    };
-
-    const latestUser = latestByRole("user");
-    const latestAssistant = latestByRole("assistant");
-
-    return {
-      latestUserText: latestUser.text,
-      latestUserHash: latestUser.hash,
-      userMessageCount: latestUser.count,
-      latestAssistantText: latestAssistant.text,
-      latestAssistantHash: latestAssistant.hash,
-      assistantMessageCount: latestAssistant.count,
-      bridgeContext: normalize(latestUser.text || "").includes("[BRIDGE_CONTEXT]"),
-      hopMarker: /(?:^|\n)hop:\s*[^\s\n]+/i.test(normalize(latestUser.text || ""))
-    };
-  });
 }
 
 async function ensureBoundRole(page, popupPage, role) {
@@ -157,16 +130,300 @@ async function ensureBoundRole(page, popupPage, role) {
   throw new Error(`Failed to bind role ${role}: ${lastError}`);
 }
 
-async function ensureSourceAssistantSeed(page) {
-  const baseline = await collectThreadObservation(page);
-  if (baseline.latestAssistantHash) {
-    return baseline;
+function parseNextHopText(nextHopText) {
+  const normalized = normalizeText(nextHopText).toUpperCase();
+  const match = normalized.match(/\b(A|B)\s*->\s*(A|B)\b/);
+  if (!match) {
+    throw new Error(`Unable to parse next hop text: ${JSON.stringify(nextHopText)}`);
   }
 
-  await ensureComposer(page);
-  await sendPrompt(page, "Hello, respond briefly and end with [BRIDGE_STATE] CONTINUE.");
-  await waitForSettledAssistantReply(page, "e2e-source-seed");
-  return collectThreadObservation(page);
+  return {
+    sourceRole: match[1],
+    targetRole: match[2]
+  };
+}
+
+async function waitForPopupNextHop(popupPage, expectedSourceRole, expectedTargetRole, timeoutMs = 90000) {
+  const expectedText = `${expectedSourceRole} -> ${expectedTargetRole}`;
+  await popupPage.waitForFunction(
+    (targetText) => {
+      const node = document.querySelector("#nextHopValue");
+      return (node?.textContent || "").trim().toUpperCase() === targetText;
+    },
+    expectedText,
+    { timeout: timeoutMs }
+  );
+}
+
+async function waitForTargetReplyAndPendingHop({
+  popupPage,
+  sourcePage,
+  sourceRole,
+  targetPage,
+  targetRole,
+  timeoutMs = 90000
+}) {
+  const baselineTarget = await collectThreadObservation(targetPage);
+  await waitForAssistantReplyAfter(targetPage, baselineTarget.latestAssistantHash, `reply-${targetRole}`, timeoutMs);
+  return collectThreadObservation(sourcePage);
+}
+
+async function pauseOnExpectedPendingHop({
+  pageA,
+  popupPage,
+  targetPage,
+  expectedSourceRole,
+  expectedTargetRole,
+  timeoutMs = 90000
+}) {
+  const expectedHopText = `${expectedSourceRole} -> ${expectedTargetRole}`;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const [popupState, runtimeState] = await Promise.all([
+      readPopupState(popupPage),
+      getRuntimeState(popupPage)
+    ]);
+
+    const nextHopMatches = normalizeText(popupState.nextHop).toUpperCase() === expectedHopText;
+    const activeHop = runtimeState.activeHop;
+    const atBetweenHopBoundary = Boolean(
+      activeHop &&
+      activeHop.stage === "pending" &&
+      !activeHop.hopId &&
+      activeHop.sourceRole === expectedSourceRole &&
+      activeHop.targetRole === expectedTargetRole
+    );
+
+    if (nextHopMatches && atBetweenHopBoundary) {
+      await expectOverlayActionEnabled(pageA, "pause");
+      await clickOverlayAction(pageA, "pause");
+      await expectPopupPhaseState(popupPage, "paused");
+      await expectPopupControlState(popupPage, {
+        canPause: false,
+        canResume: true,
+        canStop: true,
+        overrideSelectEnabled: true
+      });
+
+      const pausedState = await readPopupState(popupPage);
+      assert.deepEqual(
+        parseNextHopText(pausedState.nextHop),
+        { sourceRole: expectedSourceRole, targetRole: expectedTargetRole },
+        `Expected paused between-hop state to expose ${expectedSourceRole} -> ${expectedTargetRole}, got ${JSON.stringify(pausedState)}`
+      );
+
+      return pausedState;
+    }
+
+    await sleep(800);
+  }
+
+  throw new Error(`Timed out waiting to pause on pending hop ${expectedHopText}`);
+}
+
+async function buildTask9ReadyEnv(env) {
+  if (env.task9Ready) {
+    return env.task9Ready;
+  }
+
+  const { context, pageA, pageB } = env;
+  let popupPage = env.popupPage;
+  if (!popupPage) {
+    const extensionId = await getExtensionId(pageA);
+    popupPage = await openPopup(context, extensionId);
+    await ensureBoundRole(pageA, popupPage, "A");
+    await ensureBoundRole(pageB, popupPage, "B");
+    await sleep(3000);
+    env.popupPage = popupPage;
+  }
+
+  const seedResult = await ensureAnonymousSourceSeedWithBlocker(pageA, {
+    label: "source-seed"
+  });
+  await ensureComposer(pageB);
+
+  const runtimeState = await getRuntimeState(popupPage);
+  assert.ok(runtimeState.bindings?.A, "Expected runtime binding for A");
+  assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
+  assert.equal(runtimeState.phase, "ready", `Expected runtime phase ready before Task 9 seed flow, got ${JSON.stringify(runtimeState)}`);
+
+  env.task9Ready = {
+    pageA,
+    pageB,
+    popupPage,
+    seedResult
+  };
+  return env.task9Ready;
+}
+
+async function startLiveRelayFromA(env) {
+  const { pageA, pageB, popupPage } = await buildTask9ReadyEnv(env);
+  const initialRound = Number(await popupPage.locator("#roundValue").innerText());
+  const baselineTarget = await collectThreadObservation(pageB);
+
+  await expectOverlayActionEnabled(pageA, "start");
+  await clickOverlayAction(pageA, "start");
+  await expectPopupPhaseState(popupPage, "running");
+
+  const firstHop = await waitForAcceptedHop({
+    popupPage,
+    targetPage: pageB,
+    baselineTarget,
+    expectedRound: initialRound + 1,
+    targetRole: "B"
+  });
+
+  if (!firstHop.ok) {
+    throw new Error(`Initial live-session hop A -> B failed: ${firstHop.reason} ${JSON.stringify(firstHop.context || {})}`);
+  }
+
+  return {
+    initialRound,
+    firstHop,
+    firstTargetObservation: await collectThreadObservation(pageB)
+  };
+}
+
+async function waitForPendingHopBoundary({ popupPage, timeoutMs = 90000 }) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const [popupState, runtimeState] = await Promise.all([
+      readPopupState(popupPage),
+      getRuntimeState(popupPage)
+    ]);
+
+    const activeHop = runtimeState.activeHop;
+    const atBoundary = Boolean(activeHop && activeHop.stage === "pending" && !activeHop.hopId);
+
+    if (atBoundary) {
+      return {
+        sourceRole: activeHop.sourceRole,
+        targetRole: activeHop.targetRole,
+        popupState,
+        runtimeState
+      };
+    }
+
+    await sleep(800);
+  }
+
+  throw new Error("Timed out waiting for between-hop boundary");
+}
+
+async function pauseAtCurrentPendingBoundary(env) {
+  const { pageA, popupPage } = await buildTask9ReadyEnv(env);
+  const boundary = await waitForPendingHopBoundary({ popupPage });
+  const pausedState = await pauseOnExpectedPendingHop({
+    pageA,
+    popupPage,
+    expectedSourceRole: boundary.sourceRole,
+    expectedTargetRole: boundary.targetRole
+  });
+
+  return {
+    ...boundary,
+    pausedState
+  };
+}
+
+async function runTask9ResumeBranchAtCurrentBoundary(env, mode) {
+  const boundary = await pauseAtCurrentPendingBoundary(env);
+  const { pageA, pageB } = env;
+
+  let overrideRole = null;
+  let expectedSourceRole = boundary.sourceRole;
+  let expectedTargetRole = boundary.targetRole;
+
+  if (mode === "override-a") {
+    overrideRole = "A";
+    expectedSourceRole = "A";
+    expectedTargetRole = "B";
+  } else if (mode === "override-b") {
+    overrideRole = "B";
+    expectedSourceRole = "B";
+    expectedTargetRole = "A";
+  }
+
+  const baselineTargetObservation = await collectThreadObservation(
+    expectedTargetRole === "A" ? pageA : pageB
+  );
+
+  const result = await resumeAndVerifyHop({
+    env,
+    overrideRole,
+    expectedSourceRole,
+    expectedTargetRole,
+    baselineTargetObservation
+  });
+
+  return {
+    boundary,
+    result,
+    expectedSourceRole,
+    expectedTargetRole,
+    overrideRole
+  };
+}
+
+async function pauseAtPendingBtoA(env) {
+  const { pageA, pageB, popupPage } = env;
+  const startState = await startLiveRelayFromA(env);
+  await waitForTargetReplyAndPendingHop({
+    popupPage,
+    sourcePage: pageB,
+    sourceRole: "B",
+    targetPage: pageB,
+    targetRole: "B"
+  });
+  const pausedState = await pauseOnExpectedPendingHop({
+    pageA,
+    popupPage,
+    expectedSourceRole: "B",
+    expectedTargetRole: "A"
+  });
+
+  return {
+    ...startState,
+    pausedState
+  };
+}
+
+async function resumeAndVerifyHop({ env, overrideRole = null, expectedSourceRole, expectedTargetRole, baselineTargetObservation }) {
+  const { pageA, pageB, popupPage } = env;
+
+  if (overrideRole) {
+    await popupPage.locator("#overrideSelect").selectOption(overrideRole);
+    await popupPage.waitForTimeout(500);
+  }
+
+  const popupBeforeResume = await readPopupState(popupPage);
+  assert.equal(
+    normalizeText(popupBeforeResume.nextHop).toUpperCase(),
+    `${expectedSourceRole} -> ${expectedTargetRole}`,
+    `Expected popup next hop to show ${expectedSourceRole} -> ${expectedTargetRole} before resume, got ${JSON.stringify(popupBeforeResume)}`
+  );
+
+  const roundBeforeResume = Number(await popupPage.locator("#roundValue").innerText());
+  await expectOverlayActionEnabled(pageA, "resume");
+  await clickOverlayAction(pageA, "resume");
+  await expectPopupPhaseState(popupPage, "running");
+
+  const targetPage = expectedTargetRole === "A" ? pageA : pageB;
+  const result = await waitForAcceptedHop({
+    popupPage,
+    targetPage,
+    baselineTarget: baselineTargetObservation,
+    expectedRound: roundBeforeResume + 1,
+    targetRole: expectedTargetRole
+  });
+
+  if (!result.ok) {
+    throw new Error(`Resume hop ${expectedSourceRole} -> ${expectedTargetRole} failed: ${result.reason} ${JSON.stringify(result.context || {})}`);
+  }
+
+  return result;
 }
 
 function classifyHopFailure({
@@ -198,7 +455,10 @@ function classifyHopFailure({
 
 async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expectedRound, targetRole }) {
   const startedAt = Date.now();
+  const initialRuntimeResult = await fetchRuntimeEventsFromPopup(popupPage);
+  const initialEventCount = initialRuntimeResult.ok ? initialRuntimeResult.events.length : 0;
   let sawPageAcceptance = false;
+  let confirmedAcceptancePolls = 0;
 
   while (Date.now() - startedAt < 90000) {
     const [popupState, runtimeResult, targetObservation] = await Promise.all([
@@ -207,7 +467,7 @@ async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expec
       collectThreadObservation(targetPage)
     ]);
 
-    const runtimeEvents = runtimeResult.ok ? runtimeResult.events : [];
+    const runtimeEvents = runtimeResult.ok ? runtimeResult.events.slice(initialEventCount) : [];
     const roundEvents = runtimeEvents.filter((event) => event.round === expectedRound && event.targetRole === targetRole);
     const dispatchRejectedEvent = roundEvents.find((event) => event.phaseStep === "dispatch_rejected") || null;
     const verificationFailedEvent = roundEvents.find((event) => event.phaseStep === "verification_failed") || null;
@@ -228,13 +488,15 @@ async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expec
     const latestUserTextChanged =
       Boolean(targetObservation.latestUserText) &&
       normalizeText(targetObservation.latestUserText) !== normalizeText(baselineTarget.latestUserText);
+    const normalizedLatestUserText = normalizeText(targetObservation.latestUserText);
     const pageAccepted =
       latestUserTextChanged &&
-      targetObservation.bridgeContext &&
-      targetObservation.hopMarker &&
+      normalizedLatestUserText.includes("[BRIDGE_CONTEXT]") &&
+      /(?:^|\n)hop:\s*[^\s\n]+/i.test(normalizedLatestUserText) &&
       (userHashChanged || userCountIncreased);
 
     sawPageAcceptance ||= pageAccepted;
+    confirmedAcceptancePolls = pageAccepted ? confirmedAcceptancePolls + 1 : 0;
 
     if (pageAccepted && (verificationPassedEvent || waitingReplyEvent)) {
       return {
@@ -254,7 +516,22 @@ async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expec
       };
     }
 
-    if (dispatchRejectedEvent || verificationFailedEvent || replyTimeoutEvent || (waitingReplyEvent && !pageAccepted)) {
+    if (confirmedAcceptancePolls >= 2) {
+      return {
+        ok: true,
+        evidence: {
+          round: expectedRound,
+          targetRole,
+          popupPhase: popupState.phase || null,
+          popupStep: popupState.currentStep || null,
+          gateReason: "page_facts_confirmed",
+          latestUserHash: targetObservation.latestUserHash,
+          latestUserPreview: normalizeText(targetObservation.latestUserText).slice(0, 160)
+        }
+      };
+    }
+
+    if (dispatchRejectedEvent || verificationFailedEvent || (replyTimeoutEvent && !sawPageAcceptance)) {
       return {
         ok: false,
         reason: classifyHopFailure({
@@ -310,18 +587,23 @@ async function runScenario(name, scenarioFn) {
 
   try {
     // Runner creates the environment
-    env = await createEnv();
+    env = await createEnv(name);
     
     // Run scenario with env - scenario does NOT create/cleanup browser
     await scenarioFn(env);
     
     // Success path
-    await fs.writeFile(diagPath, `PASS\nScenario: ${name}\n`, "utf8").catch(() => {});
-    return { name, status: "PASS" };
-    
+     await fs.writeFile(diagPath, `PASS\nScenario: ${name}\n`, "utf8").catch(() => {});
+     return { name, status: "PASS" };
+     
   } catch (error) {
     // Failure path - capture diagnostics using env
-    let diagContent = `FAIL\nScenario: ${name}\nError: ${error.message}\n`;
+    const blocked = isHarnessBlocker(error);
+    const status = blocked ? "BLOCKED" : "FAIL";
+    let diagContent = `${status}\nScenario: ${name}\nError: ${error.message}\n`;
+    if (blocked) {
+      diagContent += `Blocker: ${error.code}\nDetails: ${JSON.stringify(error.details || {}, null, 2)}\n`;
+    }
 
     if (env) {
       try {
@@ -407,8 +689,14 @@ async function runScenario(name, scenarioFn) {
     }
 
     await fs.writeFile(diagPath, diagContent, "utf8").catch(() => {});
-    return { name, status: "FAIL", diagnostics: diagPath, error: error.message };
-    
+    return {
+      name,
+      status,
+      diagnostics: diagPath,
+      error: error.message,
+      blocker: blocked ? error.code : null
+    };
+     
   } finally {
     // Runner cleans up
     if (env) {
@@ -420,8 +708,8 @@ async function runScenario(name, scenarioFn) {
 /**
  * Create test environment - browser, pages, popup.
  */
-async function createEnv() {
-  // Launch with auth state
+async function createEnv(scenarioName) {
+  // Launch with optional auth state
   const { context, userDataDir } = await launchBrowserWithExtension({ 
     extensionPath, 
     browserExecutablePath,
@@ -434,17 +722,17 @@ async function createEnv() {
     addSessionStorageInitScript(context, sessionStorageData);
   }
   
-  // Validate auth state before proceeding with tests
-  // Use a dedicated validation page that's separate from test pages
-  const validationPage = await context.newPage();
-  const authCheck = await validateAuthState(validationPage);
-  await validationPage.close().catch(() => {});
-  if (!authCheck.valid) {
-    await cleanupBrowser(context, userDataDir);
-    console.error(`[e2e] ERROR: ${authCheck.error}`);
-    process.exit(1);
+  if (authOptions.useAuth) {
+    const validationPage = await context.newPage();
+    const authCheck = await validateAuthState(validationPage);
+    await validationPage.close().catch(() => {});
+    if (!authCheck.valid) {
+      await cleanupBrowser(context, userDataDir);
+      console.error(`[e2e] ERROR: ${authCheck.error}`);
+      process.exit(1);
+    }
+    console.log("  [e2e] Auth validation passed");
   }
-  console.log(`  [e2e] Auth validation passed`);
   
   const [pageA, pageB] = await getTwoPages(context);
   
@@ -482,8 +770,7 @@ async function createEnv() {
       await assertSupportedThreadUrl(pageB, "pageB (manual)");
     }
   } else {
-    // Default: Use auth state for authenticated bootstrap
-    console.log("  Using exported auth state for authenticated bootstrap...");
+    console.log(`  Using ${authOptions.useAuth ? "auth-backed" : "anonymous"} ChatGPT root baseline...`);
     await Promise.all([
       pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
       pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
@@ -498,16 +785,19 @@ async function createEnv() {
     // Give page time to stabilize
     await sleep(2000);
     
-    // Re-validate auth after navigation (auth can expire during page operations)
-    const postNavCheckA = await validateAuthState(pageA);
-    if (!postNavCheckA.valid) {
-      await cleanupBrowser(context, userDataDir);
-      console.error(`[e2e] ERROR: Auth expired after navigation: ${postNavCheckA.error}`);
-      process.exit(1);
+    if (authOptions.useAuth) {
+      const postNavCheckA = await validateAuthState(pageA);
+      if (!postNavCheckA.valid) {
+        await cleanupBrowser(context, userDataDir);
+        console.error(`[e2e] ERROR: Auth expired after navigation: ${postNavCheckA.error}`);
+        process.exit(1);
+      }
+      console.log("  [e2e] Post-navigation auth verified");
     }
-    console.log(`  [e2e] Post-navigation auth verified`);
 
-    if (!rootOnly) {
+    const useLiveSessionRootBaseline = rootOnly || TASK9_SCENARIOS.has(scenarioName);
+
+    if (!useLiveSessionRootBaseline) {
       await bootstrapAnonymousThread(pageA, "seed-a", buildBootstrapPrompt("A"));
       await bootstrapAnonymousThread(pageB, "seed-b", buildBootstrapPrompt("B"));
     } else {
@@ -516,28 +806,38 @@ async function createEnv() {
         isSupportedThreadUrl(pageB)
       ]);
       console.log(
-        `  Root-only mode: skipping thread bootstrap (A URL supported: ${pageAHasUrl}, B URL supported: ${pageBHasUrl})`
+        `  Live-session root baseline: skipping persistent thread bootstrap (scenario=${scenarioName}, A URL supported: ${pageAHasUrl}, B URL supported: ${pageBHasUrl})`
       );
     }
   }
+
+  await Promise.all([pageA.title(), pageB.title()]);
   
   // Wait for overlay
   await ensureOverlay(pageA);
   await ensureOverlay(pageB);
 
-  // Open popup
-  const extensionId = await getExtensionId(pageA);
-  const popupPage = await openPopup(context, extensionId);
+  let popupPage = null;
+  if (!TASK9_SCENARIOS.has(scenarioName)) {
+    const extensionId = await getExtensionId(pageA);
+    popupPage = await openPopup(context, extensionId);
+    await popupPage.waitForSelector("#phaseBadge");
+    await popupPage.waitForSelector("#bindingA");
+    await popupPage.waitForSelector("#bindingB");
 
-  await ensureBoundRole(pageA, popupPage, "A");
-  await ensureBoundRole(pageB, popupPage, "B");
+    await ensureBoundRole(pageA, popupPage, "A");
+    await ensureBoundRole(pageB, popupPage, "B");
+    const runtimeState = await getRuntimeState(popupPage);
+    assert.ok(runtimeState.bindings?.A, "Expected runtime binding for A");
+    assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
+  } else {
+    const extensionId = await getExtensionId(pageA);
+    popupPage = await openPopup(context, extensionId);
+    await ensureBoundRole(pageA, popupPage, "A");
+    await ensureBoundRole(pageB, popupPage, "B");
+    await sleep(3000);
+  }
 
-  const runtimeState = await getRuntimeState(popupPage);
-  assert.ok(runtimeState.bindings?.A, "Expected runtime binding for A");
-  assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
-
-  await expectPopupPhaseState(popupPage, "ready");
-  
   return {
     context,
     userDataDir,
@@ -563,7 +863,12 @@ async function cleanupEnv(env) {
 async function runHappyPath(env) {
   const { pageA, pageB, popupPage } = env;
 
-  await ensureSourceAssistantSeed(pageA);
+  await buildTask9ReadyEnv(env);
+
+  const runtimeState = await getRuntimeState(popupPage);
+  assert.ok(runtimeState.bindings?.A, "Expected runtime binding for A");
+  assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
+  assert.equal(runtimeState.phase, "ready", `Expected runtime phase ready before happy-path start, got ${JSON.stringify(runtimeState)}`);
 
   const initialRound = Number(await popupPage.locator("#roundValue").innerText());
   const [baselineTargetB, baselineTargetA] = await Promise.all([
@@ -861,153 +1166,161 @@ async function runSourceBusyBeforeHop(env) {
 
 /**
  * Resume with override A scenario.
- * Verifies that when paused with override set to A, the next hop goes to A.
- * NOTE: Requires source assistant seed for the relay to work.
+ * Verifies a real between-hop override changes the fresh next hop to A -> B.
  */
 async function runResumeWithOverrideA(env) {
-  const { pageA, pageB, popupPage } = env;
-
-  // Ensure source has assistant seed content for relay
-  await ensureSourceAssistantSeed(pageA);
-
-  // Ensure session is running first
-  try {
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await sleep(3000); // Let it run briefly
-  } catch (e) {
-    console.log(`  [resume-with-override-a] Start skipped: ${e.message}`);
-  }
-
-  // Now pause
-  try {
-    await expectOverlayActionEnabled(pageA, "pause");
-    await clickOverlayAction(pageA, "pause");
-    await sleep(2000);
-  } catch (e) {
-    console.log(`  [resume-with-override-a] Pause skipped: ${e.message}`);
-  }
-
-  // Override to A
-  await popupPage.locator("#overrideSelect").selectOption("A");
-  await sleep(500);
-
-  // Resume
-  try {
-    await expectOverlayActionEnabled(pageA, "resume");
-    await clickOverlayAction(pageA, "resume");
-    await sleep(2000);
-  } catch (e) {
-    console.log(`  [resume-with-override-a] Resume skipped: ${e.message}`);
-  }
-
-  console.log("  [resume-with-override-a] PASS");
+  const { pageB } = env;
+  await pauseAtPendingBtoA(env);
+  const baselineB = await collectThreadObservation(pageB);
+  await resumeAndVerifyHop({
+    env,
+    overrideRole: "A",
+    expectedSourceRole: "A",
+    expectedTargetRole: "B",
+    baselineTargetObservation: baselineB
+  });
   return { success: true };
 }
 
 async function runResumeWithOverrideB(env) {
-  const { pageA, pageB, popupPage } = env;
-
-  // Ensure source has assistant seed content for relay
-  await ensureSourceAssistantSeed(pageA);
-
-  // Ensure session is running first
-  try {
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await sleep(3000);
-  } catch (e) {
-    console.log(`  [resume-with-override-b] Start skipped: ${e.message}`);
-  }
-
-  try {
-    await expectOverlayActionEnabled(pageA, "pause");
-    await clickOverlayAction(pageA, "pause");
-    await sleep(2000);
-  } catch (e) {
-    console.log(`  [resume-with-override-b] Pause skipped: ${e.message}`);
-  }
-
-  await popupPage.locator("#overrideSelect").selectOption("B");
-  await sleep(500);
-
-  try {
-    await expectOverlayActionEnabled(pageA, "resume");
-    await clickOverlayAction(pageA, "resume");
-    await sleep(2000);
-  } catch (e) {
-    console.log(`  [resume-with-override-b] Resume skipped: ${e.message}`);
-  }
-
-  console.log("  [resume-with-override-b] PASS");
+  const { pageA } = env;
+  await pauseAtPendingBtoA(env);
+  const baselineA = await collectThreadObservation(pageA);
+  await resumeAndVerifyHop({
+    env,
+    overrideRole: "B",
+    expectedSourceRole: "B",
+    expectedTargetRole: "A",
+    baselineTargetObservation: baselineA
+  });
   return { success: true };
 }
 
 async function runResumeDefault(env) {
-  const { pageA, pageB, popupPage } = env;
+  const { pageA, popupPage } = env;
+  await pauseAtPendingBtoA(env);
+  const expectedHop = parseNextHopText(await popupPage.locator("#nextHopValue").innerText());
+  const baselineTargetObservation = await collectThreadObservation(
+    expectedHop.targetRole === "A" ? pageA : env.pageB
+  );
 
-  // Ensure source has assistant seed content for relay
-  await ensureSourceAssistantSeed(pageA);
-
-  // Ensure session is running first
-  try {
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await sleep(3000);
-  } catch (e) {
-    console.log(`  [resume-default] Start skipped: ${e.message}`);
-  }
-
-  const nextHopBeforePause = await popupPage.locator("#nextHopValue").innerText();
-
-  try {
-    await expectOverlayActionEnabled(pageA, "pause");
-    await clickOverlayAction(pageA, "pause");
-    await sleep(2000);
-
-    await expectOverlayActionEnabled(pageA, "resume");
-    await clickOverlayAction(pageA, "resume");
-    await sleep(2000);
-  } catch (e) {
-    console.log(`  [resume-default] Pause/resume skipped: ${e.message}`);
-  }
-
-  const nextHopAfterResume = await popupPage.locator("#nextHopValue").innerText();
-  console.log(`  [resume-default] nextHop before: ${nextHopBeforePause}, after: ${nextHopAfterResume}`);
-
-  console.log("  [resume-default] PASS");
+  await resumeAndVerifyHop({
+    env,
+    expectedSourceRole: expectedHop.sourceRole,
+    expectedTargetRole: expectedHop.targetRole,
+    baselineTargetObservation
+  });
   return { success: true };
 }
 
 async function runContinuationWithoutFocusSwitch(env) {
   const { pageA, pageB, popupPage } = env;
+  const startState = await startLiveRelayFromA(env);
+  const baselineA = await waitForTargetReplyAndPendingHop({
+    popupPage,
+    sourcePage: pageB,
+    sourceRole: "B",
+    targetPage: env.pageB,
+    targetRole: "B"
+  });
 
-  // Ensure source has assistant seed content for relay
-  await ensureSourceAssistantSeed(pageA);
+  const continuationHop = await waitForAcceptedHop({
+    popupPage,
+    targetPage: pageA,
+    baselineTarget: baselineA,
+    expectedRound: startState.initialRound + 2,
+    targetRole: "A"
+  });
 
-  // Just start and let it run briefly
-  try {
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
-    await sleep(5000);
-    
-    const state = await popupPage.evaluate(() => {
-      return {
-        phase: document.querySelector("#phaseBadge")?.getAttribute("data-phase"),
-        step: document.querySelector("#currentStepValue")?.textContent,
-        round: document.querySelector("#roundValue")?.textContent
-      };
-    });
-    console.log(`  [continuation] State: ${JSON.stringify(state)}`);
-
-    await expectOverlayActionEnabled(pageA, "stop");
-    await clickOverlayAction(pageA, "stop");
-    await sleep(1000);
-  } catch (e) {
-    console.log(`  [continuation] Start/stop skipped: ${e.message}`);
+  if (!continuationHop.ok) {
+    throw new Error(`Continuation without focus switch failed: ${continuationHop.reason} ${JSON.stringify(continuationHop.context || {})}`);
   }
 
-  console.log("  [continuation] PASS");
+  const popupState = await readPopupState(popupPage);
+  assert.equal(popupState.phase, "running");
+  assert.ok(
+    hasWaitingLikeStep(popupState.currentStep),
+    `Expected relay to keep running without manual focus switching, got ${JSON.stringify(popupState)}`
+  );
+  return { success: true };
+}
+
+async function runTask9Suite(env) {
+  const { pageA, pageB, popupPage } = await buildTask9ReadyEnv(env);
+  const branchResults = [];
+
+  const startState = await startLiveRelayFromA(env);
+  branchResults.push({
+    branch: "shared-live-start",
+    status: "PASS",
+    detail: startState.firstHop.evidence
+  });
+
+  const baselineA = await waitForTargetReplyAndPendingHop({
+    popupPage,
+    sourcePage: pageB,
+    sourceRole: "B",
+    targetPage: pageB,
+    targetRole: "B"
+  });
+
+  const continuationHop = await waitForAcceptedHop({
+    popupPage,
+    targetPage: pageA,
+    baselineTarget: baselineA,
+    expectedRound: startState.initialRound + 2,
+    targetRole: "A"
+  });
+
+  if (!continuationHop.ok) {
+    throw new Error(`Task 9 suite continuation failed: ${continuationHop.reason} ${JSON.stringify(continuationHop.context || {})}`);
+  }
+
+  branchResults.push({
+    branch: "continuation-without-focus-switch",
+    status: "PASS",
+    detail: continuationHop.evidence
+  });
+
+  const overrideB = await runTask9ResumeBranchAtCurrentBoundary(env, "override-b");
+  branchResults.push({
+    branch: "resume-with-override-b",
+    status: "PASS",
+    detail: overrideB.result.evidence,
+    boundary: {
+      sourceRole: overrideB.boundary.sourceRole,
+      targetRole: overrideB.boundary.targetRole
+    }
+  });
+
+  const resumeDefault = await runTask9ResumeBranchAtCurrentBoundary(env, "default");
+  branchResults.push({
+    branch: "resume-default",
+    status: "PASS",
+    detail: resumeDefault.result.evidence,
+    boundary: {
+      sourceRole: resumeDefault.boundary.sourceRole,
+      targetRole: resumeDefault.boundary.targetRole
+    }
+  });
+
+  const overrideA = await runTask9ResumeBranchAtCurrentBoundary(env, "override-a");
+  branchResults.push({
+    branch: "resume-with-override-a",
+    status: "PASS",
+    detail: overrideA.result.evidence,
+    boundary: {
+      sourceRole: overrideA.boundary.sourceRole,
+      targetRole: overrideA.boundary.targetRole
+    }
+  });
+
+  await expectOverlayActionEnabled(pageA, "stop");
+  await clickOverlayAction(pageA, "stop");
+  await expectPopupPhaseState(popupPage, "stopped");
+
+  console.log("[e2e] Task 9 suite reused one seeded live session across continuation/default/override branches");
+  console.log(`[e2e] Task 9 suite branch results: ${JSON.stringify(branchResults)}`);
   return { success: true };
 }
 
@@ -1047,14 +1360,16 @@ const scenarioNames = scenarioFilter
   for (const result of results) {
     if (result.status === "FAIL") {
       console.log(`  E2E scenario ${result.name}: FAIL (see ${result.diagnostics})`);
+    } else if (result.status === "BLOCKED") {
+      console.log(`  E2E scenario ${result.name}: BLOCKED [${result.blocker}] (see ${result.diagnostics})`);
     } else {
       console.log(`  E2E scenario ${result.name}: PASS`);
     }
   }
 
-  const failedCount = results.filter(r => r.status === "FAIL").length;
+  const failedCount = results.filter(r => r.status !== "PASS").length;
   if (failedCount > 0) {
-    console.log(`\n${failedCount} scenario(s) failed.`);
+    console.log(`\n${failedCount} scenario(s) did not pass.`);
     process.exit(1);
   } else {
     console.log("\nAll scenarios passed!");

@@ -17,7 +17,7 @@ import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
 
 /**
  * Default auth state file paths.
- * These are relative to cwd and resolve to absolute paths.
+ * These are kept for explicit auth workflows only.
  */
 export const DEFAULT_AUTH_PATHS = {
   storageState: "playwright/.auth/chatgpt.json",
@@ -33,35 +33,28 @@ export const DEFAULT_AUTH_PATHS = {
  */
 export function resolveAuthOptions(options = {}) {
   const { authStateArg, sessionStateArg } = options;
-  
   const cwd = process.cwd();
-  
-  // Resolve storageState path
+
+  const useAuth = Boolean(authStateArg || sessionStateArg);
+
   let storageStatePath = null;
   if (authStateArg) {
-    storageStatePath = path.isAbsolute(authStateArg) 
-      ? authStateArg 
+    storageStatePath = path.isAbsolute(authStateArg)
+      ? authStateArg
       : path.resolve(cwd, authStateArg);
-  } else {
-    // Use default path
-    storageStatePath = path.resolve(cwd, DEFAULT_AUTH_PATHS.storageState);
   }
-  
-  // Resolve sessionStorage path
+
   let sessionStoragePath = null;
   if (sessionStateArg) {
     sessionStoragePath = path.isAbsolute(sessionStateArg)
       ? sessionStateArg
       : path.resolve(cwd, sessionStateArg);
-  } else {
-    // Use default path (derived from storageState path directory)
-    sessionStoragePath = path.resolve(cwd, DEFAULT_AUTH_PATHS.sessionStorage);
   }
-  
+
   return {
     storageStatePath,
     sessionStoragePath,
-    useAuth: true // Always use auth if files exist and are valid
+    useAuth
   };
 }
 
@@ -73,31 +66,34 @@ export function resolveAuthOptions(options = {}) {
  */
 export async function validateAuthFiles(storageStatePath, sessionStoragePath) {
   const results = {
-    valid: false,
+    valid: true,
     storageStateExists: false,
     sessionStorageExists: false,
     error: undefined
   };
-  
-  // Check storageState
-  try {
-    await access(storageStatePath);
-    results.storageStateExists = true;
-  } catch {
-    results.error = `Auth state file not found: ${storageStatePath}`;
-    return results;
+
+  if (storageStatePath) {
+    try {
+      await access(storageStatePath);
+      results.storageStateExists = true;
+    } catch {
+      results.valid = false;
+      results.error = `Auth state file not found: ${storageStatePath}`;
+      return results;
+    }
   }
-  
-  // Check sessionStorage (optional - may not exist)
-  try {
-    await access(sessionStoragePath);
-    results.sessionStorageExists = true;
-  } catch {
-    // sessionStorage is optional - this is OK
-    results.sessionStorageExists = false;
+
+  if (sessionStoragePath) {
+    try {
+      await access(sessionStoragePath);
+      results.sessionStorageExists = true;
+    } catch {
+      results.valid = false;
+      results.error = `Session storage file not found: ${sessionStoragePath}`;
+      return results;
+    }
   }
-  
-  results.valid = true;
+
   return results;
 }
 
@@ -824,30 +820,38 @@ export async function waitForAssistantReply(page, seedLabel) {
  * @returns {Promise<string>} The settled assistant reply text
  */
 export async function waitForSettledAssistantReply(page, seedLabel) {
-  const locator = page.locator('[data-message-author-role="assistant"]').last();
-
-  await locator.waitFor({ state: "visible", timeout: 60000 });
-
   const startedAt = Date.now();
   const stabilityWindowMs = 3000;
   let lastText = "";
+  let lastHash = null;
   let lastStableTime = 0;
 
   while (Date.now() - startedAt < 60000) {
-    const isGenerating = await page.evaluate(() => {
-      const stopBtn = document.querySelector('button[data-testid="stop-generating-button"]') ||
-                      document.querySelector('button[data-testid="stop-button"]');
-      return Boolean(stopBtn);
-    });
+    let observation;
+    try {
+      observation = await collectThreadObservation(page);
+    } catch {
+      await page.waitForTimeout(1000);
+      continue;
+    }
 
-    if (isGenerating) {
+    if (!observation.latestAssistantHash) {
+      await page.waitForTimeout(1000);
+      continue;
+    }
+
+    if (observation.generating) {
+      lastText = observation.latestAssistantText || "";
+      lastHash = observation.latestAssistantHash;
+      lastStableTime = 0;
       await page.waitForTimeout(1500);
       continue;
     }
 
-    const currentText = (await locator.innerText()).trim();
+    const currentText = String(observation.latestAssistantText || "").trim();
+    const currentHash = observation.latestAssistantHash;
 
-    if (currentText && currentText === lastText) {
+    if (currentText && currentText === lastText && currentHash === lastHash) {
       if (lastStableTime === 0) {
         lastStableTime = Date.now();
       } else if (Date.now() - lastStableTime >= stabilityWindowMs) {
@@ -855,6 +859,7 @@ export async function waitForSettledAssistantReply(page, seedLabel) {
       }
     } else {
       lastText = currentText;
+      lastHash = currentHash;
       lastStableTime = 0;
     }
 
@@ -863,6 +868,334 @@ export async function waitForSettledAssistantReply(page, seedLabel) {
 
   await dumpBootstrapDiagnostics(page, seedLabel);
   throw new Error("Timed out waiting for settled assistant reply (generation stopped + text stable).");
+}
+
+/**
+ * Collect page-fact-first thread observation from a ChatGPT page.
+ * Mirrors the real-hop harness baseline so live-session pages can be
+ * verified without depending on persistent thread URLs.
+ * @param {import("playwright").Page} page
+ */
+export async function collectThreadObservation(page) {
+  return await page.evaluate(() => {
+    const normalize = (value) => String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
+    const hashText = (value) => {
+      const text = normalize(value);
+      let hash = 2166136261;
+
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+
+      return text ? `h${(hash >>> 0).toString(16)}` : null;
+    };
+
+    const userSelectors = [
+      '[data-message-author-role="user"]',
+      'article [data-message-author-role="user"]',
+      '[data-testid*="conversation-turn"] [data-message-author-role="user"]',
+      'main [data-message-author-role="user"]'
+    ];
+
+    const assistantSelectors = [
+      '[data-message-author-role="assistant"]',
+      'article [data-message-author-role="assistant"]',
+      '[data-testid*="conversation-turn"] [data-message-author-role="assistant"]',
+      'main [data-message-author-role="assistant"]'
+    ];
+
+    const composerSelectors = [
+      '[contenteditable="true"][role="textbox"]',
+      '[contenteditable="true"][data-testid*="composer"]',
+      'textarea',
+      'input'
+    ];
+
+    const findLatestBySelectors = (selectors) => {
+      for (const selector of selectors) {
+        const candidates = Array.from(document.querySelectorAll(selector)).filter((element) =>
+          normalize(element.textContent || "")
+        );
+        if (candidates.length > 0) {
+          return {
+            text: normalize(candidates[candidates.length - 1].textContent || ""),
+            count: candidates.length
+          };
+        }
+      }
+
+      return { text: "", count: 0 };
+    };
+
+    const findComposerNode = () => {
+      for (const selector of composerSelectors) {
+        const node = document.querySelector(selector);
+        if (node) {
+          return node;
+        }
+      }
+
+      return null;
+    };
+
+    const readComposerText = (composer) => {
+      if (!composer) {
+        return "";
+      }
+
+      const tag = String(composer.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "input") {
+        return normalize(composer.value || "");
+      }
+
+      return normalize(composer.textContent || "");
+    };
+
+    const composer = findComposerNode();
+    const sendButton =
+      composer?.closest?.("form")?.querySelector?.('button[type="submit"]') ||
+      document.querySelector('#composer-submit-button') ||
+      document.querySelector('button[data-testid="send-button"]') ||
+      document.querySelector('button[aria-label*="Send"]') ||
+      document.querySelector('button[aria-label*="发送"]');
+
+    const latestUser = findLatestBySelectors(userSelectors);
+    const latestAssistant = findLatestBySelectors(assistantSelectors);
+
+    const generating = Boolean(
+      document.querySelector('button[data-testid="stop-button"]') ||
+        document.querySelector('button[data-testid="stop-generating-button"]') ||
+        document.querySelector('button[aria-label*="Stop"]') ||
+        document.querySelector('button[aria-label*="停止"]') ||
+        document.querySelector('button[aria-label*="Cancel"]')
+    );
+
+    return {
+      timestamp: new Date().toISOString(),
+      generating,
+      latestUserText: latestUser.text || null,
+      latestUserHash: hashText(latestUser.text),
+      userMessageCount: latestUser.count,
+      latestAssistantText: latestAssistant.text || null,
+      latestAssistantHash: hashText(latestAssistant.text),
+      assistantMessageCount: latestAssistant.count,
+      composerText: readComposerText(composer),
+      sendButtonReady: Boolean(sendButton) && sendButton.disabled !== true,
+      sendButtonVisible: Boolean(sendButton)
+    };
+  });
+}
+
+/**
+ * Ensure a source page has settled assistant content available for the next hop.
+ * @param {import("playwright").Page} page
+ * @param {string} [prompt]
+ */
+export async function ensureSourceAssistantSeed(
+  page,
+  prompt = "Hello, respond briefly."
+) {
+  const baseline = await collectThreadObservation(page);
+  if (baseline.latestAssistantHash) {
+    return baseline;
+  }
+
+  await ensureComposer(page);
+  await sendPrompt(page, prompt);
+  await page.waitForTimeout(3000);
+  await waitForSettledAssistantReply(page, "source-seed");
+  return collectThreadObservation(page);
+}
+
+export class HarnessBlockerError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = "HarnessBlockerError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export function isHarnessBlocker(error) {
+  return Boolean(
+    error &&
+      error.name === "HarnessBlockerError" &&
+      typeof error.code === "string"
+  );
+}
+
+function isAnonymousLoginDiversionUrl(url) {
+  const currentUrl = String(url || "");
+  return (
+    currentUrl.includes("auth.openai.com") ||
+    currentUrl.includes("/log-in") ||
+    currentUrl.includes("/login") ||
+    currentUrl.includes("/signin") ||
+    currentUrl.includes("/log-in-or-create-account")
+  );
+}
+
+async function collectAnonymousSeedSnapshot(page) {
+  const url = page.url();
+  const title = await page.title().catch(() => "");
+  const observation = await collectThreadObservation(page).catch(() => null);
+
+  return {
+    url,
+    title,
+    loginDiverted: isAnonymousLoginDiversionUrl(url),
+    supportedThreadUrl: parseChatGptThreadUrl(url).supported,
+    hasAssistantSeed: Boolean(observation?.latestAssistantHash),
+    assistantHash: observation?.latestAssistantHash || null,
+    assistantCount: observation?.assistantMessageCount ?? null,
+    userCount: observation?.userMessageCount ?? null,
+    generating: observation?.generating ?? null,
+    composerVisible: observation ? Boolean(observation.sendButtonVisible) : null
+  };
+}
+
+export async function ensureAnonymousSourceSeedWithBlocker(page, options = {}) {
+  const prompt = options.prompt || "Hello, respond briefly.";
+  const label = options.label || "source-seed";
+
+  await ensureAnonymousChatPage(page);
+
+  const before = await collectAnonymousSeedSnapshot(page);
+  if (before.loginDiverted) {
+    throw new HarnessBlockerError(
+      "anonymous_seed_blocked_by_login_diversion",
+      `Anonymous source seed diverted to login before seeding (${before.url})`,
+      before
+    );
+  }
+
+  if (before.hasAssistantSeed) {
+    return {
+      ok: true,
+      seeded: false,
+      observation: await collectThreadObservation(page),
+      snapshot: before
+    };
+  }
+
+  try {
+    await ensureComposer(page);
+    await sendPrompt(page, prompt);
+    await page.waitForTimeout(3000);
+    await waitForSettledAssistantReply(page, label);
+
+    const observation = await collectThreadObservation(page);
+    return {
+      ok: true,
+      seeded: true,
+      observation,
+      snapshot: await collectAnonymousSeedSnapshot(page)
+    };
+  } catch (error) {
+    const after = await collectAnonymousSeedSnapshot(page).catch(() => ({
+      url: page.url(),
+      title: "",
+      loginDiverted: isAnonymousLoginDiversionUrl(page.url())
+    }));
+
+    if (after.loginDiverted) {
+      throw new HarnessBlockerError(
+        "anonymous_seed_blocked_by_login_diversion",
+        `Anonymous source seed diverted to login during seeding (${after.url})`,
+        {
+          ...after,
+          cause: error instanceof Error ? error.message : String(error)
+        }
+      );
+    }
+
+    throw new HarnessBlockerError(
+      "anonymous_seed_environment_instability",
+      `Anonymous source seed did not produce stable assistant evidence (${after.url || "unknown_url"})`,
+      {
+        ...after,
+        cause: error instanceof Error ? error.message : String(error)
+      }
+    );
+  }
+}
+
+/**
+ * Give live-session pages a short post-binding stabilization window before
+ * source seeding. This mirrors the proven real-hop sequencing where binding
+ * broadcasts settle before page-fact seeding begins.
+ * @param {import("playwright").Page} page
+ * @param {number} timeoutMs
+ */
+export async function stabilizeAfterBinding(page, timeoutMs = 3000) {
+  await page.waitForTimeout(timeoutMs);
+  await page.title().catch(() => "");
+}
+
+/**
+ * Recover anonymous baseline pages that drifted onto auth.openai.com before
+ * live-session seeding. Keeps the harness on the root ChatGPT page without
+ * reintroducing auth requirements.
+ * @param {import("playwright").Page} page
+ */
+export async function ensureAnonymousChatPage(page) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const currentUrl = page.url();
+    const isAuthPage = isAnonymousLoginDiversionUrl(currentUrl);
+
+    if (!isAuthPage && currentUrl.startsWith("https://chatgpt.com")) {
+      return;
+    }
+
+    await page.goto("https://chatgpt.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+    await page.waitForTimeout(2000);
+  }
+}
+
+/**
+ * Wait for a new assistant reply to appear and settle compared to a baseline hash.
+ * @param {import("playwright").Page} page
+ * @param {string|null} previousAssistantHash
+ * @param {string} seedLabel
+ * @param {number} timeoutMs
+ */
+export async function waitForAssistantReplyAfter(page, previousAssistantHash, seedLabel, timeoutMs = 90000) {
+  const startedAt = Date.now();
+  const stabilityWindowMs = 3000;
+  let lastSeenHash = null;
+  let lastStableAt = 0;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const observation = await collectThreadObservation(page);
+    const currentHash = observation.latestAssistantHash;
+
+    if (currentHash && currentHash !== previousAssistantHash) {
+      if (observation.generating) {
+        lastSeenHash = currentHash;
+        lastStableAt = 0;
+      } else if (lastSeenHash === currentHash) {
+        if (lastStableAt === 0) {
+          lastStableAt = Date.now();
+        } else if (Date.now() - lastStableAt >= stabilityWindowMs) {
+          return observation;
+        }
+      } else {
+        lastSeenHash = currentHash;
+        lastStableAt = Date.now();
+      }
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  await dumpBootstrapDiagnostics(page, seedLabel);
+  throw new Error(
+    `Timed out waiting for a new settled assistant reply after ${previousAssistantHash || "no-baseline"}.`
+  );
 }
 
 /**
@@ -883,7 +1216,8 @@ export async function waitForSupportedThreadUrl(page) {
     throw new Error(
       `Anonymous bootstrap did not transition to a supported thread URL. ` +
       `Current URL: ${url} (${parsed.reason}). ` +
-      `Root page cannot be bound directly. Provide existing thread URLs via --url-a and --url-b.`
+      `Persistent thread URL evidence was not observed. ` +
+      `Live-session root-page binding may still be valid when overlay/session evidence exists.`
     );
   }
 }
@@ -1021,10 +1355,10 @@ export async function assertSupportedThreadUrl(page, label) {
   
   if (!parsed.supported) {
     throw new Error(
-      `Root page cannot be bound directly for ${label}. ` +
+      `Supported thread URL required for ${label}. ` +
       `Current URL: ${url} (${parsed.reason}). ` +
-      `Bootstrap two threads first (send prompts and wait for /c/ or /g/.../c/ URLs) ` +
-      `or provide existing thread URLs via --url-a and --url-b.`
+      `This assertion is only for persistent-URL flows; live-session root-page binding can still be valid ` +
+      `when overlay/session evidence exists.`
     );
   }
 }
@@ -1075,7 +1409,8 @@ export async function waitUntilSupportedThreadUrl(page, timeoutMs = 20000) {
   throw new Error(
     `URL did not transition to supported thread URL within ${timeoutMs}ms. ` +
     `Current URL: ${url} (${parsed.reason}). ` +
-    `Root page cannot be bound directly. Provide existing thread URLs via --url-a and --url-b.`
+    `Persistent thread URL evidence was not observed. ` +
+    `Live-session root-page binding may still be valid when overlay/session evidence exists.`
   );
 }
 
@@ -1404,7 +1739,7 @@ export async function bindFromPage(page, popupPage, role) {
  * The popup is an extension page with full chrome.runtime access,
  * unlike chatgpt.com pages which Playwright isolates.
  * @param {import("playwright").Page} popupPage - The extension popup page
- * @returns {Promise<{phase: string, bindings: {A: unknown, B: unknown}, error?: string}>}
+ * @returns {Promise<{phase: string, bindings: {A: unknown, B: unknown}, activeHop?: unknown, nextHopSource?: unknown, nextHopOverride?: unknown, round?: unknown, error?: string}>}
  */
 export async function getRuntimeState(popupPage) {
   try {
@@ -1422,7 +1757,11 @@ export async function getRuntimeState(popupPage) {
           bindings: {
             A: state?.bindings?.A,
             B: state?.bindings?.B
-          }
+          },
+          activeHop: state?.activeHop || null,
+          nextHopSource: state?.nextHopSource ?? null,
+          nextHopOverride: state?.nextHopOverride ?? null,
+          round: state?.round ?? null
         };
       } catch (error) {
         return { error: error.message };

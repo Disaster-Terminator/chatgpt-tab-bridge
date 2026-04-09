@@ -81,3 +81,62 @@ This is NOT an auth file validity issue - `pnpm run auth:verify` passes with `au
 - New scenarios: 4 (e2e) + 3 (semi) = 7 explicit resume/continuation test paths
 - All new scenarios verify control-flow behavior through page-fact assertions
 - Continuation scenario proves Task 6's canonical `activeHop.targetTabId` removes manual tab-switch dependency
+
+## 2026-04-09 Harness Baseline Shift
+
+- Updated `scripts/_playwright-bridge-helpers.mjs` so `resolveAuthOptions()` no longer auto-loads default auth paths; auth is now enabled only when `--auth-state` or `--session-state` is explicitly supplied.
+- Updated `validateAuthFiles()` so it validates only explicitly provided auth/session files instead of treating missing default auth files as a startup failure.
+- Updated `scripts/e2e-bridge-playwright.mjs`, `scripts/semi-bridge-playwright.mjs`, and `scripts/real-hop-playwright.mjs` so auth validation and auth-state checks run only in explicit auth mode.
+- Runner messaging now describes the anonymous/live-session baseline as the default path and treats auth as opt-in.
+
+### Verification After Baseline Shift
+
+- `pnpm run typecheck` ✅
+- `pnpm run build` ✅
+- `pnpm run test:real-hop -- --root-only` → no auth-file failure; reached anonymous bind/start/page-fact flow, then failed later during verification with `page.evaluate: Target page, context or browser has been closed` after source seeding timed out.
+- `pnpm run test:semi` → no auth-file failure; reached anonymous live-session setup/binding, then failed on `Timed out waiting for settled assistant reply (generation stopped + text stable)`.
+- `pnpm run test:e2e -- --scenario resume-default --root-only` → no auth-file failure; reached Task 9 root baseline and failed on `Timed out waiting for settled assistant reply (generation stopped + text stable)`.
+- `pnpm run test:e2e -- --scenario resume-with-override-a --root-only` → same post-baseline seed timeout.
+- `pnpm run test:e2e -- --scenario resume-with-override-b --root-only` → same post-baseline seed timeout.
+- `pnpm run test:e2e -- --scenario continuation-without-focus-switch --root-only` → same post-baseline seed timeout.
+
+### What This Confirms
+
+- Task 9 browser commands are now exercising the anonymous/no-persistent-URL harness path instead of failing immediately on absent auth exports.
+- The remaining blockers are page-fact/runtime behavior on anonymous root pages, not auth-file or thread-URL prerequisites.
+
+## 2026-04-09 Task 9 harness semantics follow-up
+
+- Reworked `scripts/e2e-bridge-playwright.mjs` and `scripts/semi-bridge-playwright.mjs` so their source-seed path matches the proven `real-hop` cadence more closely: runtime binding check first, then direct `sendPrompt()` + short settle window, then page-fact verification.
+- Extended `getRuntimeState()` in `scripts/_playwright-bridge-helpers.mjs` to expose `activeHop`, `nextHopSource`, `nextHopOverride`, and `round` so browser harness logic can distinguish a true between-hop boundary from a claimed hop.
+- Updated pause helpers in `e2e` / `semi` to target popup/runtime between-hop semantics instead of relying only on transient popup text timing.
+- Relaxed `waitForAcceptedHop()` so `waiting_reply` no longer causes an immediate false-negative before page-fact acceptance has a chance to settle.
+
+### Latest verification snapshot
+
+- `pnpm run test:e2e -- --scenario resume-default --root-only` still fails in the current environment; latest observed failure moved from immediate round-2 false-negative to a later pause-state timeout / stopped-session path depending on run order.
+- `pnpm run test:e2e -- --scenario resume-with-override-a --root-only` still intermittently falls back into source-seed failure on anonymous root pages in the current environment.
+- The harness changes now encode the intended Task 9 semantics (real-hop-style source seed, activeHop-aware between-hop pause, slower acceptance failure), but the five required browser commands were not all green by the end of this work window.
+
+## 2026-04-09 Task 9 browser-harness restructuring pass
+
+- Centralized anonymous source-seed classification in `scripts/_playwright-bridge-helpers.mjs` via `ensureAnonymousSourceSeedWithBlocker()` and `HarnessBlockerError`, with explicit blocker taxonomy for:
+  - `anonymous_seed_blocked_by_login_diversion`
+  - `anonymous_seed_environment_instability`
+- Updated `scripts/e2e-bridge-playwright.mjs` so Task 9 ready-state setup caches one successful seed per environment (`env.task9Ready`) instead of re-running anonymous source seeding every time the same workflow revisits Task 9 setup.
+- Added `task9-suite` to `scripts/e2e-bridge-playwright.mjs` so continuation/default/override Task 9 control-flow coverage can share one seeded live session and one serial browser workflow instead of recreating fresh anonymous seed setup per branch.
+- Updated `scripts/e2e-bridge-playwright.mjs` failure reporting so blocker states surface as `BLOCKED` with blocker code/details, while real control-flow assertion failures remain `FAIL`.
+- Updated `scripts/semi-bridge-playwright.mjs` to use the same shared anonymous blocker classifier and to log blocker taxonomy distinctly from control-flow failures.
+
+### Targeted non-browser verification
+
+- `node --check scripts/_playwright-bridge-helpers.mjs` ✅
+- `node --check scripts/e2e-bridge-playwright.mjs` ✅
+- `node --check scripts/semi-bridge-playwright.mjs` ✅
+
+### Serial browser verification snapshot
+
+- `pnpm run test:e2e -- --scenario task9-suite --root-only` → `BLOCKED`
+  - blocker: `anonymous_seed_blocked_by_login_diversion`
+  - source-seed diagnostics still show redirect to `https://auth.openai.com/log-in-or-create-account`
+  - popup/runtime stayed at `ready`/`A -> B`, confirming the harness now classifies the shared-seed precondition failure before claiming a control-flow regression

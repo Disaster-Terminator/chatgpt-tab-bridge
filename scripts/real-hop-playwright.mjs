@@ -32,7 +32,6 @@ import {
   bootstrapAnonymousThread,
   buildBootstrapPrompt,
   ensureOverlay,
-  clickOverlayBind,
   bindFromPage,
   getRuntimeState,
   clickOverlayAction,
@@ -45,11 +44,11 @@ import {
   hasSessionEvidence,
   isSupportedThreadUrl,
   ensureComposer,
-  sendPrompt,
-  waitForAssistantReply,
-  waitForSettledAssistantReply,
   fetchRuntimeEventsFromPopup,
-  sleep
+  sleep,
+  ensureAnonymousSourceSeedWithBlocker,
+  HarnessBlockerError,
+  isHarnessBlocker
 } from "./_playwright-bridge-helpers.mjs";
 
 const extensionPath = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
@@ -69,18 +68,21 @@ const authOptions = resolveAuthOptions({
   sessionStateArg
 });
 
-// Validate auth files before doing anything
-const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
-if (!authValidation.valid) {
-  console.error(`[real-hop] ERROR: ${authValidation.error}`);
-  console.error("[real-hop] To skip auth, provide --url-a and --url-b for existing threads.");
-  process.exit(1);
-}
+let sessionStorageData = null;
+if (authOptions.useAuth) {
+  const authValidation = await validateAuthFiles(authOptions.storageStatePath, authOptions.sessionStoragePath);
+  if (!authValidation.valid) {
+    console.error(`[real-hop] ERROR: ${authValidation.error}`);
+    console.error("[real-hop] Auth is opt-in. Fix the provided auth paths or omit --auth-state/--session-state to use the anonymous baseline.");
+    process.exit(1);
+  }
 
-// Load sessionStorage data
-const sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
-console.log(`[real-hop] Auth state: ${authOptions.storageStatePath}`);
-console.log(`[real-hop] Session storage: ${authOptions.sessionStoragePath} (${sessionStorageData ? "loaded" : "not found"})`);
+  sessionStorageData = await loadSessionStorageData(authOptions.sessionStoragePath);
+  console.log(`[real-hop] Auth mode: enabled (${authOptions.storageStatePath || "session-only"})`);
+  console.log(`[real-hop] Session storage: ${authOptions.sessionStoragePath || "not provided"} (${sessionStorageData ? "loaded" : "not found"})`);
+} else {
+  console.log("[real-hop] Auth mode: disabled by default; using anonymous/live-session baseline.");
+}
 
 const ACCEPTANCE_TIMEOUT_MS = 90000;
 const POLL_INTERVAL_MS = 1200;
@@ -592,7 +594,7 @@ async function verifyRealHop({ pageA, pageB, popupPage, baselineTarget, payloadF
 await fs.mkdir(evidenceDir, { recursive: true });
 logLine(`证据目录: ${evidenceDir}`);
 
-// Launch browser with auth state
+// Launch browser with optional auth state
 const { context, userDataDir } = await launchBrowserWithExtension({
   extensionPath,
   browserExecutablePath,
@@ -606,6 +608,7 @@ if (sessionStorageData) {
 }
 
 let runError = null;
+let runStatus = "PASS";
 let finalRuntimeEvents = [];
 let verificationResult = null;
 let popupSnapshot = null;
@@ -763,15 +766,13 @@ try {
 
   // Source-seed-only flow: give source A a minimal assistant reply to serve as first-hop payload
   logLine("Source-seed-only: sending minimal prompt to source A to generate first-hop payload...");
-  try {
-    await sendPrompt(pageA, "Hello, respond briefly.");
-    await sleep(3000);
-    logLine("Source A seed sent, waiting for assistant reply...");
-    await waitForSettledAssistantReply(pageA, "source-seed");
-    logLine("Source A has settled assistant content for relay payload");
-  } catch (error) {
-    logLine(`Source seed failed: ${error.message} - continuing anyway`);
-  }
+  const sourceSeedResult = await ensureAnonymousSourceSeedWithBlocker(pageA, {
+    prompt: "Hello, respond briefly.",
+    label: "source-seed"
+  });
+  logLine(
+    `Source A seed ready for relay payload (seeded=${sourceSeedResult.seeded}, assistantHash=${sourceSeedResult.observation.latestAssistantHash || "null"})`
+  );
 
   // Target B: ensure composer is available (for receiving later), but do NOT require prior conversation
   logLine("Target B: ensuring composer is ready for receiving...");
@@ -807,6 +808,18 @@ try {
 
   baselineSource = await collectThreadObservation(pageA);
   baselineTarget = await collectThreadObservation(pageB);
+
+  if (!baselineSource.latestAssistantHash) {
+    throw new HarnessBlockerError(
+      "anonymous_seed_environment_instability",
+      "Source assistant seed was not present when real-hop baseline was captured.",
+      {
+        sourceUrl: pageA.url(),
+        baselineSource
+      }
+    );
+  }
+
   const payloadFingerprint = buildPayloadFingerprint(baselineSource);
 
   logLine(
@@ -872,7 +885,13 @@ try {
   }
 } catch (error) {
   runError = error;
-  logLine(`执行失败: ${error instanceof Error ? error.message : String(error)}`);
+  runStatus = isHarnessBlocker(error) ? "BLOCKED" : "FAIL";
+  if (isHarnessBlocker(error)) {
+    logLine(`执行阻塞: ${error.code}`);
+    logLine(`阻塞详情: ${JSON.stringify(error.details || {})}`);
+  } else {
+    logLine(`执行失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
   await savePartialFailureScreenshots(pageA, pageB, popupPage);
 } finally {
   if (popupPage) {
@@ -885,7 +904,7 @@ try {
   }
 
   const summary = {
-    status: runError ? "FAIL" : "PASS",
+    status: runStatus,
     reason: runError
       ? runError instanceof Error
         ? runError.message
@@ -916,15 +935,27 @@ try {
     },
     popupSnapshot,
     verification: verificationResult,
+    blocker: isHarnessBlocker(runError)
+      ? {
+          code: runError.code,
+          details: runError.details || {}
+        }
+      : null,
     runtimeEventCount: finalRuntimeEvents.length,
     runtimePhaseSteps: finalRuntimeEvents.map((event) => event.phaseStep),
     lastRuntimeEvents: finalRuntimeEvents.slice(-12)
   };
 
   const acceptanceVerdict = {
-    status: runError ? "FAIL" : "PASS",
+    status: runStatus,
     acceptanceReason: verificationResult?.reason || null,
     independentAcceptance: verificationResult?.acceptance || null,
+    blocker: isHarnessBlocker(runError)
+      ? {
+          code: runError.code,
+          details: runError.details || {}
+        }
+      : null,
     runtimeAuxiliary: {
       eventCount: finalRuntimeEvents.length,
       phaseSteps: finalRuntimeEvents.map((event) => event.phaseStep)
@@ -944,6 +975,11 @@ try {
 }
 
 if (runError) {
+  if (isHarnessBlocker(runError)) {
+    console.error(`[real-hop] BLOCKED: ${runError.code}`);
+    console.error(`[real-hop] Blocker details: ${JSON.stringify(runError.details || {}, null, 2)}`);
+    process.exit(1);
+  }
   throw runError;
 }
 

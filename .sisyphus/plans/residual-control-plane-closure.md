@@ -434,7 +434,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `test(waiting): lock acceptance and settle regressions` | Files: `["tests/relay-core.test.mjs", "tests/polling-cancellation.test.mjs"]`
 
-- [ ] 9. Extend Playwright control-flow coverage for resume and continuation semantics
+- [x] 9. Extend Playwright control-flow coverage for resume and continuation semantics
 
   **What to do**: Upgrade the Playwright non-authenticity layers so they finally reflect the residual control-plane semantics instead of only a single override happy path. Add explicit resume A / resume B / default resume coverage, and add a continuation scenario that keeps focus on the opposite page while the bound target is expected to complete.
   **Must NOT do**: Do not let semi/e2e become the truth source for authenticity, do not remove real-hop as the sole page-fact-first acceptance layer, and do not add brittle sleeps where page/state assertions can be used.
@@ -474,7 +474,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `test(e2e): cover resume branches and continuation semantics` | Files: `["scripts/semi-bridge-playwright.mjs", "scripts/e2e-bridge-playwright.mjs", "scripts/_playwright-bridge-helpers.mjs"]`
 
-- [ ] 10. Preserve and strengthen page-fact-first authenticity verification
+- [x] 10. Preserve and strengthen page-fact-first authenticity verification
 
   **What to do**: Update real-hop and any supporting verification helpers only as needed to prove the new semantics without weakening authenticity. Add assertions/evidence for: no waiting-reply before acceptance, no premature next hop while streaming, and successful continuation without manual focus change when the scenario is reproducible under automation.
   **Must NOT do**: Do not convert real-hop into runtime-self-report verification, and do not treat semi/e2e success as authenticity proof.
@@ -514,7 +514,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `test(real-hop): preserve authenticity while adding waiting guards` | Files: `["scripts/real-hop-playwright.mjs", "scripts/e2e-bridge-playwright.mjs", "README.md"]`
 
-- [ ] 11. Align documentation and evidence taxonomy with shipped semantics
+- [x] 11. Align documentation and evidence taxonomy with shipped semantics
 
   **What to do**: Update README and any evidence/export summaries so the shipped semantics now accurately describe: canonical hop truth, pause/resume override behavior, waiting/settle rules, and timeout/observation classification. Document the updated regression layer responsibilities without overstating e2e/semi authenticity.
   **Must NOT do**: Do not add marketing prose, and do not change docs in ways that contradict runtime behavior or test harness outputs.
