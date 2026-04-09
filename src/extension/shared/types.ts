@@ -8,6 +8,9 @@ export type StopReason =
   | "max_rounds_reached"
   | "duplicate_output"
   | "hop_timeout"
+  | "wrong_target"
+  | "stale_target"
+  | "unreachable_target"
   | "binding_invalid"
   | "starter_settle_timeout"
   | "target_settle_timeout"
@@ -153,6 +156,25 @@ export interface CompletedHop {
 
 export type RuntimeHopStage = "pending" | "verifying" | "waiting_reply";
 
+export interface RuntimeHopTargetIdentity {
+  normalizedUrl: string | null;
+}
+
+export interface RuntimeHopProgress {
+  sourceHash: string | null;
+  relayPayloadText: string;
+  baselineUserHash: string | null;
+  baselineGenerating: boolean;
+  baselineLatestUserText: string | null;
+  baselineAssistantHash: string | null;
+  verificationBaselineSummary: string;
+  dispatchReadbackSummary: string;
+  sendTriggerMode: string;
+  sendTransport: string;
+  lastVerificationPollSample: string | null;
+  targetIdentity: RuntimeHopTargetIdentity | null;
+}
+
 export interface RuntimeHopTruth {
   sourceRole: BridgeRole;
   targetRole: BridgeRole;
@@ -160,6 +182,7 @@ export interface RuntimeHopTruth {
   round: number;
   hopId: string | null;
   stage: RuntimeHopStage;
+  progress?: RuntimeHopProgress | null;
 }
 
 export interface RuntimeState {
@@ -267,6 +290,12 @@ export interface TargetObservationSample {
   generating: boolean;
   composer: TargetObservationComposerFacts;
 }
+
+export type TargetObservationClassification =
+  | "correct_target"
+  | "wrong_target"
+  | "stale_target"
+  | "unreachable_target";
 
 export interface ThreadActivity {
   sample: TargetObservationSample;

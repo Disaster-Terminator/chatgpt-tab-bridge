@@ -276,6 +276,58 @@ export async function ensureOverlay(page) {
 }
 
 /**
+ * Validate that auth state is still valid by checking if we can access chatgpt.com.
+ * Fails fast with clear message if cookies are expired and redirect to login occurs.
+ * @param {import("playwright").Page} page - A page from the context
+ * @returns {{ valid: boolean, error?: string }}
+ */
+export async function validateAuthState(page) {
+  try {
+    // Navigate to chatgpt.com
+    await page.goto("https://chatgpt.com", { 
+      waitUntil: "domcontentloaded",
+      timeout: 15000 
+    });
+    
+    // Check if we were redirected to an auth page
+    const currentUrl = page.url();
+    const isAuthPage = currentUrl.includes("auth.openai.com") || 
+                       currentUrl.includes("/log-in") ||
+                       currentUrl.includes("/login") ||
+                       currentUrl.includes("/signin");
+    
+    if (isAuthPage) {
+      return {
+        valid: false,
+        error: `Auth cookies expired - redirected to ${currentUrl}. Re-run 'pnpm run auth:export' to refresh.`
+      };
+    }
+    
+    // Also check page content for login forms
+    const hasLoginForm = await page.evaluate(() => {
+      return document.querySelector('input[type="email"]') !== null ||
+             document.querySelector('[data-testid="login"]') !== null ||
+             document.querySelector('button:contains("Log in")') !== null ||
+             document.querySelector('button:contains("Sign up")') !== null;
+    }).catch(() => false);
+    
+    if (hasLoginForm) {
+      return {
+        valid: false,
+        error: `Auth cookies expired - login form detected on ${currentUrl}. Re-run 'pnpm run auth:export' to refresh.`
+      };
+    }
+    
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Auth validation failed: ${error.message}`
+    };
+  }
+}
+
+/**
  * Click overlay bind button for specified role.
  * Waits for button to be enabled, clicks with fallback, then confirms
  * bind success via the button's data-active attribute (locale-agnostic).

@@ -84,6 +84,9 @@ var STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
+  WRONG_TARGET: "wrong_target",
+  STALE_TARGET: "stale_target",
+  UNREACHABLE_TARGET: "unreachable_target",
   BINDING_INVALID: "binding_invalid",
   STARTER_SETTLE_TIMEOUT: "starter_settle_timeout",
   TARGET_SETTLE_TIMEOUT: "target_settle_timeout",
@@ -1027,6 +1030,9 @@ function normalizePosition(position) {
 // background.ts
 var activeLoopToken = 0;
 var keepAlivePorts = /* @__PURE__ */ new Set();
+function setActiveLoopTokenForTest(token) {
+  activeLoopToken = token;
+}
 var MAX_RUNTIME_EVENTS = 30;
 var runtimeEvents = [];
 function addRuntimeEvent(event) {
@@ -1090,6 +1096,62 @@ function resolveDispatchFailureCode(sendResult) {
     return dispatchCode ?? sendResult.error ?? "dispatch_rejected";
   }
   return sendResult.error ?? "dispatch_rejected";
+}
+function mapObservationClassificationToStopReason(classification) {
+  switch (classification) {
+    case "wrong_target":
+      return STOP_REASONS.WRONG_TARGET;
+    case "stale_target":
+      return STOP_REASONS.STALE_TARGET;
+    case "unreachable_target":
+      return STOP_REASONS.UNREACHABLE_TARGET;
+  }
+}
+async function handleSettledReplyFailure({
+  settled,
+  sourceRole,
+  targetRole,
+  round,
+  progress
+}) {
+  if (settled.reason === "loop_cancelled") {
+    return false;
+  }
+  const observationFailureReasons = /* @__PURE__ */ new Set([
+    STOP_REASONS.WRONG_TARGET,
+    STOP_REASONS.STALE_TARGET,
+    STOP_REASONS.UNREACHABLE_TARGET
+  ]);
+  const isObservationFailure = observationFailureReasons.has(
+    settled.reason
+  );
+  addRuntimeEvent({
+    phaseStep: isObservationFailure ? "reply_observation_failed" : "reply_timeout",
+    sourceRole,
+    targetRole,
+    round,
+    dispatchReadbackSummary: progress.dispatchReadbackSummary,
+    sendTriggerMode: progress.sendTriggerMode,
+    verificationBaseline: progress.verificationBaselineSummary,
+    verificationPollSample: progress.lastVerificationPollSample ?? "no_poll_sample",
+    verificationVerdict: isObservationFailure ? settled.reason : "reply_timeout"
+  });
+  await updateState({
+    type: "set_runtime_activity",
+    activity: {
+      step: `waiting ${targetRole} reply`,
+      sourceRole,
+      targetRole,
+      pendingRound: round,
+      transport: progress.sendTransport,
+      selector: isObservationFailure ? settled.reason : "reply_timeout"
+    }
+  });
+  await updateState({
+    type: "stop_condition",
+    reason: settled.reason
+  });
+  return true;
 }
 function createVerificationHopId(sessionId, round) {
   return `s${sessionId}-r${round}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1491,6 +1553,27 @@ function startRelayLoop(state) {
   const token = activeLoopToken;
   void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS);
 }
+function getHopExecutionPlan(stage) {
+  if (stage === "verifying") {
+    return {
+      shouldSend: false,
+      shouldVerify: true,
+      shouldWait: true
+    };
+  }
+  if (stage === "waiting_reply") {
+    return {
+      shouldSend: false,
+      shouldVerify: false,
+      shouldWait: true
+    };
+  }
+  return {
+    shouldSend: true,
+    shouldVerify: true,
+    shouldWait: true
+  };
+}
 async function runRelayLoop(token, settings) {
   while (token === activeLoopToken) {
     const state = await getState();
@@ -1509,23 +1592,39 @@ async function runRelayLoop(token, settings) {
     const targetRole = activeHop.targetRole;
     const sourceBinding = state.bindings[sourceRole];
     const targetBinding = state.bindings[targetRole];
-    await updateState({
-      type: "set_runtime_activity",
-      activity: {
-        step: `reading ${sourceRole}`,
-        sourceRole,
-        targetRole,
-        pendingRound: activeHop.round,
-        transport: null,
-        selector: null
-      }
-    });
-    if (!sourceBinding || !targetBinding) {
+    const stagePlan = getHopExecutionPlan(activeHop.stage);
+    if (stagePlan.shouldSend) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `reading ${sourceRole}`,
+          sourceRole,
+          targetRole,
+          pendingRound: activeHop.round,
+          transport: null,
+          selector: null
+        }
+      });
+    }
+    if (stagePlan.shouldSend && (!sourceBinding || !targetBinding)) {
       await updateState({
         type: "invalidate_binding",
         role: !sourceBinding ? sourceRole : targetRole
       });
       return;
+    }
+    if (!stagePlan.shouldSend) {
+      const resumeResult = await resumePersistedHop({
+        activeHop,
+        sourceRole,
+        targetRole,
+        token,
+        settings
+      });
+      if (!resumeResult.ok) {
+        return;
+      }
+      continue;
     }
     const sourceTab = await ensureRunnableBinding(sourceRole, sourceBinding);
     const targetTab = await ensureRunnableBinding(targetRole, targetBinding);
@@ -1671,214 +1770,64 @@ async function runRelayLoop(token, settings) {
       ...activeHop,
       targetTabId: targetBinding.tabId,
       hopId: verificationHopId,
-      stage: "verifying"
+      stage: "verifying",
+      progress: {
+        sourceHash,
+        relayPayloadText: envelope,
+        baselineUserHash,
+        baselineGenerating,
+        baselineLatestUserText,
+        baselineAssistantHash: baselineTarget.ok ? baselineTarget.result.hash : null,
+        verificationBaselineSummary,
+        dispatchReadbackSummary,
+        sendTriggerMode: sendResult.mode,
+        sendTransport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
+        lastVerificationPollSample: null,
+        targetIdentity: captureHopTargetIdentity(targetBinding)
+      }
     };
     await updateState({
       type: "set_execution_hop",
       hop: verifyingHop
     });
-    await updateState({
-      type: "set_runtime_activity",
-      activity: {
-        step: `verifying ${targetRole} submission`,
-        sourceRole,
-        targetRole,
-        pendingRound: activeHop.round,
-        transport: "verifying",
-        selector: "pending"
-      }
-    });
-    const verificationTimeoutMs = 1e4;
-    const verificationPollIntervalMs = 500;
-    const verificationStartTime = Date.now();
-    let acceptanceEstablished = false;
-    let lastVerificationPollSample = "no_poll_sample";
-    let lastAcceptanceGateReason = "acceptance_not_established_observation_window_only";
-    while (Date.now() - verificationStartTime < verificationTimeoutMs) {
-      if (token !== activeLoopToken) {
-        return;
-      }
-      const currentState = await getState();
-      if (currentState.phase !== PHASES.RUNNING) {
-        return;
-      }
-      await sleep(verificationPollIntervalMs);
-      const observation = await requestTargetObservationSample(targetBinding.tabId);
-      if (!observation.ok) {
-        await updateState({
-          type: "set_runtime_activity",
-          activity: {
-            step: `verifying ${targetRole} submission`,
-            sourceRole,
-            targetRole,
-            pendingRound: currentState.activeHop?.round ?? activeHop.round,
-            transport: "verifying",
-            selector: "activity_check_failed"
-          }
-        });
-        continue;
-      }
-      const verificationResult = evaluateSubmissionVerification({
-        baselineUserHash,
-        baselineGenerating,
-        baselineLatestUserText,
-        currentUserHash: observation.result.latestUser.hash,
-        currentGenerating: observation.result.generating,
-        currentLatestUserText: observation.result.latestUser.text,
-        relayPayloadText: envelope,
-        expectedHopId: verificationHopId
-      });
-      const acceptanceGate = evaluateSubmissionAcceptanceGate(verificationResult);
-      const verificationPollSampleBase = formatVerificationPollSample(
-        observation.result.latestUser.hash,
-        observation.result.generating,
-        observation.result.latestUser.text
-      );
-      const verificationPollSample = [
-        verificationPollSampleBase,
-        `gate:${acceptanceGate.reason}`,
-        `hop_binding:${verificationResult.hopBindingStrength}`,
-        `payload:${verificationResult.payloadCorrelationStrength}`,
-        `generation:${verificationResult.generationSettlementStrength}`,
-        `user_turn_changed:${verificationResult.userTurnChanged}`
-      ].join("|");
-      lastVerificationPollSample = verificationPollSample;
-      lastAcceptanceGateReason = acceptanceGate.reason;
-      if (acceptanceGate.acceptedEquivalentEvidence) {
-        addRuntimeEvent({
-          phaseStep: "verification_passed",
-          sourceRole,
-          targetRole,
-          round: activeHop.round,
-          dispatchReadbackSummary,
-          sendTriggerMode: sendResult.mode,
-          verificationBaseline: verificationBaselineSummary,
-          verificationPollSample,
-          verificationVerdict: acceptanceGate.reason
-        });
-        acceptanceEstablished = true;
-        break;
-      }
-      addRuntimeEvent({
-        phaseStep: "verifying",
-        sourceRole,
-        targetRole,
-        round: activeHop.round,
-        dispatchReadbackSummary,
-        sendTriggerMode: sendResult.mode,
-        verificationBaseline: verificationBaselineSummary,
-        verificationPollSample,
-        verificationVerdict: acceptanceGate.reason
-      });
-      await updateState({
-        type: "set_runtime_activity",
-        activity: {
-          step: `verifying ${targetRole} submission`,
-          sourceRole,
-          targetRole,
-          pendingRound: currentState.activeHop?.round ?? activeHop.round,
-          transport: "verifying",
-          selector: acceptanceGate.reason
-        }
-      });
-    }
-    if (!acceptanceEstablished) {
-      addRuntimeEvent({
-        phaseStep: "verification_failed",
-        sourceRole,
-        targetRole,
-        round: activeHop.round,
-        dispatchReadbackSummary,
-        sendTriggerMode: sendResult.mode,
-        verificationBaseline: verificationBaselineSummary,
-        verificationPollSample: lastVerificationPollSample,
-        verificationVerdict: lastAcceptanceGateReason
-      });
-      await updateState({
-        type: "set_runtime_activity",
-        activity: {
-          step: `verifying ${targetRole} submission`,
-          sourceRole,
-          targetRole,
-          pendingRound: activeHop.round,
-          transport: "verifying",
-          selector: "acceptance_not_established"
-        }
-      });
-      await updateState({
-        type: "stop_condition",
-        reason: STOP_REASONS.SUBMISSION_NOT_VERIFIED
-      });
-      return;
-    }
-    await updateState({
-      type: "set_execution_hop",
-      hop: {
-        ...verifyingHop,
-        stage: "waiting_reply"
-      }
-    });
-    await updateState({
-      type: "set_runtime_activity",
-      activity: {
-        step: `waiting ${targetRole} reply`,
-        sourceRole,
-        targetRole,
-        pendingRound: activeHop.round,
-        transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
-        selector: "waiting_reply"
-      }
-    });
-    addRuntimeEvent({
-      phaseStep: "waiting_reply",
+    const verificationResult = await verifySubmittedHop({
+      activeHop: verifyingHop,
       sourceRole,
       targetRole,
-      round: activeHop.round,
-      dispatchReadbackSummary,
-      sendTriggerMode: sendResult.mode,
-      verificationBaseline: verificationBaselineSummary,
-      verificationPollSample: lastVerificationPollSample,
-      verificationVerdict: "waiting_reply_after_acceptance"
+      token
     });
-    const settled = await waitForSettledReply({
-      tabId: targetBinding.tabId,
-      baselineHash: baselineTarget.ok ? baselineTarget.result.hash : null,
+    if (!verificationResult.ok) {
+      return;
+    }
+    const waitingHop = {
+      ...verifyingHop,
+      stage: "waiting_reply",
+      progress: verificationResult.progress
+    };
+    await updateState({
+      type: "set_execution_hop",
+      hop: waitingHop
+    });
+    const settled = await waitForHopReply({
+      activeHop: waitingHop,
+      sourceRole,
+      targetRole,
       settings,
       token
     });
     if (token !== activeLoopToken) {
       return;
     }
-    if ("reason" in settled && settled.reason === STOP_REASONS.HOP_TIMEOUT) {
-      addRuntimeEvent({
-        phaseStep: "reply_timeout",
+    if (!settled.ok) {
+      if (await handleSettledReplyFailure({
+        settled,
         sourceRole,
         targetRole,
         round: activeHop.round,
-        dispatchReadbackSummary,
-        sendTriggerMode: sendResult.mode,
-        verificationBaseline: verificationBaselineSummary,
-        verificationPollSample: lastVerificationPollSample,
-        verificationVerdict: "reply_timeout"
-      });
-      await updateState({
-        type: "set_runtime_activity",
-        activity: {
-          step: `waiting ${targetRole} reply`,
-          sourceRole,
-          targetRole,
-          pendingRound: activeHop.round,
-          transport: `${sendResult.applyMode ?? "unknown"}:${sendResult.mode ?? "unknown"}`,
-          selector: "reply_timeout"
-        }
-      });
-      await updateState({
-        type: "stop_condition",
-        reason: STOP_REASONS.HOP_TIMEOUT
-      });
-      return;
-    }
-    if (!settled.ok) {
+        progress: verificationResult.progress
+      })) {
+        return;
+      }
       await updateState({
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target_wait:${targetRole}`
@@ -1889,7 +1838,7 @@ async function runRelayLoop(token, settings) {
       type: "hop_completed",
       sourceRole,
       targetRole,
-      sourceHash,
+      sourceHash: verificationResult.progress.sourceHash,
       targetHash: settled.result.hash
     });
     const postHop = evaluatePostHopGuard({
@@ -1906,6 +1855,139 @@ async function runRelayLoop(token, settings) {
       return;
     }
   }
+}
+async function resumePersistedHop({
+  activeHop,
+  sourceRole,
+  targetRole,
+  token,
+  settings
+}) {
+  const progress = activeHop.progress ?? null;
+  if (!activeHop.targetTabId || !activeHop.hopId || !progress) {
+    await updateState({
+      type: "runtime_error",
+      reason: `${ERROR_REASONS.INTERNAL_ERROR}:missing_hop_progress`
+    });
+    return { ok: false };
+  }
+  if (activeHop.stage === "verifying") {
+    const verificationResult = await verifySubmittedHop({
+      activeHop,
+      sourceRole,
+      targetRole,
+      token
+    });
+    if (!verificationResult.ok) {
+      return verificationResult;
+    }
+    const waitingHop = {
+      ...activeHop,
+      stage: "waiting_reply",
+      progress: verificationResult.progress
+    };
+    await updateState({
+      type: "set_execution_hop",
+      hop: waitingHop
+    });
+    const settled2 = await waitForHopReply({
+      activeHop: waitingHop,
+      sourceRole,
+      targetRole,
+      settings,
+      token
+    });
+    if (token !== activeLoopToken) {
+      return { ok: false };
+    }
+    if (!settled2.ok) {
+      if (await handleSettledReplyFailure({
+        settled: settled2,
+        sourceRole,
+        targetRole,
+        round: activeHop.round,
+        progress: verificationResult.progress
+      })) {
+        return { ok: false };
+      }
+      await updateState({
+        type: "selector_failure",
+        reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target_wait:${targetRole}`
+      });
+      return { ok: false };
+    }
+    const nextState2 = await updateState({
+      type: "hop_completed",
+      sourceRole,
+      targetRole,
+      sourceHash: verificationResult.progress.sourceHash,
+      targetHash: settled2.result.hash
+    });
+    const postHop2 = evaluatePostHopGuard({
+      assistantText: settled2.result.text,
+      round: nextState2.round,
+      maxRounds: settings.maxRounds,
+      stopMarker: settings.stopMarker
+    });
+    if (postHop2.shouldStop) {
+      await updateState({
+        type: "stop_condition",
+        reason: mapGuardReasonToStop(postHop2.reason)
+      });
+      return { ok: false };
+    }
+    return verificationResult;
+  }
+  const settled = await waitForHopReply({
+    activeHop,
+    sourceRole,
+    targetRole,
+    settings,
+    token
+  });
+  if (token !== activeLoopToken) {
+    return { ok: false };
+  }
+  if (!settled.ok) {
+    if (await handleSettledReplyFailure({
+      settled,
+      sourceRole,
+      targetRole,
+      round: activeHop.round,
+      progress
+    })) {
+      return { ok: false };
+    }
+    await updateState({
+      type: "selector_failure",
+      reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target_wait:${targetRole}`
+    });
+    return { ok: false };
+  }
+  const nextState = await updateState({
+    type: "hop_completed",
+    sourceRole,
+    targetRole,
+    sourceHash: progress.sourceHash,
+    targetHash: settled.result.hash
+  });
+  const postHop = evaluatePostHopGuard({
+    assistantText: settled.result.text,
+    round: nextState.round,
+    maxRounds: settings.maxRounds,
+    stopMarker: settings.stopMarker
+  });
+  if (postHop.shouldStop) {
+    await updateState({
+      type: "stop_condition",
+      reason: mapGuardReasonToStop(postHop.reason)
+    });
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    progress
+  };
 }
 async function ensureRunnableBinding(role, binding) {
   if (!binding) {
@@ -1959,6 +2041,275 @@ async function requestTargetObservationSample(tabId) {
     result: activity.result.sample
   };
 }
+function captureHopTargetIdentity(binding) {
+  const normalizedUrl = binding?.urlInfo?.supported ? binding.urlInfo.normalizedUrl : null;
+  return {
+    normalizedUrl
+  };
+}
+function classifyTargetObservation({
+  requestedTabId,
+  canonicalTargetTabId,
+  expectedTargetIdentity,
+  observation
+}) {
+  if (!observation.ok) {
+    return {
+      classification: "unreachable_target",
+      requestedTabId,
+      canonicalTargetTabId,
+      observedNormalizedUrl: null,
+      error: "error" in observation ? observation.error : "target_observation_unavailable"
+    };
+  }
+  const observedUrlInfo = parseChatGptThreadUrl(observation.result.identity.url);
+  const observedNormalizedUrl = observedUrlInfo.supported ? observedUrlInfo.normalizedUrl : null;
+  if (requestedTabId !== canonicalTargetTabId) {
+    return {
+      classification: "wrong_target",
+      requestedTabId,
+      canonicalTargetTabId,
+      observedNormalizedUrl,
+      sample: observation.result
+    };
+  }
+  if (expectedTargetIdentity?.normalizedUrl && observedNormalizedUrl !== expectedTargetIdentity.normalizedUrl) {
+    return {
+      classification: "stale_target",
+      requestedTabId,
+      canonicalTargetTabId,
+      observedNormalizedUrl,
+      sample: observation.result
+    };
+  }
+  return {
+    classification: "correct_target",
+    requestedTabId,
+    canonicalTargetTabId,
+    observedNormalizedUrl,
+    sample: observation.result
+  };
+}
+async function verifySubmittedHop({
+  activeHop,
+  sourceRole,
+  targetRole,
+  token
+}) {
+  const progress = activeHop.progress ?? null;
+  if (!progress || !activeHop.targetTabId || !activeHop.hopId) {
+    await updateState({
+      type: "runtime_error",
+      reason: `${ERROR_REASONS.INTERNAL_ERROR}:missing_hop_progress`
+    });
+    return { ok: false };
+  }
+  await updateState({
+    type: "set_runtime_activity",
+    activity: {
+      step: `verifying ${targetRole} submission`,
+      sourceRole,
+      targetRole,
+      pendingRound: activeHop.round,
+      transport: "verifying",
+      selector: "pending"
+    }
+  });
+  const verificationTimeoutMs = 1e4;
+  const verificationPollIntervalMs = 500;
+  const verificationStartTime = Date.now();
+  let acceptanceEstablished = false;
+  let lastVerificationPollSample = progress.lastVerificationPollSample ?? "no_poll_sample";
+  let lastAcceptanceGateReason = "acceptance_not_established_observation_window_only";
+  while (Date.now() - verificationStartTime < verificationTimeoutMs) {
+    if (token !== activeLoopToken) {
+      return { ok: false };
+    }
+    const currentState = await getState();
+    if (currentState.phase !== PHASES.RUNNING) {
+      return { ok: false };
+    }
+    await sleep(verificationPollIntervalMs);
+    const observation = classifyTargetObservation({
+      requestedTabId: activeHop.targetTabId,
+      canonicalTargetTabId: activeHop.targetTabId,
+      expectedTargetIdentity: progress.targetIdentity ?? null,
+      observation: await requestTargetObservationSample(activeHop.targetTabId)
+    });
+    if (observation.classification !== "correct_target") {
+      lastAcceptanceGateReason = observation.classification;
+      lastVerificationPollSample = observation.classification;
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: `verifying ${targetRole} submission`,
+          sourceRole,
+          targetRole,
+          pendingRound: currentState.activeHop?.round ?? activeHop.round,
+          transport: "verifying",
+          selector: observation.classification
+        }
+      });
+      continue;
+    }
+    const verificationResult = evaluateSubmissionVerification({
+      baselineUserHash: progress.baselineUserHash,
+      baselineGenerating: progress.baselineGenerating,
+      baselineLatestUserText: progress.baselineLatestUserText,
+      currentUserHash: observation.sample.latestUser.hash,
+      currentGenerating: observation.sample.generating,
+      currentLatestUserText: observation.sample.latestUser.text,
+      relayPayloadText: progress.relayPayloadText,
+      expectedHopId: activeHop.hopId
+    });
+    const acceptanceGate = evaluateSubmissionAcceptanceGate(verificationResult);
+    const verificationPollSampleBase = formatVerificationPollSample(
+      observation.sample.latestUser.hash,
+      observation.sample.generating,
+      observation.sample.latestUser.text
+    );
+    const verificationPollSample = [
+      verificationPollSampleBase,
+      `gate:${acceptanceGate.reason}`,
+      `hop_binding:${verificationResult.hopBindingStrength}`,
+      `payload:${verificationResult.payloadCorrelationStrength}`,
+      `generation:${verificationResult.generationSettlementStrength}`,
+      `user_turn_changed:${verificationResult.userTurnChanged}`
+    ].join("|");
+    lastVerificationPollSample = verificationPollSample;
+    lastAcceptanceGateReason = acceptanceGate.reason;
+    if (acceptanceGate.acceptedEquivalentEvidence) {
+      addRuntimeEvent({
+        phaseStep: "verification_passed",
+        sourceRole,
+        targetRole,
+        round: activeHop.round,
+        dispatchReadbackSummary: progress.dispatchReadbackSummary,
+        sendTriggerMode: progress.sendTriggerMode,
+        verificationBaseline: progress.verificationBaselineSummary,
+        verificationPollSample,
+        verificationVerdict: acceptanceGate.reason
+      });
+      acceptanceEstablished = true;
+      break;
+    }
+    addRuntimeEvent({
+      phaseStep: "verifying",
+      sourceRole,
+      targetRole,
+      round: activeHop.round,
+      dispatchReadbackSummary: progress.dispatchReadbackSummary,
+      sendTriggerMode: progress.sendTriggerMode,
+      verificationBaseline: progress.verificationBaselineSummary,
+      verificationPollSample,
+      verificationVerdict: acceptanceGate.reason
+    });
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `verifying ${targetRole} submission`,
+        sourceRole,
+        targetRole,
+        pendingRound: currentState.activeHop?.round ?? activeHop.round,
+        transport: "verifying",
+        selector: acceptanceGate.reason
+      }
+    });
+  }
+  if (!acceptanceEstablished) {
+    addRuntimeEvent({
+      phaseStep: "verification_failed",
+      sourceRole,
+      targetRole,
+      round: activeHop.round,
+      dispatchReadbackSummary: progress.dispatchReadbackSummary,
+      sendTriggerMode: progress.sendTriggerMode,
+      verificationBaseline: progress.verificationBaselineSummary,
+      verificationPollSample: lastVerificationPollSample,
+      verificationVerdict: lastAcceptanceGateReason
+    });
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `verifying ${targetRole} submission`,
+        sourceRole,
+        targetRole,
+        pendingRound: activeHop.round,
+        transport: "verifying",
+        selector: "acceptance_not_established"
+      }
+    });
+    await updateState({
+      type: "stop_condition",
+      reason: STOP_REASONS.SUBMISSION_NOT_VERIFIED
+    });
+    return { ok: false };
+  }
+  const nextProgress = {
+    ...progress,
+    lastVerificationPollSample
+  };
+  await updateState({
+    type: "set_execution_hop",
+    hop: {
+      ...activeHop,
+      progress: nextProgress
+    }
+  });
+  return {
+    ok: true,
+    progress: nextProgress
+  };
+}
+async function waitForHopReply({
+  activeHop,
+  sourceRole,
+  targetRole,
+  settings,
+  token
+}) {
+  const progress = activeHop.progress ?? null;
+  if (!progress || !activeHop.targetTabId) {
+    await updateState({
+      type: "runtime_error",
+      reason: `${ERROR_REASONS.INTERNAL_ERROR}:missing_hop_progress`
+    });
+    return {
+      ok: false,
+      reason: STOP_REASONS.HOP_TIMEOUT
+    };
+  }
+  await updateState({
+    type: "set_runtime_activity",
+    activity: {
+      step: `waiting ${targetRole} reply`,
+      sourceRole,
+      targetRole,
+      pendingRound: activeHop.round,
+      transport: progress.sendTransport,
+      selector: "waiting_reply"
+    }
+  });
+  addRuntimeEvent({
+    phaseStep: "waiting_reply",
+    sourceRole,
+    targetRole,
+    round: activeHop.round,
+    dispatchReadbackSummary: progress.dispatchReadbackSummary,
+    sendTriggerMode: progress.sendTriggerMode,
+    verificationBaseline: progress.verificationBaselineSummary,
+    verificationPollSample: progress.lastVerificationPollSample ?? "no_poll_sample",
+    verificationVerdict: "waiting_reply_after_acceptance"
+  });
+  return waitForSettledReply({
+    tabId: activeHop.targetTabId,
+    canonicalTargetTabId: activeHop.targetTabId,
+    baselineHash: progress.baselineAssistantHash,
+    expectedTargetIdentity: progress.targetIdentity ?? null,
+    settings,
+    token
+  });
+}
 async function captureSubmissionVerificationBaseline(tabId, timeoutMs = 5e3, pollIntervalMs = 250) {
   const startedAt = Date.now();
   let lastReason = "thread_activity_unavailable";
@@ -2001,7 +2352,9 @@ async function sendRelayMessage(tabId, text) {
 }
 async function waitForSettledReply({
   tabId,
+  canonicalTargetTabId,
   baselineHash,
+  expectedTargetIdentity,
   settings,
   token
 }) {
@@ -2016,19 +2369,25 @@ async function waitForSettledReply({
       };
     }
     await sleep(settings.pollIntervalMs);
-    const snapshot = await requestAssistantSnapshot(tabId);
-    const retryableErrors = [
-      "assistant_message_not_found",
-      "assistant_message_empty"
-    ];
-    if (!snapshot.ok) {
-      const error = "error" in snapshot ? snapshot.error : "unknown";
-      if (!retryableErrors.includes(error)) {
-        return snapshot;
-      }
+    const observation = classifyTargetObservation({
+      requestedTabId: tabId,
+      canonicalTargetTabId,
+      expectedTargetIdentity,
+      observation: await requestTargetObservationSample(tabId)
+    });
+    if (observation.classification !== "correct_target") {
+      return {
+        ok: false,
+        reason: mapObservationClassificationToStopReason(observation.classification)
+      };
+    }
+    const latestAssistant = observation.sample.latestAssistant;
+    if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
+      stableHash = null;
+      stableCount = 0;
       continue;
     }
-    const currentHash = snapshot.result.hash;
+    const currentHash = latestAssistant.hash;
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
       stableCount = 0;
@@ -2040,8 +2399,15 @@ async function waitForSettledReply({
       stableHash = currentHash;
       stableCount = 1;
     }
-    if (stableCount >= settings.settleSamplesRequired) {
-      return snapshot;
+    if (stableCount >= settings.settleSamplesRequired && observation.sample.generating === false) {
+      return {
+        ok: true,
+        result: {
+          text: latestAssistant.text,
+          hash: currentHash,
+          sample: observation.sample
+        }
+      };
     }
   }
   return {
@@ -2194,3 +2560,10 @@ function sleep(durationMs) {
 function structuredCloneSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
+export {
+  classifyTargetObservation,
+  getHopExecutionPlan,
+  runRelayLoop,
+  setActiveLoopTokenForTest,
+  waitForSettledReply
+};

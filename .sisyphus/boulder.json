@@ -42,7 +42,16 @@
     "ses_292794e1bffe9Hga6ul69E4NTF",
     "ses_292794e22ffeAkHCOjw5zxl73k",
     "ses_292794e1affexypvdbczLnTDzM",
-    "ses_29273a9fdffejq41BqmOtnAbRa"
+    "ses_29273a9fdffejq41BqmOtnAbRa",
+    "ses_28f8b927affeO6oImaXH1njl1D",
+    "ses_28f8b9109ffeBIa686Tnd7WBfQ",
+    "ses_28f8b9105ffeaRs1m8uh61SHSU",
+    "ses_28f8755e7ffeZ8735qIyjd8DnQ",
+    "ses_28f79a096ffeo7tcBtoRPLSa7f",
+    "ses_28f71484fffeOOWk5P1cTx6jxw",
+    "ses_28f6de171ffeQOG6L6VgJZtBpk",
+    "ses_28f6de16cffeYv31m9ffTi5AOX",
+    "ses_28f6bae00ffe8dKAeqafTKhqtH"
   ],
   "plan_name": "residual-control-plane-closure",
   "agent": "atlas",
@@ -91,6 +100,42 @@
       "agent": "Sisyphus-Junior",
       "category": "deep",
       "updated_at": "2026-04-08T14:49:16.684Z"
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "Bind verification and waiting to the canonical target page",
+      "session_id": "ses_28f8755e7ffeZ8735qIyjd8DnQ",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-09T04:34:05.861Z"
+    },
+    "todo:7": {
+      "task_key": "todo:7",
+      "task_label": "7",
+      "task_title": "Tighten settled-reply gating and timeout taxonomy",
+      "session_id": "ses_28f79a096ffeo7tcBtoRPLSa7f",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-09T04:43:23.568Z"
+    },
+    "todo:8": {
+      "task_key": "todo:8",
+      "task_label": "8",
+      "task_title": "Lock relay-core and polling regressions at unit level",
+      "session_id": "ses_28f71484fffeOOWk5P1cTx6jxw",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-09T04:47:22.663Z"
+    },
+    "todo:9": {
+      "task_key": "todo:9",
+      "task_label": "9",
+      "task_title": "Extend Playwright control-flow coverage for resume and continuation semantics",
+      "session_id": "ses_28f6bae00ffe8dKAeqafTKhqtH",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-09T04:53:38.109Z"
     }
   }
 }

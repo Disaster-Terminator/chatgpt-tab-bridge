@@ -314,7 +314,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `refactor(observation): unify target sample contract` | Files: `["src/extension/content-script.ts", "src/extension/background.ts", "src/extension/shared/types.ts"]`
 
-- [ ] 6. Bind verification and waiting to the canonical target page
+- [x] 6. Bind verification and waiting to the canonical target page
 
   **What to do**: Refactor background verify/wait flow so it always observes the target bound in the canonical hop contract, never whichever role/display the popup currently implies. Use the unified sample from Task 5 to keep target identity, latest user fact, and generation fact aligned through baseline capture, verification polling, waiting-reply entry, and hop completion.
   **Must NOT do**: Do not fall back to `activeTab`, do not silently switch target identity mid-hop, and do not allow runtime events to declare success without matching page facts.
@@ -354,7 +354,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `fix(waiting): bind verify and wait to canonical target` | Files: `["src/extension/background.ts", "src/extension/content-script.ts", "tests/relay-core.test.mjs"]`
 
-- [ ] 7. Tighten settled-reply gating and timeout taxonomy
+- [x] 7. Tighten settled-reply gating and timeout taxonomy
 
   **What to do**: Redefine settled reply so background waits for a coherent target sample that proves: target identity still matches, assistant state changed from baseline, the changed assistant state is stable for the configured sample count, and `generating === false`. Rework stop/error classification so dispatch-time timeout, acceptance-not-established, observation failures, and post-acceptance reply timeout are distinct and evidence-backed.
   **Must NOT do**: Do not “fix” this by increasing timeout or settle sample counts alone, and do not let runtime self-report outrank page facts.
@@ -394,7 +394,7 @@ Wave 3: Playwright regression coverage, docs/evidence alignment, full regression
 
   **Commit**: YES | Message: `fix(waiting): tighten settle semantics and classify timeouts` | Files: `["src/extension/background.ts", "src/extension/core/relay-core.ts", "tests/polling-cancellation.test.mjs", "tests/relay-core.test.mjs"]`
 
-- [ ] 8. Lock relay-core and polling regressions at unit level
+- [x] 8. Lock relay-core and polling regressions at unit level
 
   **What to do**: Extend unit tests to make the new acceptance/settle/taxonomy semantics non-regressible: strong-vs-weak acceptance still works, `waiting_reply` cannot occur before acceptance, streaming cannot settle early, observation failures do not masquerade as timeouts, and retryable sampling gaps remain retryable until the correct classified stop threshold is reached.
   **Must NOT do**: Do not dilute product semantics just to simplify tests, and do not replace page-fact assertions with runtime text snapshots.

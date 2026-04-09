@@ -18,20 +18,22 @@ const { STOP_REASONS } = await importExtensionModule("core/constants");
  */
 function simulateWaitForSettledReply({
   baselineHash,
-  hashes,
+  samples,
   settleSamplesRequired,
   hopTimeoutMs,
   pollIntervalMs,
   token,
-  activeToken
+  activeToken,
+  observationClassification = "correct_target"
 }) {
   const startedAt = Date.now();
   let stableHash = null;
   let stableCount = 0;
   let polls = 0;
+  void pollIntervalMs;
 
   // Simulate polling
-  for (const hash of hashes) {
+   for (const sample of samples) {
     polls++;
     const now = Date.now();
     
@@ -53,6 +55,16 @@ function simulateWaitForSettledReply({
       };
     }
 
+    if (observationClassification !== "correct_target") {
+      return {
+        ok: false,
+        reason: observationClassification,
+        polls
+      };
+    }
+
+    const hash = sample.hash;
+
     // Process hash
     if (!hash || hash === baselineHash) {
       stableHash = null;
@@ -68,7 +80,7 @@ function simulateWaitForSettledReply({
     }
 
     // Check if settled
-    if (stableCount >= settleSamplesRequired) {
+    if (stableCount >= settleSamplesRequired && sample.generating === false) {
       return {
         ok: true,
         hash,
@@ -88,7 +100,11 @@ function simulateWaitForSettledReply({
 test("waitForSettledReply cancels when token doesn't match activeToken", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: ["h1", "h2", "h3"],
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h2", generating: false },
+      { hash: "h3", generating: false }
+    ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -103,9 +119,9 @@ test("waitForSettledReply cancels when token doesn't match activeToken", () => {
 test("waitForSettledReply requires exactly settleSamplesRequired stable hashes", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: [
-      "h1",  // First change - stableCount = 1 (not enough)
-      "h1"   // Still h1 - stableCount = 2 (enough!)
+    samples: [
+      { hash: "h1", generating: true },   // Stable but still generating - cannot settle yet
+      { hash: "h1", generating: false }   // Same hash + generating false => settled
     ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
@@ -122,11 +138,11 @@ test("waitForSettledReply requires exactly settleSamplesRequired stable hashes",
 test("waitForSettledReply resets stability counter on hash churn", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: [
-      "h1",  // First change - stableCount = 1
-      "h2",  // Different hash - resets to stableCount = 1
-      "h2",  // Back to h2 - stableCount = 2 (enough!)
-      "h2"
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h2", generating: false },
+      { hash: "h2", generating: false },
+      { hash: "h2", generating: false }
     ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
@@ -143,12 +159,12 @@ test("waitForSettledReply returns hop_timeout when no stable hash within timeout
   // Simulate hashes that keep changing or too few samples
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: [
-      "h1",  // Change
-      "h2",  // Change resets
-      "h3",  // Change resets
-      "h4",  // Change resets
-      "h5"   // Change resets - never settles
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h2", generating: false },
+      { hash: "h3", generating: false },
+      { hash: "h4", generating: false },
+      { hash: "h5", generating: false }
       // Not enough hashes to timeout, but pattern shows issue
     ],
     settleSamplesRequired: 2,
@@ -166,7 +182,10 @@ test("waitForSettledReply returns hop_timeout when no stable hash within timeout
 test("waitForSettledReply handles empty baselineHash correctly", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: "",  // Empty baseline
-    hashes: ["h1", "h1"],
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h1", generating: false }
+    ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -181,7 +200,10 @@ test("waitForSettledReply handles empty baselineHash correctly", () => {
 test("waitForSettledReply handles null baselineHash correctly", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: null,  // Null baseline
-    hashes: ["h1", "h1"],
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h1", generating: false }
+    ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -196,7 +218,7 @@ test("waitForSettledReply handles null baselineHash correctly", () => {
 test("settleSamplesRequired of 1 settles immediately on first change", () => {
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: ["h1"],  // Just one change needed
+    samples: [{ hash: "h1", generating: false }],
     settleSamplesRequired: 1,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -213,7 +235,10 @@ test("multiple tokens only the matching one proceeds", () => {
   // Token 1 starts
   const result1 = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: ["h1", "h1"],
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h1", generating: false }
+    ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -226,7 +251,10 @@ test("multiple tokens only the matching one proceeds", () => {
   // Token 3 (the current one) would proceed
   const result3 = simulateWaitForSettledReply({
     baselineHash: "h0",
-    hashes: ["h1", "h1"],
+    samples: [
+      { hash: "h1", generating: false },
+      { hash: "h1", generating: false }
+    ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
     pollIntervalMs: 1500,
@@ -235,4 +263,39 @@ test("multiple tokens only the matching one proceeds", () => {
   });
 
   assert.equal(result3.ok, true);
+});
+
+test("waitForSettledReply does not settle while the stable changed hash is still generating", () => {
+  const result = simulateWaitForSettledReply({
+    baselineHash: "h0",
+    samples: [
+      { hash: "h1", generating: true },
+      { hash: "h1", generating: true },
+      { hash: "h1", generating: true }
+    ],
+    settleSamplesRequired: 2,
+    hopTimeoutMs: 60000,
+    pollIntervalMs: 1500,
+    token: 1,
+    activeToken: 1
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, STOP_REASONS.HOP_TIMEOUT);
+});
+
+test("waitForSettledReply classifies wrong-target observations distinctly from hop_timeout", () => {
+  const result = simulateWaitForSettledReply({
+    baselineHash: "h0",
+    samples: [{ hash: "h1", generating: false }],
+    settleSamplesRequired: 1,
+    hopTimeoutMs: 60000,
+    pollIntervalMs: 1500,
+    token: 1,
+    activeToken: 1,
+    observationClassification: "wrong_target"
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "wrong_target");
 });

@@ -1,355 +1,283 @@
 # ChatGPT Tab Bridge
 
-这是一个面向 Microsoft Edge 的浏览器扩展原型，用来在两个已经打开的 ChatGPT 线程之间做消息中继。
+在两个已经打开的 ChatGPT 页面之间做消息中继的浏览器扩展。
 
-## 目标
+> 当前阶段：**可运行原型（prototype）**，更适合实验、联调和工作流探索，不是面向大众用户的成品扩展。
 
-第一版只做一个收窄后的可用原型：
+---
 
-- 复用你已经在浏览器里打开的两个 ChatGPT 页面
-- 用户手动把其中一个标记为 `A`，另一个标记为 `B`
-- 在 popup 里选择由哪一边先开始
-- 扩展读取一边最近一条 assistant 回复，包装后发送给另一边
-- 在达到停止条件时结束运行
+## 它能做什么
 
-## 当前预期行为
+ChatGPT Tab Bridge 允许你把两个已经打开的 ChatGPT 页面分别绑定为 `A` 和 `B`，然后在它们之间自动接力：
 
-### 绑定
+- 绑定两个页面为 `A / B`
+- 选择由哪一侧先开始
+- 读取一侧最新的 assistant 回复
+- 组合成 relay payload 后发送到另一侧
+- 支持 `Start / Pause / Resume / Stop / Clear`
+- 支持页内悬浮窗操作，也提供 popup 作为总览和设置入口
 
-- 你先手动打开两个 ChatGPT 线程页面
-- 在页面上的悬浮控件里把它们分别标记为 `A` 和 `B`
-- 也可以在扩展 popup 里完成绑定
-- `A` 和 `B` 必须是两个不同的线程
+一句话说，它是一个“让两个 ChatGPT 页面接力对话”的扩展原型。
 
-### 启动
+---
 
-- 悬浮窗现在是日常主操作面
-- 当 `A` 和 `B` 都绑定完成后，状态会进入 `ready`
-- 这时 `Start` 才应该可点击
-- 点击 `Start` 后进入 `running`
-- `running` 只表示中继循环已经启动，不代表已经成功完成了一轮发送
-- 运行时可以在悬浮窗或 popup 里看到当前步骤，例如：
-  - `reading A`
-  - `sending A -> B`
-  - `waiting B reply`
+## 适合谁
 
-### 暂停 / 恢复 / 停止
+这个仓库更适合下面几类用户：
 
-- `Pause` 只在 `running` 时可用
-- `Resume` 只在 `paused` 时可用
-- `Stop` 只在 `running` 或 `paused` 时可用
-- `round` 在 `Pause` / `Resume` 之间不能重置
+- 想实验“双 ChatGPT 标签页接力”工作流的人
+- 想做 agent-to-agent / tab-to-tab relay 原型的人
+- 能接受手动加载浏览器扩展、自己构建和调试的人
 
-### Override
+如果你想要的是：
 
-- `nextHopOverride` 只允许在 `paused` 时修改
-- 在 `running` 时不能修改
-- 恢复后只消费一次，然后自动清空
+- 一键安装、即装即用的商店扩展
+- 面向普通用户的稳定成品
+- 长时间无人值守的高可靠自动化
 
-### 结束状态
+那这个仓库目前还不属于那一类。
 
-- 正常停止进入 `stopped`
-- 运行时正确性问题进入 `error`
-- `clearTerminal -> ready -> start` 是唯一的新会话入口
+---
 
-## 支持的页面 URL
+## 当前交互方式
 
-- 普通线程：
-  - `https://chatgpt.com/c/<conversation-id>`
-- 项目内线程：
-  - `https://chatgpt.com/g/<project-id>/c/<conversation-id>`
+扩展目前有两个操作入口：
 
-### Live Session 绑定（主模型）
+### 1) 页内悬浮窗
 
-插件现在支持两种绑定方式：
+这是主操作面，适合日常使用。
 
-1. **Live Session 绑定（主模型）**：绑定任何 ChatGPT 页面作为 live session，无需 URL
-   - 可以绑定根页面 `https://chatgpt.com/` 作为 live session
-   - 可以绑定任意 chatgpt.com 页面，即使没有 `/c/<id>` URL
-   - 绑定后可以通过发送消息让页面成为有内容的 live session
-   - relay 主链路完全支持 live session 工作
-
-2. **Persistent URL 绑定（增强模式）**：绑定具有 thread URL 的页面
-   - 当页面 URL 变成 `/c/<id>` 或 `/g/.../c/<id>` 时，自动升级为 persistent identity
-   - 这是可选增强，不是必须的
-
-### 不登录 / 无 URL 的产品语义
-
-- 产品主链路仍遵循 session-first：没有 persistent thread URL（/c/<id>）时，页面仍可作为 live session 绑定
-- 这说明 URL 不是 relay 主链路前提；URL 只是在后续出现时提供 persistent identity 增强
-- 但当前仓库里的 Playwright harness（尤其 `pnpm run test:real-hop` / `pnpm run test:e2e`）默认要求已导出的 auth 文件；缺失时脚本会在启动前退出
-- 因此“无 URL 可工作”描述的是产品 / 扩展身份模型，不等于“当前自动化脚本已支持无 auth 文件直接执行”
-
-### 运行时可见的失败 / 诊断层级
-
-当前 README 这里描述的是**运行时可见类别**，不要求每一项都与 stop reason 常量同名：
-
-1. `message_send_failed:<dispatch_code>` - 发送 / trigger 阶段失败；popup `lastIssue` 与终止态通常会落在这一类错误，runtime evidence 链里常伴随 `dispatch_rejected`
-2. `submission_not_verified` - 已打开观察窗口，但在验证窗口内没有拿到独立页面接受证据；runtime evidence 链里对应 `verification_failed`
-3. `hop_timeout` - 已进入 `waiting <role> reply`，但目标侧 assistant 回复未在超时窗口内稳定落地
-4. `binding_invalid` / `starter_settle_timeout` / `target_settle_timeout` - 绑定失效或前置就绪条件失败
-5. `url_not_available` 目前不是 stop / error 常量；它只是“当前仍是 live session、尚未升级到 persistent URL”的说明，不应单独视为主链路失败
-
-## 交互形态
-
-- **页内悬浮窗**：主操作面
-- **Popup**：设置、调试、完整状态与低频控制
-
-页内悬浮窗目前支持：
+你可以直接在 ChatGPT 页面里完成：
 
 - 绑定当前页为 `A`
 - 绑定当前页为 `B`
-- 解绑当前页
-- 选择 starter
-- `Start / Pause / Resume / Stop / Clear`
-- 显示 `phase / round / next hop / current step / last issue`
-- 拖动
-- 折叠
-- 打开 popup
+- 选择 starter（A 或 B）
+- `Start / Pause / Resume / Stop`
+- `Clear`
+- 查看当前 phase、round、next hop、step、last issue
+- 拖动悬浮窗、折叠悬浮窗
 
-## 是否需要前台焦点
+### 2) Popup
 
-当前实现目标是：
+Popup 更偏向总览、设置和调试，不是主要操作入口。
 
-- **不要求两个被控页面一直保持前台焦点**
-- 扩展不会主动把标签页切到前台
-- 但被控页面本身会被脚本读写 DOM、填写输入框、点击发送
+它负责：
 
-换句话说：
+- 查看全局状态
+- 查看当前绑定
+- 切换语言
+- 控制悬浮窗启用、默认展开、位置重置
+- 低频控制和调试信息查看
 
-- 设计上是“后台自动运行”
-- 不是“前台无变化”
-- 如果 ChatGPT 页面本身对后台标签页的行为有限制，仍可能影响实际效果
+---
 
-## 停止条件
+## 支持的页面
 
-- assistant 回复中出现 `[FREEZE]`
-- 超时
-- 重复输出
-- 达到最大轮数
+优先支持这两类 ChatGPT 页面：
 
-发送给另一边的内容会带上：
+- 普通线程页面  
+  `https://chatgpt.com/c/<conversation-id>`
+- 项目内线程页面  
+  `https://chatgpt.com/g/<project-id>/c/<conversation-id>`
 
-- 来源侧
-- round 编号
-- 原始 assistant 输出
-- 明确的机器可读尾部协议
+另外，当前实现也支持把**部分尚未形成持久线程 URL 的 ChatGPT 页面**作为 live session 绑定使用。  
+但从实际使用角度，首次尝试时仍建议你：
 
-当前协议要求模型在回复最后一行输出：
+1. 先把两个页面都正常打开
+2. 最好先让页面各自完成至少一轮正常对话
+3. 再进行绑定和 relay
 
-- `[BRIDGE_STATE] CONTINUE`
-- 或 `[BRIDGE_STATE] FREEZE`
+这样更稳定，也更符合当前原型阶段的预期使用方式。
 
-## 认证状态导出与复用
+---
 
-测试脚本支持使用已导出的 ChatGPT 登录态，避免每次手动登录。
+## 快速开始
 
-### `pnpm run auth:export`
+### 1. 获取仓库
 
-导出 Chrome 登录状态到本地文件：
-
-1. 复制 Chrome Default profile 到临时目录
-2. 启动 Playwright 浏览器加载该 profile
-3. 导航到 chatgpt.com 验证登录态
-4. 导出 storageState 到 `playwright/.auth/chatgpt.json`
-5. 导出 sessionStorage 到 `playwright/.auth/chatgpt.session.json`
-
-**要求**：WSL Chrome 已有登录的 Default profile，或设置 `CHROME_DATA_DIR` 环境变量指向 Chrome profile 目录。
-
-**注意**：`playwright/.auth` 已在 `.gitignore` 中，请勿提交认证文件。
-
-### `pnpm run auth:verify`
-
-验证导出的认证状态可被 Playwright 复用：
-
-- 加载 `playwright/.auth/chatgpt.json` 的 storageState
-- 使用 sessionStorage 恢复会话
-- 检查页面是否显示已登录状态（account menu、composer 等）
-- 输出 PASS/FAIL verdict
-
-### 使用认证状态运行测试
-
-所有测试脚本现在支持 `--auth-state` 和 `--session-state` 参数：
+克隆仓库后安装依赖：
 
 ```bash
-# 使用默认 auth 文件
-pnpm run test:real-hop:auth
-pnpm run test:semi:auth
-pnpm run test:e2e:auth
-
-# 自定义 auth 文件
-pnpm run test:real-hop -- --auth-state /path/to/auth.json --session-state /path/to/session.json
+pnpm install
 ```
 
-**当前 harness 前提**：`pnpm run test:real-hop` 与 `pnpm run test:e2e` 现在都会先校验导出的 auth 文件是否存在；`--skip-bootstrap` / `--root-only` 只改变 bootstrap 方式，不会绕过这一前置检查。
-
-### 认证测试参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--auth-state` | storageState 文件路径 | `playwright/.auth/chatgpt.json` |
-| `--session-state` | sessionStorage 文件路径 | `playwright/.auth/chatgpt.session.json` |
-| `--url-a` | 指定线程 A URL | 自动 bootstrap |
-| `--url-b` | 指定线程 B URL | 自动 bootstrap |
-| `--skip-bootstrap` | 跳过自动 bootstrap，等待手动导航 | - |
-
-### 验收层级
-
-| 层级 | 定位 | 真实性验证 |
-|------|------|-----------|
-| **real-hop** | **主链路真实性验收（唯一）** | ✅ 基于页面证据（目标页 user message 变化） |
-| e2e | 辅助场景脚本 | ❌ 基于运行时事件，非独立页面证据 |
-| semi | 控制流辅助验证 | ❌ 仅验证控制流，不验证发送真实性 |
-| smoke | 扩展加载冒烟 | ❌ 仅验证扩展加载与注入 |
-
-**核心原则：real-hop 是唯一使用页面事实（page-fact-first）作为验收标准的测试。**
-- smoke/semi/e2e 使用运行时事件或脚本自报作为判断依据
-- real-hop 使用目标页面的独立 DOM 观察作为验收依据
-- 低层级脚本通过不等于主链路可用
-
-## 目录说明
-
-- 扩展入口：
-  - [`dist/extension/manifest.json`](/home/raystorm/projects/meta/dist/extension/manifest.json)
-- 后台逻辑：
-  - [`dist/extension/background.js`](/home/raystorm/projects/meta/dist/extension/background.js)
-- 页面注入：
-  - [`dist/extension/content-script.js`](/home/raystorm/projects/meta/dist/extension/content-script.js)
-- Popup：
-  - [`dist/extension/popup.html`](/home/raystorm/projects/meta/dist/extension/popup.html)
-  - [`dist/extension/popup.js`](/home/raystorm/projects/meta/dist/extension/popup.js)
-
-## 本地命令
+### 2. 构建扩展
 
 ```bash
 pnpm run build
-pnpm test
-pnpm run test:smoke
-pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>
-pnpm run test:real-hop
-pnpm run test:real-hop -- --url-a <thread-a> --url-b <thread-b>
-pnpm run test:real-hop -- --skip-bootstrap
-
-# 认证测试（使用已导出的登录态）
-pnpm run auth:export    # 导出 ChatGPT 登录态
-pnpm run auth:verify    # 验证导出的登录态可用
-pnpm run test:real-hop:auth  # 使用 auth 运行 real-hop
-pnpm run test:semi:auth      # 使用 auth 运行 semi
-pnpm run test:e2e:auth       # 使用 auth 运行 e2e
 ```
 
-### `pnpm run build`
+构建产物会输出到：
 
-本地扩展校验：
+```text
+dist/extension
+```
 
-- `manifest.json` 可读
-- 被引用文件存在
-- 扩展脚本通过语法检查
+### 3. 在浏览器中加载
 
-### `pnpm test`
+当前推荐使用 **Microsoft Edge** 以“已解压扩展”的方式加载。
 
-本地单元测试，当前重点覆盖：
-
-- 状态机
-- popup controls 的 enable / disable
-- URL 识别
-- 中继协议
-- content-script 输入 / 发送辅助逻辑
-
-### `pnpm run test:smoke`
-
-启动 Playwright Chromium，验证：
-
-- 扩展成功加载
-- `chatgpt.com` 页面注入 overlay
-- popup 能通过扩展 id 打开
-
-定位：仅做扩展加载与注入冒烟，不验证真实发送。
-
-### `pnpm run test:semi -- --url-a <thread-a> --url-b <thread-b>`
-
-半自动联调脚本，验证控制流正确性（非真实性验证）：
-
-- 两个页面都注入 overlay
-- A/B 绑定是否成功
-- popup 中 `bindingA` / `bindingB` 是否正确显示
-- `Start` 在 `ready` 是否可点
-- `Pause / Resume / Stop` 的启停逻辑是否正确
-- `paused` 时 override 是否可写
-- `running` 时 override 是否不可写
-
-定位：控制流辅助验证，不作为主链路真实性验收。
-
-### `pnpm run test:e2e -- --url-a <thread-a> --url-b <thread-b>`
-
-场景矩阵脚本（happy-path / sync / busy 场景等），用于覆盖更多控制面回归。
-
-定位：辅助场景脚本，不作为主链路真实性验收。
-
-### `pnpm run test:real-hop`
-
-**唯一主链路真实性验收路径**。验证一次真实 first-hop 发送闭环：
-
-- 默认自动 bootstrap 两个线程（A/B 各发送一条 seed message，等待形成可绑定线程 URL）
-- 也支持手动线程 URL：`--url-a <thread-a> --url-b <thread-b>`
-- 也支持手动导航：`--skip-bootstrap`
-- 启动 relay session
-- 基于目标页面独立观察验证：
-  - latest user message 相对发送前 baseline 发生变化
-  - 变化后的 latest user message 与本次 relay payload 相关（例如包含 bridge context）
-  - `waiting reply` 前必须已看到独立接受证据
-- 运行时事件链（`GET_RECENT_RUNTIME_EVENTS`）仅作为辅助证据导出，不单独决定通过
-- 自动导出证据包到 `tmp/real-hop-<timestamp>/`：
-  - `acceptance-verdict.json`
-  - 关键步骤截图
-  - `runtime-events.json`
-  - `observation-log.json`
-  - `summary.json`
-  - `run.log`
-
-### 验收层级结论
-
-| 层级 | 定位 | 是否为主链路验收 |
-|------|------|------------------|
-| **real-hop** | **主链路真实性验收（唯一）** | ✅ 唯一 |
-| e2e | 辅助场景脚本 | ❌ |
-| semi | 控制流辅助验证 | ❌ |
-| smoke | 扩展加载冒烟 | ❌ |
-
-**明确规则：只有 real-hop 通过 = 主链路可用。任何低层级脚本通过 ≠ 主链路可用。**
-
-## 在 Edge 里加载
+步骤：
 
 1. 打开 `edge://extensions`
-2. 开启"开发人员模式"
-3. 点击"加载已解压的扩展"
-4. 选择目录 [`dist/extension`](/home/raystorm/projects/meta/dist/extension)
+2. 开启“开发人员模式”
+3. 点击“加载已解压的扩展”
+4. 选择 `dist/extension`
 
-## 成熟化考量
+> 说明：这个仓库当前不是商店发布形态，默认使用本地加载方式。
 
-### 长期运行风险
+### 4. 打开两个 ChatGPT 页面
 
-以下风险在使用扩展进行长时间 relay 会话时需要关注：
+手动打开两个你要参与 relay 的 ChatGPT 页面。
 
-1. **MV3 Service Worker 挂起**：浏览器可能挂起长时间不活跃的 service worker，导致消息传递延迟或丢失。扩展已实现重试逻辑，但极端情况下可能需要手动刷新页面。
+建议：
 
-2. **页面实例陈化**：ChatGPT 页面在后台长时间运行后，DOM 状态可能与实际会话不同步。如果遇到异常行为，尝试刷新被绑定的页面。
+- 两个页面都属于 `chatgpt.com`
+- 两个页面不要绑定到同一个线程
+- 页面都处于可正常输入和发送的状态
 
-3. **标签页可达性**：浏览器可能在内存紧张时回收后台标签页。确保重要 relay 会话涉及的标签页不会被意外关闭。
+### 5. 绑定 A / B
 
-### URL 升级的定位
+在两个页面里分别使用悬浮窗，把它们绑定成：
 
-- **Live Session 绑定是默认模型**：无需 URL，任何 chatgpt.com 页面都可以作为 relay 端点
-- **Persistent URL 是增强而非前提**：只有当页面已经拥有 `/c/<id>` 或 `/g/.../c/<id>` 时才会记录持久身份
-- **不依赖 URL 升级也能完成 relay**：session-first 路径已在 real-hop 验收中验证
+- 一个是 `A`
+- 另一个是 `B`
 
-### 回归测试层级
+### 6. 选择起始侧并启动
 
-| 层级 | 用途 | 验证方式 |
-|------|------|----------|
-| **真实性回归** | 验证消息真正送达目标页面 | 基于页面 DOM 变化证据 (real-hop) |
-| **控制流回归** | 验证状态机与用户交互正确性 | 运行时事件序列 (semi) |
-| **场景回归** | 验证多场景覆盖 | 场景矩阵脚本 (e2e) |
-| **诊断回归** | 验证扩展加载与基础注入 | 冒烟测试 (smoke) |
+选择 `A` 或 `B` 作为 starter，然后点击 `Start`。
 
-真实性和其他层级是包含关系而非互替：控制流/场景/诊断通过 ≠ 主链路可用。
+扩展会开始：
+
+1. 读取起始侧最新 assistant 回复
+2. 生成 relay payload
+3. 发送给目标侧
+4. 等待目标侧回复
+5. 再反向继续
+
+---
+
+## 运行时你会看到什么
+
+运行时通常会看到这些状态变化：
+
+- `ready`
+- `running`
+- `paused`
+- `stopped`
+- `error`
+
+以及类似这样的步骤提示：
+
+- `reading A`
+- `sending A -> B`
+- `waiting B reply`
+
+这类信息的价值在于：  
+它能让你知道当前 relay 卡在了哪一步，而不是只看到“扩展没反应”。
+
+---
+
+## 当前限制
+
+这个项目目前有几个必须提前说清楚的边界。
+
+### 1) 它依赖 ChatGPT Web 页面结构
+
+这是一个通过内容脚本与 ChatGPT 网页交互的扩展。  
+所以一旦 ChatGPT 前端结构、选择器、发送流程发生变化，扩展行为就可能受影响。
+
+### 2) 它不是“完全无痕后台运行”
+
+设计目标是不要求两个被控页面始终保持前台焦点。  
+但扩展在运行时仍会对页面做实际读写操作，例如：
+
+- 读取消息内容
+- 填写输入框
+- 触发发送
+
+因此它更接近：
+
+- **后台自动运行**
+
+而不是：
+
+- **前台完全无变化**
+
+### 3) 长时间运行仍可能受浏览器和页面状态影响
+
+比如：
+
+- MV3 service worker 挂起
+- 标签页被浏览器回收
+- ChatGPT 页面长时间打开后状态陈化
+- 页面正在生成、忙碌或 UI 异常时无法正确接力
+
+如果遇到异常，最先应该尝试的是：
+
+- 刷新相关 ChatGPT 页面
+- 重新绑定
+- 清空终端后重新开始
+
+### 4) 当前更像“面向会折腾用户的原型”
+
+这个仓库目前已经不是概念 demo，但也还不是稳定商用品。  
+它更适合：
+
+- 试验新工作流
+- 做 relay 原型
+- 进行真实页面联调
+
+而不是把它当成“长期稳定的生产力工具”直接依赖。
+
+---
+
+## 权限与隐私
+
+当前扩展权限比较收敛，核心只围绕这些能力工作：
+
+- `storage`
+- `tabs`
+- `https://chatgpt.com/*`
+
+它的本质行为是：  
+在你明确绑定的 ChatGPT 页面里读取消息、写入输入框并触发发送，用来完成 relay。
+
+也就是说，这个扩展天然会接触你绑定页面里的对话内容。  
+请不要把它用于你不愿意让扩展脚本参与处理的敏感会话。
+
+---
+
+## 项目状态
+
+当前仓库重心是：
+
+- 把“双标签页 relay”主链路做稳
+- 继续减少错误绑定、误判发送成功、错误观察目标页等问题
+- 让悬浮窗成为真正可日常使用的主操作面
+- 把开发文档、测试文档和用户文档彻底分开
+
+所以这个 README 只保留**用户需要知道的内容**，不再承载测试体系、内部验收策略、认证导出流程或实现细节。
+
+---
+
+## 开发相关内容
+
+开发、测试、认证导出、回归分层、实现细节等内容不再放在首页 README。  
+这些内容应该单独整理到 `docs/` 目录，例如：
+
+- `docs/development.md`
+- `docs/testing.md`
+- `docs/architecture.md`
+- `docs/auth.md`
+
+README 只回答一个问题：
+
+> “作为用户，我该怎么理解、安装和使用这个项目？”
+
+---
+
+## 免责声明
+
+本项目依赖 ChatGPT 网页界面行为，兼容性和稳定性会随着上游页面变化而变化。  
+请把它视为一个正在演进中的实验性工具，而不是稳定承诺明确的最终产品。
