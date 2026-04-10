@@ -26,6 +26,10 @@ export const DEFAULT_AUTH_PATHS = {
 
 export const DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9333";
 export const DEFAULT_CDP_CONNECT_TIMEOUT_MS = 60000;
+export const DEFAULT_PLAYWRIGHT_PROFILE_DIR = path.resolve(
+  process.env.HOME || process.cwd(),
+  ".chatgpt-playwright-profile"
+);
 
 /**
  * Resolve browser connection strategy from CLI/env.
@@ -163,13 +167,16 @@ export async function launchBrowserWithExtension(options = {}) {
   const browserExecutablePath = options.browserExecutablePath || null;
   const storageStatePath = options.storageStatePath || null;
   const sessionStorageData = options.sessionStorageData || null;
+  const usePlaywrightChromiumChannel = Boolean(storageStatePath && !browserExecutablePath);
+  const persistentProfileDir = options.userDataDir || process.env.CHATGPT_PLAYWRIGHT_PROFILE_DIR || null;
 
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "chatgpt-bridge-e2e-"));
+  const userDataDir = persistentProfileDir || await mkdtemp(path.join(os.tmpdir(), "chatgpt-bridge-e2e-"));
 
   // Build launch options
   const launchOptions = {
     headless: false,
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    ...(usePlaywrightChromiumChannel ? { channel: "chromium" } : {}),
     ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
     ...(storageStatePath ? { storageState: storageStatePath } : {}),
     args: [
@@ -177,6 +184,7 @@ export async function launchBrowserWithExtension(options = {}) {
       `--load-extension=${extensionPath}`,
       "--no-first-run",
       "--no-default-browser-check",
+      "--password-store=basic",
       "--disable-blink-features=AutomationControlled",
       "--enable-unsafe-extension-debugging"
     ]
@@ -315,6 +323,21 @@ export async function restoreSessionStorage(page, sessionStorageData) {
       }
     }
   }, sessionStorageData);
+}
+
+/**
+ * For auth-backed replay flows, sessionStorage may need a reload cycle before
+ * the page fully reflects the restored state.
+ * @param {import("playwright").Page} page
+ * @param {Object|null} sessionStorageData
+ */
+export async function reloadAfterSessionRestore(page, sessionStorageData) {
+  if (!sessionStorageData || Object.keys(sessionStorageData).length === 0) {
+    return;
+  }
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3000);
 }
 
 /**
@@ -466,6 +489,67 @@ export async function validateAuthState(page) {
     return {
       valid: false,
       error: `Auth validation failed: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Validate auth on the current page without forcing a navigation.
+ * Useful when the page itself is the carrier under test.
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{ valid: boolean, error?: string, url?: string, title?: string, composerVisible?: boolean, accountVisible?: boolean }>}
+ */
+export async function validateCurrentPageAuthState(page) {
+  try {
+    const currentUrl = page.url();
+    const title = await page.title().catch(() => "");
+
+    const isAuthPage =
+      currentUrl.includes("auth.openai.com") ||
+      currentUrl.includes("/log-in") ||
+      currentUrl.includes("/login") ||
+      currentUrl.includes("/signin") ||
+      currentUrl.includes("/log-in-or-create-account");
+
+    if (isAuthPage) {
+      return {
+        valid: false,
+        error: `Current page redirected to login: ${currentUrl}`,
+        url: currentUrl,
+        title
+      };
+    }
+
+    const markers = await page.evaluate(() => {
+      const accountVisible = Boolean(document.querySelector('button[data-testid="account-trigger"]'));
+      const composerVisible = Boolean(document.querySelector('[contenteditable="true"][role="textbox"], textarea'));
+      const sidebarVisible = Boolean(document.querySelector('[data-testid*="sidebar-history"]'));
+      return { accountVisible, composerVisible, sidebarVisible };
+    }).catch(() => ({ accountVisible: false, composerVisible: false, sidebarVisible: false }));
+
+    if (markers.accountVisible || markers.composerVisible || markers.sidebarVisible) {
+      return {
+        valid: true,
+        url: currentUrl,
+        title,
+        composerVisible: markers.composerVisible,
+        accountVisible: markers.accountVisible
+      };
+    }
+
+    return {
+      valid: false,
+      error: `Current page lacks authenticated markers: ${currentUrl}`,
+      url: currentUrl,
+      title,
+      composerVisible: markers.composerVisible,
+      accountVisible: markers.accountVisible
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Current page auth validation failed: ${error.message}`,
+      url: page.url()
     };
   }
 }
@@ -1262,6 +1346,93 @@ export async function ensureAnonymousSourceSeedWithBlocker(page, options = {}) {
       `Anonymous source seed did not produce stable assistant evidence (${after.url || "unknown_url"})`,
       {
         ...after,
+        cause: error instanceof Error ? error.message : String(error)
+      }
+    );
+  }
+}
+
+export async function ensureAuthBackedSourceSeedWithBlocker(page, options = {}) {
+  const prompt = options.prompt || "Hello, respond briefly.";
+  const label = options.label || "source-seed";
+
+  const beforeAuth = await validateCurrentPageAuthState(page);
+  if (!beforeAuth.valid) {
+    throw new HarnessBlockerError(
+      "auth_carrier_lost_before_seed",
+      `Auth-backed source page was not authenticated before seeding (${beforeAuth.url || page.url()})`,
+      beforeAuth
+    );
+  }
+
+  const baseline = await collectThreadObservation(page);
+  if (baseline.latestAssistantHash) {
+    return {
+      ok: true,
+      seeded: false,
+      observation: baseline,
+      snapshot: {
+        url: page.url(),
+        title: beforeAuth.title || "",
+        hasAssistantSeed: true,
+        assistantHash: baseline.latestAssistantHash,
+        assistantCount: baseline.assistantMessageCount,
+        userCount: baseline.userMessageCount,
+        generating: baseline.generating,
+        composerVisible: beforeAuth.composerVisible ?? baseline.sendButtonVisible,
+        authMode: "carrier"
+      }
+    };
+  }
+
+  try {
+    await ensureComposer(page);
+    await sendPrompt(page, prompt);
+    await page.waitForTimeout(3000);
+    await waitForSettledAssistantReply(page, label);
+
+    const observation = await collectThreadObservation(page);
+    return {
+      ok: true,
+      seeded: true,
+      observation,
+      snapshot: {
+        url: page.url(),
+        title: await page.title().catch(() => ""),
+        hasAssistantSeed: Boolean(observation.latestAssistantHash),
+        assistantHash: observation.latestAssistantHash,
+        assistantCount: observation.assistantMessageCount,
+        userCount: observation.userMessageCount,
+        generating: observation.generating,
+        composerVisible: observation.sendButtonVisible,
+        authMode: "carrier"
+      }
+    };
+  } catch (error) {
+    const afterAuth = await validateCurrentPageAuthState(page);
+    if (!afterAuth.valid) {
+      throw new HarnessBlockerError(
+        "auth_carrier_lost_during_seed",
+        `Auth-backed source page lost authenticated state during seeding (${afterAuth.url || page.url()})`,
+        {
+          ...afterAuth,
+          cause: error instanceof Error ? error.message : String(error)
+        }
+      );
+    }
+
+    const afterObservation = await collectThreadObservation(page).catch(() => null);
+    throw new HarnessBlockerError(
+      "auth_seed_environment_instability",
+      `Auth-backed source seed did not produce stable assistant evidence (${page.url()})`,
+      {
+        url: page.url(),
+        title: await page.title().catch(() => ""),
+        latestAssistantHash: afterObservation?.latestAssistantHash || null,
+        assistantMessageCount: afterObservation?.assistantMessageCount ?? null,
+        userMessageCount: afterObservation?.userMessageCount ?? null,
+        generating: afterObservation?.generating ?? null,
+        composerVisible: afterObservation?.sendButtonVisible ?? null,
         cause: error instanceof Error ? error.message : String(error)
       }
     );

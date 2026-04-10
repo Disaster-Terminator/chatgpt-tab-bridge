@@ -20,6 +20,7 @@ import {
   loadSessionStorageData,
   addSessionStorageInitScript,
   restoreSessionStorage,
+  reloadAfterSessionRestore,
   ensureOverlay,
   clickOverlayAction,
   expectOverlayActionEnabled,
@@ -35,6 +36,8 @@ import {
   collectThreadObservation,
   waitForAssistantReplyAfter,
   ensureAnonymousSourceSeedWithBlocker,
+  ensureAuthBackedSourceSeedWithBlocker,
+  validateCurrentPageAuthState,
   isHarnessBlocker,
   sleep
 } from "./_playwright-bridge-helpers.mjs";
@@ -320,6 +323,10 @@ try {
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
+      await Promise.all([
+        reloadAfterSessionRestore(pageA, sessionStorageData),
+        reloadAfterSessionRestore(pageB, sessionStorageData)
+      ]);
     }
     console.log("[semi] Navigate both pages to ChatGPT live sessions, then press Enter...");
     await new Promise((resolve) => {
@@ -335,6 +342,10 @@ try {
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
+      await Promise.all([
+        reloadAfterSessionRestore(pageA, sessionStorageData),
+        reloadAfterSessionRestore(pageB, sessionStorageData)
+      ]);
     }
     await pageA.waitForTimeout(2000);
   }
@@ -357,9 +368,58 @@ try {
   assert.ok(runtimeState.bindings?.B, "Expected runtime binding for B");
   console.log("[semi] Runtime bindings verified");
 
-  await ensureAnonymousSourceSeedWithBlocker(pageA, {
-    label: "source-seed"
-  });
+  if (authOptions.useAuth && urlA && urlB) {
+    const [authStateA, authStateB] = await Promise.all([
+      validateCurrentPageAuthState(pageA),
+      validateCurrentPageAuthState(pageB)
+    ]);
+
+    if (!authStateA.valid || !authStateB.valid) {
+      throw new Error(
+        `auth_carrier_lost_after_binding: ${JSON.stringify({ authStateA, authStateB })}`
+      );
+    }
+
+    const [pageAStillThread, pageBStillThread] = await Promise.all([
+      isSupportedThreadUrl(pageA),
+      isSupportedThreadUrl(pageB)
+    ]);
+
+    if (!pageAStillThread || !pageBStillThread) {
+      throw new Error(
+        `auth_provided_thread_lost_after_binding: ${JSON.stringify({
+          pageAUrl: pageA.url(),
+          pageBUrl: pageB.url(),
+          pageAStillThread,
+          pageBStillThread,
+          authStateA,
+          authStateB
+        })}`
+      );
+    }
+
+    let existingSourceObservation = await collectThreadObservation(pageA);
+    const hydrateStartedAt = Date.now();
+    while (!existingSourceObservation.latestAssistantHash && Date.now() - hydrateStartedAt < 10000) {
+      await sleep(1000);
+      existingSourceObservation = await collectThreadObservation(pageA);
+    }
+
+    if (!existingSourceObservation.latestAssistantHash) {
+      throw new Error(
+        `auth_provided_thread_requires_existing_assistant_reply: provided source thread has no reusable assistant payload (${pageA.url()})`
+      );
+    }
+  } else {
+    await (authOptions.useAuth
+      ? ensureAuthBackedSourceSeedWithBlocker(pageA, {
+          prompt: "Hello from A. Reply briefly with a short identifier for relay testing.",
+          label: "source-seed"
+        })
+      : ensureAnonymousSourceSeedWithBlocker(pageA, {
+          label: "source-seed"
+        }));
+  }
   await ensureComposer(pageB);
   console.log("[semi] Source A seeded; target B composer ready");
 

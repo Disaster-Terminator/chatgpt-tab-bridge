@@ -22,6 +22,7 @@ import {
   loadSessionStorageData,
   addSessionStorageInitScript,
   restoreSessionStorage,
+  reloadAfterSessionRestore,
   ensureOverlay,
   clickOverlayAction,
   expectOverlayActionEnabled,
@@ -44,6 +45,8 @@ import {
   collectThreadObservation,
   waitForAssistantReplyAfter,
   ensureAnonymousSourceSeedWithBlocker,
+  ensureAuthBackedSourceSeedWithBlocker,
+  validateCurrentPageAuthState,
   isHarnessBlocker
 } from "./_playwright-bridge-helpers.mjs";
 
@@ -248,9 +251,75 @@ async function buildTask9ReadyEnv(env) {
     env.popupPage = popupPage;
   }
 
-  const seedResult = await ensureAnonymousSourceSeedWithBlocker(pageA, {
-    label: "source-seed"
-  });
+  let seedResult;
+  if (authOptions.useAuth && urlA && urlB) {
+    const [authStateA, authStateB] = await Promise.all([
+      validateCurrentPageAuthState(pageA),
+      validateCurrentPageAuthState(pageB)
+    ]);
+
+    if (!authStateA.valid || !authStateB.valid) {
+      throw new Error(
+        `auth_carrier_lost_after_binding: ${JSON.stringify({ authStateA, authStateB })}`
+      );
+    }
+
+    const [pageAStillThread, pageBStillThread] = await Promise.all([
+      isSupportedThreadUrl(pageA),
+      isSupportedThreadUrl(pageB)
+    ]);
+
+    if (!pageAStillThread || !pageBStillThread) {
+      throw new Error(
+        `auth_provided_thread_lost_after_binding: ${JSON.stringify({
+          pageAUrl: pageA.url(),
+          pageBUrl: pageB.url(),
+          pageAStillThread,
+          pageBStillThread,
+          authStateA,
+          authStateB
+        })}`
+      );
+    }
+
+    let existingSourceObservation = await collectThreadObservation(pageA);
+    const hydrateStartedAt = Date.now();
+    while (!existingSourceObservation.latestAssistantHash && Date.now() - hydrateStartedAt < 10000) {
+      await sleep(1000);
+      existingSourceObservation = await collectThreadObservation(pageA);
+    }
+
+    if (!existingSourceObservation.latestAssistantHash) {
+      throw new Error(
+        `auth_provided_thread_requires_existing_assistant_reply: provided source thread has no reusable assistant payload (${pageA.url()})`
+      );
+    }
+    seedResult = {
+      ok: true,
+      seeded: false,
+      observation: existingSourceObservation,
+      snapshot: {
+        url: pageA.url(),
+        hasAssistantSeed: true,
+        assistantHash: existingSourceObservation.latestAssistantHash,
+        assistantCount: existingSourceObservation.assistantMessageCount,
+        userCount: existingSourceObservation.userMessageCount,
+        generating: existingSourceObservation.generating,
+        authStateA,
+        authStateB,
+        sourcePayloadStrategy: "reused_existing_assistant_reply"
+      }
+    };
+  } else {
+    seedResult = await (authOptions.useAuth
+      ? ensureAuthBackedSourceSeedWithBlocker(pageA, {
+          prompt: "Hello from A. Reply briefly with a short identifier for relay testing.",
+          label: "source-seed"
+        })
+      : ensureAnonymousSourceSeedWithBlocker(pageA, {
+          label: "source-seed"
+        }));
+  }
   await ensureComposer(pageB);
 
   const runtimeState = await getRuntimeState(popupPage);
@@ -757,11 +826,6 @@ async function createEnv(scenarioName) {
     console.log("  Using provided thread URLs...");
     await pageA.goto(urlA, { waitUntil: "domcontentloaded" });
     await pageB.goto(urlB, { waitUntil: "domcontentloaded" });
-    // Restore sessionStorage after navigation (backup to init script)
-    if (sessionStorageData) {
-      await restoreSessionStorage(pageA, sessionStorageData);
-      await restoreSessionStorage(pageB, sessionStorageData);
-    }
     // Validate URLs are supported thread URLs before binding
     await assertSupportedThreadUrl(pageA, "pageA (--url-a)");
     await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
@@ -777,6 +841,10 @@ async function createEnv(scenarioName) {
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
+      await Promise.all([
+        reloadAfterSessionRestore(pageA, sessionStorageData),
+        reloadAfterSessionRestore(pageB, sessionStorageData)
+      ]);
     }
     // Wait for user to signal ready
     console.log("  Please navigate both pages to valid thread URLs (/c/ or /g/.../c/), then press Enter...");
@@ -800,6 +868,10 @@ async function createEnv(scenarioName) {
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
+      await Promise.all([
+        reloadAfterSessionRestore(pageA, sessionStorageData),
+        reloadAfterSessionRestore(pageB, sessionStorageData)
+      ]);
     }
     
     // Give page time to stabilize

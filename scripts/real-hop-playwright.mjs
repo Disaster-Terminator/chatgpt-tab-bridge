@@ -31,6 +31,7 @@ import {
   loadSessionStorageData,
   addSessionStorageInitScript,
   restoreSessionStorage,
+  reloadAfterSessionRestore,
   bootstrapAnonymousThread,
   buildBootstrapPrompt,
   ensureOverlay,
@@ -49,6 +50,8 @@ import {
   fetchRuntimeEventsFromPopup,
   sleep,
   ensureAnonymousSourceSeedWithBlocker,
+  ensureAuthBackedSourceSeedWithBlocker,
+  validateCurrentPageAuthState,
   HarnessBlockerError,
   isHarnessBlocker
 } from "./_playwright-bridge-helpers.mjs";
@@ -706,6 +709,10 @@ try {
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
+      await Promise.all([
+        reloadAfterSessionRestore(pageA, sessionStorageData),
+        reloadAfterSessionRestore(pageB, sessionStorageData)
+      ]);
     }
 
     await sleep(2000);
@@ -785,12 +792,76 @@ try {
   const bindingEstablished = Boolean(finalCheck.bindings?.A || finalCheck.bindings?.B);
   logLine(`Proceeding with binding: ${bindingEstablished}`);
 
-  // Source-seed-only flow: give source A a minimal assistant reply to serve as first-hop payload
-  logLine("Source-seed-only: sending minimal prompt to source A to generate first-hop payload...");
-  const sourceSeedResult = await ensureAnonymousSourceSeedWithBlocker(pageA, {
-    prompt: "Hello, respond briefly.",
-    label: "source-seed"
-  });
+  // Source payload establishment: on auth-backed root-only runs, prefer an already-existing
+  // assistant reply on page A rather than creating a fresh seed on the fragile root page.
+  let sourceSeedResult;
+  if (authOptions.useAuth && rootOnly) {
+    const sourceAuthState = await validateCurrentPageAuthState(pageA);
+    if (!sourceAuthState.valid) {
+      throw new HarnessBlockerError(
+        "auth_carrier_lost_before_seed",
+        `Auth-backed source page was not authenticated before reusable payload check (${sourceAuthState.url || pageA.url()})`,
+        sourceAuthState
+      );
+    }
+
+    const existingSourceObservation = await collectThreadObservation(pageA);
+    if (!existingSourceObservation.latestAssistantHash) {
+      throw new HarnessBlockerError(
+        "auth_root_source_payload_missing",
+        `Auth-backed root page had no reusable assistant payload for first hop (${pageA.url()})`,
+        {
+          url: pageA.url(),
+          title: sourceAuthState.title || "",
+          authMode: "carrier",
+          rootOnly: true,
+          sourcePayloadStrategy: "existing_assistant_reply_required",
+          latestAssistantHash: null,
+          assistantMessageCount: existingSourceObservation.assistantMessageCount,
+          userMessageCount: existingSourceObservation.userMessageCount,
+          generating: existingSourceObservation.generating,
+          composerVisible:
+            sourceAuthState.composerVisible ?? existingSourceObservation.sendButtonVisible,
+          detail:
+            "Harness did not auto-seed because authenticated root-only first hop must reuse an already-present assistant reply whenever possible."
+        }
+      );
+    }
+
+    sourceSeedResult = {
+      ok: true,
+      seeded: false,
+      observation: existingSourceObservation,
+      snapshot: {
+        url: pageA.url(),
+        title: sourceAuthState.title || "",
+        hasAssistantSeed: true,
+        assistantHash: existingSourceObservation.latestAssistantHash,
+        assistantCount: existingSourceObservation.assistantMessageCount,
+        userCount: existingSourceObservation.userMessageCount,
+        generating: existingSourceObservation.generating,
+        composerVisible:
+          sourceAuthState.composerVisible ?? existingSourceObservation.sendButtonVisible,
+        authMode: "carrier",
+        rootOnly: true,
+        sourcePayloadStrategy: "reused_existing_assistant_reply"
+      }
+    };
+    logLine(
+      `Root-only auth mode: reusing existing source assistant reply for first-hop payload (assistantHash=${existingSourceObservation.latestAssistantHash || "null"})`
+    );
+  } else {
+    logLine("Source-seed-only: sending minimal prompt to source A to generate first-hop payload...");
+    sourceSeedResult = await (authOptions.useAuth
+      ? ensureAuthBackedSourceSeedWithBlocker(pageA, {
+          prompt: "Hello, respond briefly.",
+          label: "source-seed"
+        })
+      : ensureAnonymousSourceSeedWithBlocker(pageA, {
+          prompt: "Hello, respond briefly.",
+          label: "source-seed"
+        }));
+  }
   logLine(
     `Source A seed ready for relay payload (seeded=${sourceSeedResult.seeded}, assistantHash=${sourceSeedResult.observation.latestAssistantHash || "null"})`
   );
