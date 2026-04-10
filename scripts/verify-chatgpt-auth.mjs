@@ -1,9 +1,9 @@
 /**
- * Verify exported ChatGPT authentication state can be reused by Playwright.
+ * Legacy compatibility verifier for exported ChatGPT authentication state.
  *
  * Usage:
  *   node scripts/verify-chatgpt-auth.mjs
- *   node scripts/verify-chatgpt-auth.mjs --auth-state playwright/.auth/chatgpt.json
+ *   node scripts/verify-chatgpt-auth.mjs --auth-state playwright/.auth/chatgpt.cdp.storage.json
  *
  * Verification criteria:
  *   - PASS: Authenticated state detected (account menu, conversation UI)
@@ -12,6 +12,10 @@
  * Output:
  *   tmp/auth-verify-*.png - Screenshots of verification result
  *   tmp/auth-verify-*.json - Verification result summary
+ *
+ * This script remains useful for compatibility/debugging, but the primary
+ * recommended browser-auth carrier is now persistent real browser profile +
+ * CDP attach rather than export/replay into a fresh Playwright browser.
  */
 
 import { chromium } from "playwright";
@@ -84,14 +88,14 @@ async function main() {
   // Read auth state path from command line or use default
   const authStateArgIndex = process.argv.indexOf("--auth-state");
   const authStatePath = authStateArgIndex !== -1
-    ? (process.argv[authStateArgIndex + 1] || "playwright/.auth/chatgpt.json")
-    : "playwright/.auth/chatgpt.json";
+    ? (process.argv[authStateArgIndex + 1] || "playwright/.auth/chatgpt.cdp.storage.json")
+    : "playwright/.auth/chatgpt.cdp.storage.json";
 
   const resolvedAuthStatePath = path.isAbsolute(authStatePath)
     ? authStatePath
     : path.resolve(process.cwd(), authStatePath);
 
-  const sessionStatePath = path.join(path.dirname(resolvedAuthStatePath), "chatgpt.session.json");
+  const sessionStatePath = path.join(path.dirname(resolvedAuthStatePath), "chatgpt.cdp.session.json");
 
   log(`认证状态文件: ${resolvedAuthStatePath}`);
 
@@ -245,8 +249,8 @@ async function main() {
     console.error("  3. cookie 已过期或被 ChatGPT 服务端拒绝");
     console.error("  4. ChatGPT 登录态依赖其他未捕获的状态");
     console.error("\n建议:");
-    console.error("  - 重新运行 export-chatgpt-auth.mjs 确保登录态有效");
-    console.error("  - 检查 playwright/.auth/chatgpt.json 是否包含 __Secure- 相关 cookie");
+    console.error("  - 重新运行 pnpm run auth:export:cdp-storage 确保 carrier state 有效");
+    console.error("  - 检查 playwright/.auth/chatgpt.cdp.storage.json 是否包含 __Secure- 相关 cookie");
     process.exitCode = 1;
   } else {
     console.log("\n认证状态可成功复用！");

@@ -8,11 +8,13 @@ import path from "node:path";
 import process from "node:process";
 
 import {
-  launchBrowserWithExtension,
+  connectBrowserWithExtensionOrCdp,
+  cleanupBrowserConnection,
   getTwoPages,
   readFlag,
   readPathFlag,
   resolveAuthOptions,
+  resolveBrowserStrategyFromCli,
   validateAuthFiles,
   validateAuthState,
   loadSessionStorageData,
@@ -42,6 +44,9 @@ const browserExecutablePath = process.env.BROWSER_EXECUTABLE_PATH || null;
 const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
+const cdpEndpointArg = readFlag("--cdp-endpoint");
+const reuseOpenChatgptTab = !process.argv.includes("--no-reuse-open-chatgpt-tab");
+const noNavOnAttach = !process.argv.includes("--nav-on-attach");
 
 // Auth state options
 const authStateArg = readFlag("--auth-state");
@@ -51,6 +56,12 @@ const sessionStateArg = readFlag("--session-state");
 const authOptions = resolveAuthOptions({
   authStateArg,
   sessionStateArg
+});
+
+const browserStrategy = resolveBrowserStrategyFromCli({
+  cdpEndpointArg,
+  reuseOpenChatgptTab,
+  noNavOnAttach
 });
 
 let sessionStorageData = null;
@@ -69,13 +80,15 @@ if (authOptions.useAuth) {
   console.log("[semi] Auth mode: disabled by default; using anonymous/live-session baseline.");
 }
 
-// Launch browser with optional auth state
-const { context, userDataDir } = await launchBrowserWithExtension({
+// Connect browser with shared strategy layer
+const browserConnection = await connectBrowserWithExtensionOrCdp({
   extensionPath,
   browserExecutablePath,
   storageStatePath: authOptions.storageStatePath,
-  sessionStorageData
+  sessionStorageData,
+  strategy: browserStrategy
 });
+const { context } = browserConnection;
 
 // Add sessionStorage init script
 if (sessionStorageData) {
@@ -281,7 +294,11 @@ async function resumeBranch({ pageA, pageB, popupPage, overrideRole = null, expe
 let runError = null;
 
 try {
-  const [pageA, pageB] = await getTwoPages(context);
+  const [pageA, pageB] = await getTwoPages(context, {
+    reuseOpenChatgptTab: browserStrategy.mode === "cdp" && browserStrategy.reuseOpenChatgptTab,
+    preserveExistingPages: browserStrategy.mode === "cdp",
+    noNavOnAttach: browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach
+  });
 
   console.log(`[semi] Pages acquired, navigating with ${authOptions.useAuth ? "auth-backed" : "anonymous"} live-session baseline...`);
   console.log("[semi] Task 9 control-flow harness: reuse one seeded live session across resume branches; blockers are classified separately from control-flow failures.");
@@ -294,10 +311,12 @@ try {
     await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
   } else if (skipBootstrap) {
     console.log("[semi] Skip bootstrap mode - waiting for manual live-session pages...");
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
@@ -307,10 +326,12 @@ try {
       process.stdin.once("data", () => resolve());
     });
   } else {
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
       await restoreSessionStorage(pageB, sessionStorageData);
@@ -443,8 +464,7 @@ try {
   }
   runError = error;
 } finally {
-  const { cleanupBrowser } = await import("./_playwright-bridge-helpers.mjs");
-  await cleanupBrowser(context, userDataDir);
+  await cleanupBrowserConnection(browserConnection);
 }
 
 if (runError) {

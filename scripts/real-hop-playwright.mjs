@@ -20,11 +20,13 @@ import path from "node:path";
 import process from "node:process";
 
 import {
-  launchBrowserWithExtension,
+  connectBrowserWithExtensionOrCdp,
+  cleanupBrowserConnection,
   getTwoPages,
   readFlag,
   readPathFlag,
   resolveAuthOptions,
+  resolveBrowserStrategyFromCli,
   validateAuthFiles,
   loadSessionStorageData,
   addSessionStorageInitScript,
@@ -57,6 +59,9 @@ const urlA = readFlag("--url-a");
 const urlB = readFlag("--url-b");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
 const rootOnly = process.argv.includes("--root-only");
+const cdpEndpointArg = readFlag("--cdp-endpoint");
+const reuseOpenChatgptTab = !process.argv.includes("--no-reuse-open-chatgpt-tab");
+const noNavOnAttach = !process.argv.includes("--nav-on-attach");
 
 // Auth state options
 const authStateArg = readFlag("--auth-state");
@@ -66,6 +71,12 @@ const sessionStateArg = readFlag("--session-state");
 const authOptions = resolveAuthOptions({
   authStateArg,
   sessionStateArg
+});
+
+const browserStrategy = resolveBrowserStrategyFromCli({
+  cdpEndpointArg,
+  reuseOpenChatgptTab,
+  noNavOnAttach
 });
 
 let sessionStorageData = null;
@@ -594,13 +605,15 @@ async function verifyRealHop({ pageA, pageB, popupPage, baselineTarget, payloadF
 await fs.mkdir(evidenceDir, { recursive: true });
 logLine(`证据目录: ${evidenceDir}`);
 
-// Launch browser with optional auth state
-const { context, userDataDir } = await launchBrowserWithExtension({
+// Connect browser via shared strategy layer
+const browserConnection = await connectBrowserWithExtensionOrCdp({
   extensionPath,
   browserExecutablePath,
   storageStatePath: authOptions.storageStatePath,
-  sessionStorageData
+  sessionStorageData,
+  strategy: browserStrategy
 });
+const { context } = browserConnection;
 
 // Add sessionStorage init script for automatic restoration on page navigation
 if (sessionStorageData) {
@@ -623,7 +636,11 @@ let pageB = null;
 let popupPage = null;
 
 try {
-  [pageA, pageB] = await getTwoPages(context);
+  [pageA, pageB] = await getTwoPages(context, {
+    reuseOpenChatgptTab: browserStrategy.mode === "cdp" && browserStrategy.reuseOpenChatgptTab,
+    preserveExistingPages: browserStrategy.mode === "cdp",
+    noNavOnAttach: browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach
+  });
 
   if (urlA && urlB) {
     bootstrapMode = "provided_urls";
@@ -637,10 +654,12 @@ try {
   } else if (skipBootstrap) {
     bootstrapMode = "manual_skip_bootstrap";
     logLine("--skip-bootstrap 模式：请手动导航到两个 ChatGPT 页面。\n");
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
     logLine("导航完成后请在终端按 Enter 继续。");
     await new Promise((resolve) => {
       process.stdin.once("data", () => resolve());
@@ -677,10 +696,12 @@ try {
   } else {
     bootstrapMode = "live_session_bootstrap";
     logLine("Live session bootstrap: send prompts and verify acceptance without URL.\n");
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
 
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
@@ -916,7 +937,10 @@ try {
       sessionStorageLoaded: !!sessionStorageData
     },
     browser: {
-      strategy: "playwright-persistent-chromium-with-extension",
+      strategy:
+        browserStrategy.mode === "cdp"
+          ? "playwright-cdp-attach"
+          : "playwright-persistent-chromium-with-extension",
       executablePath: browserExecutablePath || "playwright-default"
     },
     input: {
@@ -924,6 +948,7 @@ try {
       urlB: urlB || null,
       skipBootstrap
     },
+    browserStrategy,
     bootstrapMode,
     resolvedUrls: {
       urlA: resolvedUrlA,
@@ -970,8 +995,7 @@ try {
 
   logLine(`证据已导出: ${evidenceDir}`);
 
-  const { cleanupBrowser } = await import("./_playwright-bridge-helpers.mjs");
-  await cleanupBrowser(context, userDataDir);
+  await cleanupBrowserConnection(browserConnection);
 }
 
 if (runError) {

@@ -10,11 +10,13 @@ import process from "node:process";
 import fs from "node:fs/promises";
 
 import {
-  launchBrowserWithExtension,
+  connectBrowserWithExtensionOrCdp,
+  cleanupBrowserConnection,
   getTwoPages,
   readFlag,
   readPathFlag,
   resolveAuthOptions,
+  resolveBrowserStrategyFromCli,
   validateAuthFiles,
   validateAuthState,
   loadSessionStorageData,
@@ -31,7 +33,6 @@ import {
   readPopupState,
   readOverlayState,
   compareStates,
-  cleanupBrowser,
   sleep,
   assertSupportedThreadUrl,
   isSupportedThreadUrl,
@@ -53,6 +54,9 @@ const urlB = readFlag("--url-b");
 const scenarioFilter = readFlag("--scenario");
 const skipBootstrap = process.argv.includes("--skip-bootstrap");
 const rootOnly = process.argv.includes("--root-only");
+const cdpEndpointArg = readFlag("--cdp-endpoint");
+const reuseOpenChatgptTab = !process.argv.includes("--no-reuse-open-chatgpt-tab");
+const noNavOnAttach = !process.argv.includes("--nav-on-attach");
 const TASK9_SCENARIOS = new Set([
   "resume-with-override-a",
   "resume-with-override-b",
@@ -69,6 +73,12 @@ const sessionStateArg = readFlag("--session-state");
 const authOptions = resolveAuthOptions({
   authStateArg,
   sessionStateArg
+});
+
+const browserStrategy = resolveBrowserStrategyFromCli({
+  cdpEndpointArg,
+  reuseOpenChatgptTab,
+  noNavOnAttach
 });
 
 let sessionStorageData = null;
@@ -710,12 +720,14 @@ async function runScenario(name, scenarioFn) {
  */
 async function createEnv(scenarioName) {
   // Launch with optional auth state
-  const { context, userDataDir } = await launchBrowserWithExtension({ 
+  const browserConnection = await connectBrowserWithExtensionOrCdp({ 
     extensionPath, 
     browserExecutablePath,
     storageStatePath: authOptions.storageStatePath,
-    sessionStorageData
+    sessionStorageData,
+    strategy: browserStrategy
   });
+  const { context } = browserConnection;
   
   // Add sessionStorage init script
   if (sessionStorageData) {
@@ -727,14 +739,18 @@ async function createEnv(scenarioName) {
     const authCheck = await validateAuthState(validationPage);
     await validationPage.close().catch(() => {});
     if (!authCheck.valid) {
-      await cleanupBrowser(context, userDataDir);
+      await cleanupBrowserConnection(browserConnection);
       console.error(`[e2e] ERROR: ${authCheck.error}`);
       process.exit(1);
     }
     console.log("  [e2e] Auth validation passed");
   }
   
-  const [pageA, pageB] = await getTwoPages(context);
+  const [pageA, pageB] = await getTwoPages(context, {
+    reuseOpenChatgptTab: browserStrategy.mode === "cdp" && browserStrategy.reuseOpenChatgptTab,
+    preserveExistingPages: browserStrategy.mode === "cdp",
+    noNavOnAttach: browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach
+  });
   
   // Navigate based on mode
   if (urlA && urlB) {
@@ -751,10 +767,12 @@ async function createEnv(scenarioName) {
     await assertSupportedThreadUrl(pageB, "pageB (--url-b)");
   } else if (skipBootstrap) {
     console.log("  Skip bootstrap mode - waiting for user navigation...");
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
     // Restore sessionStorage after navigation
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
@@ -771,10 +789,12 @@ async function createEnv(scenarioName) {
     }
   } else {
     console.log(`  Using ${authOptions.useAuth ? "auth-backed" : "anonymous"} ChatGPT root baseline...`);
-    await Promise.all([
-      pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-      pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-    ]);
+    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
+      await Promise.all([
+        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
+        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
+      ]);
+    }
     
     // Restore sessionStorage after navigation (backup to init script)
     if (sessionStorageData) {
@@ -788,7 +808,7 @@ async function createEnv(scenarioName) {
     if (authOptions.useAuth) {
       const postNavCheckA = await validateAuthState(pageA);
       if (!postNavCheckA.valid) {
-        await cleanupBrowser(context, userDataDir);
+        await cleanupBrowserConnection(browserConnection);
         console.error(`[e2e] ERROR: Auth expired after navigation: ${postNavCheckA.error}`);
         process.exit(1);
       }
@@ -840,7 +860,8 @@ async function createEnv(scenarioName) {
 
   return {
     context,
-    userDataDir,
+    browserConnection,
+    browserStrategy,
     pageA,
     pageB,
     popupPage
@@ -851,8 +872,8 @@ async function createEnv(scenarioName) {
  * Cleanup test environment.
  */
 async function cleanupEnv(env) {
-  if (env.context) {
-    await cleanupBrowser(env.context, env.userDataDir);
+  if (env.browserConnection) {
+    await cleanupBrowserConnection(env.browserConnection);
   }
 }
 

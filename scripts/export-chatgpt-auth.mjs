@@ -1,5 +1,5 @@
 /**
- * Export ChatGPT authentication state for Playwright reuse.
+ * Legacy compatibility helper for exporting ChatGPT authentication state.
  *
  * Usage:
  *   pnpm run auth:export
@@ -19,7 +19,10 @@
  *   - WSL Chrome must have a logged-in Default profile at ~/.config/google-chrome/Default
  *   - Or CHROME_DATA_DIR environment variable pointing to your Chrome profile
  *
- * IMPORTANT: Do NOT commit auth files to git. playwright/.auth is in .gitignore.
+ * IMPORTANT:
+ * - This is no longer the primary recommended auth carrier strategy for this repo.
+ * - Prefer persistent real browser profile + CDP attach for new browser testing flows.
+ * - Do NOT commit auth files to git. playwright/.auth is in .gitignore.
  */
 
 import { chromium } from "playwright";
@@ -184,7 +187,7 @@ async function main() {
 
     // Export storageState
     log("正在导出 storageState...");
-    const storageState = await context.storageState();
+    const storageState = await context.storageState({ indexedDB: true });
     await fs.writeFile(STORAGE_STATE, JSON.stringify(storageState, null, 2), "utf8");
     log(`storageState 已导出: ${STORAGE_STATE}`);
 

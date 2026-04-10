@@ -20,9 +20,47 @@ import { parseChatGptThreadUrl } from "../src/extension/core/chatgpt-url.mjs";
  * These are kept for explicit auth workflows only.
  */
 export const DEFAULT_AUTH_PATHS = {
-  storageState: "playwright/.auth/chatgpt.json",
-  sessionStorage: "playwright/.auth/chatgpt.session.json"
+  storageState: "playwright/.auth/chatgpt.cdp.storage.json",
+  sessionStorage: "playwright/.auth/chatgpt.cdp.session.json"
 };
+
+export const DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9333";
+export const DEFAULT_CDP_CONNECT_TIMEOUT_MS = 60000;
+
+/**
+ * Resolve browser connection strategy from CLI/env.
+ * CDP attach is the new recommended path; persistent context launch remains
+ * as a compatibility path.
+ * @param {Object} options
+ * @param {string|null} [options.cdpEndpointArg]
+ * @param {boolean} [options.reuseOpenChatgptTab]
+ * @param {boolean} [options.noNavOnAttach]
+ * @returns {{
+ *   mode: "persistent"|"cdp",
+ *   cdpEndpoint: string|null,
+ *   reuseOpenChatgptTab: boolean,
+ *   noNavOnAttach: boolean,
+ *   recommended: "cdp"|"persistent"
+ * }}
+ */
+export function resolveBrowserStrategyFromCli(options = {}) {
+  const cdpEndpoint =
+    options.cdpEndpointArg || process.env.CHATGPT_CDP_ENDPOINT || null;
+
+  return {
+    mode: cdpEndpoint ? "cdp" : "persistent",
+    cdpEndpoint,
+    reuseOpenChatgptTab:
+      options.reuseOpenChatgptTab !== undefined
+        ? Boolean(options.reuseOpenChatgptTab)
+        : true,
+    noNavOnAttach:
+      options.noNavOnAttach !== undefined
+        ? Boolean(options.noNavOnAttach)
+        : true,
+    recommended: cdpEndpoint ? "cdp" : "persistent"
+  };
+}
 
 /**
  * Resolve auth options from CLI arguments.
@@ -151,6 +189,68 @@ export async function launchBrowserWithExtension(options = {}) {
 }
 
 /**
+ * Connect to browser either by launching a fresh persistent context or by
+ * attaching to an already-running CDP browser.
+ * @param {Object} options
+ * @param {string} [options.extensionPath]
+ * @param {string} [options.browserExecutablePath]
+ * @param {string|null} [options.storageStatePath]
+ * @param {Object|null} [options.sessionStorageData]
+ * @param {{mode:"persistent"|"cdp", cdpEndpoint:string|null, reuseOpenChatgptTab:boolean, noNavOnAttach:boolean}} [options.strategy]
+ * @returns {Promise<{
+ *   browser: import("playwright").Browser | null,
+ *   context: import("playwright").BrowserContext,
+ *   userDataDir: string | null,
+ *   sessionStorageData: Object | null,
+ *   strategy: {mode:"persistent"|"cdp", cdpEndpoint:string|null, reuseOpenChatgptTab:boolean, noNavOnAttach:boolean},
+ *   cleanupMode: "close-context"|"disconnect-browser"
+ * }>} 
+ */
+export async function connectBrowserWithExtensionOrCdp(options = {}) {
+  const strategy =
+    options.strategy ||
+    resolveBrowserStrategyFromCli({
+      cdpEndpointArg: options.cdpEndpointArg || null,
+      reuseOpenChatgptTab: options.reuseOpenChatgptTab,
+      noNavOnAttach: options.noNavOnAttach
+    });
+
+  if (strategy.mode === "cdp") {
+    const browser = await chromium.connectOverCDP(strategy.cdpEndpoint, {
+      timeout: DEFAULT_CDP_CONNECT_TIMEOUT_MS
+    });
+    const contexts = browser.contexts();
+    const context = contexts[0];
+
+    if (!context) {
+      await browser.close().catch(() => {});
+      throw new Error(
+        `CDP attach succeeded but no browser contexts were available at ${strategy.cdpEndpoint}.`
+      );
+    }
+
+    return {
+      browser,
+      context,
+      userDataDir: null,
+      sessionStorageData: null,
+      strategy,
+      cleanupMode: "disconnect-browser"
+    };
+  }
+
+  const launched = await launchBrowserWithExtension(options);
+  return {
+    browser: null,
+    context: launched.context,
+    userDataDir: launched.userDataDir,
+    sessionStorageData: launched.sessionStorageData,
+    strategy,
+    cleanupMode: "close-context"
+  };
+}
+
+/**
  * Cleanup browser context and user data directory.
  * @param {import("playwright").BrowserContext} context
  * @param {string} userDataDir
@@ -166,6 +266,33 @@ export async function cleanupBrowser(context, userDataDir) {
     recursive: true,
     retryDelay: 250
   }).catch(() => {});
+}
+
+/**
+ * Cleanup browser resources from either persistent launch or CDP attach.
+ * @param {Object} connection
+ * @param {import("playwright").BrowserContext} connection.context
+ * @param {import("playwright").Browser|null} [connection.browser]
+ * @param {string|null} [connection.userDataDir]
+ * @param {"close-context"|"disconnect-browser"} [connection.cleanupMode]
+ */
+export async function cleanupBrowserConnection(connection) {
+  if (!connection) {
+    return;
+  }
+
+  if (connection.cleanupMode === "disconnect-browser") {
+    // In CDP attach mode, close only the Playwright transport connection and
+    // leave the user's real browser/profile running.
+    try {
+      connection.browser?._connection?.close?.();
+    } catch {
+      // Ignore detach errors in CDP mode.
+    }
+    return;
+  }
+
+  await cleanupBrowser(connection.context, connection.userDataDir);
 }
 
 /**
@@ -222,13 +349,33 @@ export function addSessionStorageInitScript(context, sessionStorageData) {
  * @param {import("playwright").BrowserContext} context
  * @returns {Promise<[import("playwright").Page, import("playwright").Page]>}
  */
-export async function getTwoPages(context) {
-  const existingPages = context.pages();
-  const pageA = existingPages[0] ?? (await context.newPage());
-  const pageB = existingPages[1] ?? (await context.newPage());
+export async function getTwoPages(context, options = {}) {
+  const {
+    reuseOpenChatgptTab = false,
+    preserveExistingPages = false,
+    noNavOnAttach = false
+  } = options;
 
-  for (const page of existingPages.slice(2)) {
-    await page.close().catch(() => {});
+  const existingPages = context.pages();
+  const chatGptPages = existingPages.filter((page) =>
+    page.url().startsWith("https://chatgpt.com")
+  );
+
+  const candidates = reuseOpenChatgptTab ? chatGptPages : existingPages;
+  const pageA = candidates[0] ?? (await context.newPage());
+  const pageB = candidates[1] ?? (await context.newPage());
+
+  if (!preserveExistingPages) {
+    const retained = new Set([pageA, pageB]);
+    for (const page of existingPages) {
+      if (!retained.has(page)) {
+        await page.close().catch(() => {});
+      }
+    }
+  }
+
+  if (!noNavOnAttach) {
+    return [pageA, pageB];
   }
 
   return [pageA, pageB];
@@ -295,7 +442,7 @@ export async function validateAuthState(page) {
     if (isAuthPage) {
       return {
         valid: false,
-        error: `Auth cookies expired - redirected to ${currentUrl}. Re-run 'pnpm run auth:export' to refresh.`
+        error: `Auth carrier redirected to ${currentUrl}. Refresh carrier state with 'pnpm run auth:export:cdp-storage' or use manual browser:cdp-launch flow.`
       };
     }
     
@@ -310,7 +457,7 @@ export async function validateAuthState(page) {
     if (hasLoginForm) {
       return {
         valid: false,
-        error: `Auth cookies expired - login form detected on ${currentUrl}. Re-run 'pnpm run auth:export' to refresh.`
+        error: `Auth carrier hit a login form on ${currentUrl}. Refresh carrier state with 'pnpm run auth:export:cdp-storage' or use manual browser:cdp-launch flow.`
       };
     }
     
