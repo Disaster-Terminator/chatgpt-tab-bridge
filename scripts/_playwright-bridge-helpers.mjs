@@ -33,8 +33,8 @@ export const DEFAULT_PLAYWRIGHT_PROFILE_DIR = path.resolve(
 
 /**
  * Resolve browser connection strategy from CLI/env.
- * CDP attach is the new recommended path; persistent context launch remains
- * as a compatibility path.
+ * Persistent Playwright profiles are the primary path; CDP attach remains the
+ * explicit fallback path when requested.
  * @param {Object} options
  * @param {string|null} [options.cdpEndpointArg]
  * @param {boolean} [options.reuseOpenChatgptTab]
@@ -158,17 +158,18 @@ export async function loadSessionStorageData(sessionStoragePath) {
  * @param {Object} options
  * @param {string} [options.extensionPath] - Path to extension dist
  * @param {string} [options.browserExecutablePath] - Custom browser path
- * @param {string} [options.storageStatePath] - Path to Playwright storageState JSON file
+ * @param {string} [options.storageStatePath] - Path to Playwright storageState JSON file (diagnostic-only)
  * @param {Object} [options.sessionStorageData] - sessionStorage data to restore
- * @returns {Promise<{context: import("playwright").BrowserContext, userDataDir: string, sessionStorageData: Object|null}>}
+ * @returns {Promise<{context: import("playwright").BrowserContext, userDataDir: string, sessionStorageData: Object|null, shouldCleanupUserDataDir: boolean}>}
  */
 export async function launchBrowserWithExtension(options = {}) {
   const extensionPath = options.extensionPath || path.resolve(process.cwd(), "dist/extension");
   const browserExecutablePath = options.browserExecutablePath || null;
   const storageStatePath = options.storageStatePath || null;
   const sessionStorageData = options.sessionStorageData || null;
-  const usePlaywrightChromiumChannel = Boolean(storageStatePath && !browserExecutablePath);
   const persistentProfileDir = options.userDataDir || process.env.CHATGPT_PLAYWRIGHT_PROFILE_DIR || null;
+  const shouldCleanupUserDataDir = !persistentProfileDir;
+  const usePlaywrightChromiumChannel = !browserExecutablePath;
 
   const userDataDir = persistentProfileDir || await mkdtemp(path.join(os.tmpdir(), "chatgpt-bridge-e2e-"));
 
@@ -193,7 +194,7 @@ export async function launchBrowserWithExtension(options = {}) {
   const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
 
   // Return sessionStorage data for later restoration if needed
-  return { context, userDataDir, sessionStorageData };
+  return { context, userDataDir, sessionStorageData, shouldCleanupUserDataDir };
 }
 
 /**
@@ -209,7 +210,8 @@ export async function launchBrowserWithExtension(options = {}) {
  *   browser: import("playwright").Browser | null,
  *   context: import("playwright").BrowserContext,
  *   userDataDir: string | null,
- *   sessionStorageData: Object | null,
+  *   sessionStorageData: Object | null,
+ *   shouldCleanupUserDataDir?: boolean,
  *   strategy: {mode:"persistent"|"cdp", cdpEndpoint:string|null, reuseOpenChatgptTab:boolean, noNavOnAttach:boolean},
  *   cleanupMode: "close-context"|"disconnect-browser"
  * }>} 
@@ -253,6 +255,7 @@ export async function connectBrowserWithExtensionOrCdp(options = {}) {
     context: launched.context,
     userDataDir: launched.userDataDir,
     sessionStorageData: launched.sessionStorageData,
+    shouldCleanupUserDataDir: launched.shouldCleanupUserDataDir,
     strategy,
     cleanupMode: "close-context"
   };
@@ -262,10 +265,17 @@ export async function connectBrowserWithExtensionOrCdp(options = {}) {
  * Cleanup browser context and user data directory.
  * @param {import("playwright").BrowserContext} context
  * @param {string} userDataDir
+ * @param {{ removeUserDataDir?: boolean }} [options]
  */
-export async function cleanupBrowser(context, userDataDir) {
+export async function cleanupBrowser(context, userDataDir, options = {}) {
+  const { removeUserDataDir = true } = options;
+
   if (context) {
     await context.close().catch(() => {});
+  }
+
+  if (!removeUserDataDir || !userDataDir) {
+    return;
   }
 
   await rm(userDataDir, {
@@ -283,6 +293,7 @@ export async function cleanupBrowser(context, userDataDir) {
  * @param {import("playwright").Browser|null} [connection.browser]
  * @param {string|null} [connection.userDataDir]
  * @param {"close-context"|"disconnect-browser"} [connection.cleanupMode]
+ * @param {boolean} [connection.shouldCleanupUserDataDir]
  */
 export async function cleanupBrowserConnection(connection) {
   if (!connection) {
@@ -300,7 +311,63 @@ export async function cleanupBrowserConnection(connection) {
     return;
   }
 
-  await cleanupBrowser(connection.context, connection.userDataDir);
+  await cleanupBrowser(connection.context, connection.userDataDir, {
+    removeUserDataDir: connection.shouldCleanupUserDataDir !== false
+  });
+}
+
+/**
+ * @param {import("playwright").BrowserContext} context
+ * @param {number} [timeoutMs]
+ * @returns {Promise<import("playwright").Worker[]>}
+ */
+export async function waitForExtensionServiceWorkers(context, timeoutMs = 10000) {
+  let workers = context.serviceWorkers();
+  if (workers.length > 0) {
+    return workers;
+  }
+
+  await context.waitForEvent("serviceworker", { timeout: timeoutMs }).catch(() => null);
+  workers = context.serviceWorkers();
+  return workers;
+}
+
+/**
+ * @param {import("playwright").Worker[]} workers
+ * @returns {string}
+ */
+export function deriveExtensionIdFromServiceWorkers(workers) {
+  for (const worker of workers) {
+    const match = worker.url().match(/^chrome-extension:\/\/([^/]+)\//);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return "";
+}
+
+/**
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{ok:boolean,count:number,dataset:{extensionId:string,tabId:string,phase:string}}>} 
+ */
+export async function collectOverlayEvidence(page) {
+  const overlayCount = await page.locator(".chatgpt-bridge-overlay").count();
+  const dataset = await page
+    .locator(".chatgpt-bridge-overlay")
+    .first()
+    .evaluate((node) => ({
+      extensionId: node.dataset.extensionId || "",
+      tabId: node.dataset.tabId || "",
+      phase: node.querySelector("[data-slot='phase-badge']")?.getAttribute("data-phase") || ""
+    }))
+    .catch(() => ({ extensionId: "", tabId: "", phase: "" }));
+
+  return {
+    ok: overlayCount > 0,
+    count: overlayCount,
+    dataset
+  };
 }
 
 /**
@@ -442,6 +509,316 @@ export async function ensureOverlay(page) {
 }
 
 /**
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isChatGptLoginOrAuthUrl(url) {
+  if (!url) {
+    return false;
+  }
+
+  return (
+    url.includes("auth.openai.com") ||
+    url.includes("/auth/") ||
+    url.includes("/log-in") ||
+    url.includes("/login") ||
+    url.includes("/signin") ||
+    url.includes("/log-in-or-create-account")
+  );
+}
+
+/**
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isSupportedChatGptThreadUrl(url) {
+  return parseChatGptThreadUrl(url).supported;
+}
+
+/**
+ * @param {{
+ *   url?: string,
+ *   title?: string,
+ *   accountVisible?: boolean,
+ *   composerVisible?: boolean,
+ *   sidebarVisible?: boolean,
+ *   historyItemsVisible?: boolean,
+ *   loginPromptVisible?: boolean,
+ *   oauthButtonsVisible?: boolean,
+ *   authCtaVisible?: boolean
+ * }} snapshot
+ * @returns {{
+ *   authenticated: boolean,
+ *   status: string,
+ *   evidence: string,
+ *   url: string,
+ *   title: string,
+ *   markers: {
+ *     accountVisible: boolean,
+ *     composerVisible: boolean,
+ *     sidebarVisible: boolean,
+ *     historyItemsVisible: boolean,
+ *     loginPromptVisible: boolean,
+ *     oauthButtonsVisible: boolean,
+ *     authCtaVisible: boolean,
+ *     threadUrl: boolean
+ *   }
+ * }}
+ */
+export function classifyChatGptAuthState(snapshot = {}) {
+  const url = snapshot.url || "";
+  const title = snapshot.title || "";
+  const markers = {
+    accountVisible: Boolean(snapshot.accountVisible),
+    composerVisible: Boolean(snapshot.composerVisible),
+    sidebarVisible: Boolean(snapshot.sidebarVisible),
+    historyItemsVisible: Boolean(snapshot.historyItemsVisible),
+    loginPromptVisible: Boolean(snapshot.loginPromptVisible),
+    oauthButtonsVisible: Boolean(snapshot.oauthButtonsVisible),
+    authCtaVisible: Boolean(snapshot.authCtaVisible),
+    threadUrl: isSupportedChatGptThreadUrl(url)
+  };
+
+  if (isChatGptLoginOrAuthUrl(url)) {
+    return {
+      authenticated: false,
+      status: "unauthenticated_auth_page",
+      evidence: url,
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.loginPromptVisible) {
+    return {
+      authenticated: false,
+      status: "unauthenticated_login_prompt",
+      evidence: "login-prompt-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.oauthButtonsVisible) {
+    return {
+      authenticated: false,
+      status: "unauthenticated_oauth_page",
+      evidence: "oauth-buttons-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.authCtaVisible) {
+    return {
+      authenticated: false,
+      status: "unauthenticated_auth_cta_visible",
+      evidence: "login-or-signup-cta-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.accountVisible) {
+    return {
+      authenticated: true,
+      status: "authenticated_account_visible",
+      evidence: "account-trigger-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.threadUrl && markers.sidebarVisible) {
+    return {
+      authenticated: true,
+      status: "authenticated_thread_sidebar_visible",
+      evidence: url,
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.sidebarVisible) {
+    return {
+      authenticated: true,
+      status: "authenticated_sidebar_visible",
+      evidence: "sidebar-history-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.historyItemsVisible) {
+    return {
+      authenticated: true,
+      status: "authenticated_history_items_visible",
+      evidence: "history-items-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.threadUrl && markers.composerVisible) {
+    return {
+      authenticated: false,
+      status: "landing_thread_composer_only",
+      evidence: url,
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.composerVisible) {
+    return {
+      authenticated: false,
+      status: "landing_composer_only",
+      evidence: "composer-visible-without-account-or-sidebar",
+      url,
+      title,
+      markers
+    };
+  }
+
+  if (markers.threadUrl) {
+    return {
+      authenticated: false,
+      status: "landing_thread_without_logged_in_markers",
+      evidence: url,
+      url,
+      title,
+      markers
+    };
+  }
+
+  return {
+    authenticated: false,
+    status: "landing_intermediate_or_unknown",
+    evidence: url || "no-url",
+    url,
+    title,
+    markers
+  };
+}
+
+/**
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{
+ *   url: string,
+ *   title: string,
+ *   accountVisible: boolean,
+ *   composerVisible: boolean,
+ *   sidebarVisible: boolean,
+ *   historyItemsVisible: boolean,
+ *   loginPromptVisible: boolean,
+ *   oauthButtonsVisible: boolean,
+ *   authCtaVisible: boolean
+ * }>}
+ */
+export async function captureChatGptAuthSnapshot(page) {
+  const fallbackUrl = page.url();
+  const fallbackTitle = await page.title().catch(() => "");
+
+  return await page
+    .evaluate(() => {
+      const textIncludes = (needle) => document.body?.innerText?.includes(needle) || false;
+
+      return {
+        url: window.location.href,
+        title: document.title,
+        accountVisible: Boolean(document.querySelector('button[data-testid="account-trigger"]')),
+        composerVisible: Boolean(
+          document.querySelector('[contenteditable="true"][role="textbox"], textarea')
+        ),
+        sidebarVisible: Boolean(document.querySelector('[data-testid*="sidebar-history"]')),
+        historyItemsVisible: Boolean(
+          document.querySelector('[data-testid^="history-item-"]') ||
+          document.querySelector('[data-testid="create-new-chat-button"]')
+        ),
+        loginPromptVisible:
+          Boolean(document.querySelector('input[type="email"], input[name="email"]')) ||
+          textIncludes("Log in") ||
+          textIncludes("Continue with Google") ||
+          textIncludes("Continue with Apple"),
+        oauthButtonsVisible: Boolean(document.querySelector('[data-provider], button[data-provider]')),
+        authCtaVisible:
+          Boolean(document.querySelector('button[aria-label="登录"], button[aria-label="免费注册"]')) ||
+          textIncludes("免费注册") ||
+          textIncludes("获取为你量身定制的回复")
+      };
+    })
+    .catch(() => ({
+      url: fallbackUrl,
+      title: fallbackTitle,
+      accountVisible: false,
+      composerVisible: false,
+      sidebarVisible: false,
+      historyItemsVisible: false,
+      loginPromptVisible: false,
+      oauthButtonsVisible: false,
+      authCtaVisible: false
+    }));
+}
+
+/**
+ * @param {{
+ *   serviceWorkerOk: boolean,
+ *   overlayOk: boolean,
+ *   popupOk: boolean,
+ *   runtimePingOk: boolean
+ * }} evidence
+ * @returns {{ ok: boolean, mode: string }}
+ */
+export function classifyExtensionLoadedEvidence(evidence) {
+  const serviceWorkerOk = Boolean(evidence.serviceWorkerOk);
+  const overlayOk = Boolean(evidence.overlayOk);
+  const popupOk = Boolean(evidence.popupOk);
+  const runtimePingOk = Boolean(evidence.runtimePingOk);
+
+  if (overlayOk && popupOk && runtimePingOk) {
+    return { ok: true, mode: "overlay_popup_runtime" };
+  }
+
+  if (serviceWorkerOk && popupOk && runtimePingOk) {
+    return { ok: true, mode: "service_worker_popup_runtime" };
+  }
+
+  if (serviceWorkerOk && overlayOk) {
+    return { ok: true, mode: "service_worker_overlay" };
+  }
+
+  return { ok: false, mode: "insufficient_extension_evidence" };
+}
+
+/**
+ * @param {import("playwright").Page} page
+ * @param {{ navigate?: boolean, timeoutMs?: number }} [options]
+ * @returns {Promise<ReturnType<typeof classifyChatGptAuthState>>}
+ */
+export async function probeChatGptAuthState(page, options = {}) {
+  const { navigate = false, timeoutMs = 15000 } = options;
+
+  if (navigate) {
+    await page.goto("https://chatgpt.com", {
+      waitUntil: "domcontentloaded",
+      timeout: timeoutMs
+    });
+  }
+
+  const snapshot = await captureChatGptAuthSnapshot(page);
+  return classifyChatGptAuthState(snapshot);
+}
+
+/**
  * Validate that auth state is still valid by checking if we can access chatgpt.com.
  * Fails fast with clear message if cookies are expired and redirect to login occurs.
  * @param {import("playwright").Page} page - A page from the context
@@ -449,41 +826,18 @@ export async function ensureOverlay(page) {
  */
 export async function validateAuthState(page) {
   try {
-    // Navigate to chatgpt.com
-    await page.goto("https://chatgpt.com", { 
-      waitUntil: "domcontentloaded",
-      timeout: 15000 
+    const auth = await probeChatGptAuthState(page, {
+      navigate: true,
+      timeoutMs: 15000
     });
-    
-    // Check if we were redirected to an auth page
-    const currentUrl = page.url();
-    const isAuthPage = currentUrl.includes("auth.openai.com") || 
-                       currentUrl.includes("/log-in") ||
-                       currentUrl.includes("/login") ||
-                       currentUrl.includes("/signin");
-    
-    if (isAuthPage) {
+
+    if (!auth.authenticated) {
       return {
         valid: false,
-        error: `Auth carrier redirected to ${currentUrl}. Refresh carrier state with 'pnpm run auth:export:cdp-storage' or use manual browser:cdp-launch flow.`
+        error: `Auth carrier is not authenticated (${auth.status}): ${auth.evidence}. Refresh carrier state with 'pnpm run auth:export:cdp-storage' or use manual browser:cdp-launch flow.`
       };
     }
-    
-    // Also check page content for login forms
-    const hasLoginForm = await page.evaluate(() => {
-      return document.querySelector('input[type="email"]') !== null ||
-             document.querySelector('[data-testid="login"]') !== null ||
-             document.querySelector('button:contains("Log in")') !== null ||
-             document.querySelector('button:contains("Sign up")') !== null;
-    }).catch(() => false);
-    
-    if (hasLoginForm) {
-      return {
-        valid: false,
-        error: `Auth carrier hit a login form on ${currentUrl}. Refresh carrier state with 'pnpm run auth:export:cdp-storage' or use manual browser:cdp-launch flow.`
-      };
-    }
-    
+
     return { valid: true };
   } catch (error) {
     return {
@@ -501,49 +855,29 @@ export async function validateAuthState(page) {
  */
 export async function validateCurrentPageAuthState(page) {
   try {
-    const currentUrl = page.url();
-    const title = await page.title().catch(() => "");
+    const auth = await probeChatGptAuthState(page);
 
-    const isAuthPage =
-      currentUrl.includes("auth.openai.com") ||
-      currentUrl.includes("/log-in") ||
-      currentUrl.includes("/login") ||
-      currentUrl.includes("/signin") ||
-      currentUrl.includes("/log-in-or-create-account");
-
-    if (isAuthPage) {
+    if (!auth.authenticated) {
       return {
         valid: false,
-        error: `Current page redirected to login: ${currentUrl}`,
-        url: currentUrl,
-        title
-      };
-    }
-
-    const markers = await page.evaluate(() => {
-      const accountVisible = Boolean(document.querySelector('button[data-testid="account-trigger"]'));
-      const composerVisible = Boolean(document.querySelector('[contenteditable="true"][role="textbox"], textarea'));
-      const sidebarVisible = Boolean(document.querySelector('[data-testid*="sidebar-history"]'));
-      return { accountVisible, composerVisible, sidebarVisible };
-    }).catch(() => ({ accountVisible: false, composerVisible: false, sidebarVisible: false }));
-
-    if (markers.accountVisible || markers.composerVisible || markers.sidebarVisible) {
-      return {
-        valid: true,
-        url: currentUrl,
-        title,
-        composerVisible: markers.composerVisible,
-        accountVisible: markers.accountVisible
+        error: `Current page is not authenticated (${auth.status}): ${auth.evidence}`,
+        url: auth.url,
+        title: auth.title,
+        composerVisible: auth.markers.composerVisible,
+        accountVisible: auth.markers.accountVisible,
+        sidebarVisible: auth.markers.sidebarVisible,
+        status: auth.status
       };
     }
 
     return {
-      valid: false,
-      error: `Current page lacks authenticated markers: ${currentUrl}`,
-      url: currentUrl,
-      title,
-      composerVisible: markers.composerVisible,
-      accountVisible: markers.accountVisible
+      valid: true,
+      url: auth.url,
+      title: auth.title,
+      composerVisible: auth.markers.composerVisible,
+      accountVisible: auth.markers.accountVisible,
+      sidebarVisible: auth.markers.sidebarVisible,
+      status: auth.status
     };
   } catch (error) {
     return {
@@ -2089,6 +2423,35 @@ export async function getRuntimeState(popupPage) {
     return result;
   } catch (error) {
     return { phase: "error", error: error.message };
+  }
+}
+
+/**
+ * @param {import("playwright").BrowserContext} context
+ * @param {string} extensionId
+ * @returns {Promise<{ok:boolean,url:string,runtimePing:{ok:boolean,phase:string|null,error:string|null}}>} 
+ */
+export async function collectPopupEvidence(context, extensionId) {
+  const popupPage = await openPopup(context, extensionId);
+
+  try {
+    await popupPage.waitForSelector(".popup", { timeout: 15000 });
+    await popupPage.waitForSelector("#bindAButton", { state: "attached", timeout: 15000 });
+    await popupPage.waitForSelector("#startButton", { state: "attached", timeout: 15000 });
+
+    const runtimeState = await getRuntimeState(popupPage);
+
+    return {
+      ok: true,
+      url: popupPage.url(),
+      runtimePing: {
+        ok: !runtimeState.error,
+        phase: runtimeState.phase ?? null,
+        error: runtimeState.error ?? null
+      }
+    };
+  } finally {
+    await popupPage.close().catch(() => {});
   }
 }
 

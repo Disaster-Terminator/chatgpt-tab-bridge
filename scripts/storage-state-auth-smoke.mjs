@@ -1,172 +1,239 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { chromium } from "playwright";
+import {
+  DEFAULT_AUTH_PATHS,
+  ensureOverlay,
+  getExtensionId,
+  getRuntimeState,
+  loadSessionStorageData,
+  openPopup,
+  probeChatGptAuthState,
+  readFlag,
+  readPathFlag,
+  reloadAfterSessionRestore,
+  resolveAuthOptions,
+  restoreSessionStorage,
+  validateAuthFiles,
+  launchBrowserWithExtension
+} from "./_playwright-bridge-helpers.mjs";
 
-const CHATGPT_URL = "https://chatgpt.com";
 const OUT_DIR = path.resolve(process.cwd(), "tmp", "storage-state-smoke");
-const STORAGE_STATE_PATH = path.join(OUT_DIR, "chatgpt.storage-state.json");
-const SESSION_STATE_PATH = path.join(OUT_DIR, "chatgpt.session-state.json");
-const replayOnly = process.argv.includes("--replay-only");
+const SUMMARY_PATH = path.join(OUT_DIR, "summary.json");
+const SCREENSHOT_PATH = path.join(OUT_DIR, "chatgpt-page.png");
+const CHATGPT_URL = readFlag("--url") || "https://chatgpt.com";
+const EXTENSION_PATH = readPathFlag("--path") || path.resolve(process.cwd(), "dist/extension");
+const BROWSER_EXECUTABLE_PATH = process.env.BROWSER_EXECUTABLE_PATH || null;
 
 function log(message) {
-  console.log(`[storage-smoke] ${message}`);
+  console.log(`[storage-smoke:diagnostic] ${message}`);
 }
 
-async function extractSessionStorage(page) {
-  return await page.evaluate(() => {
-    const data = {};
-    for (let i = 0; i < sessionStorage.length; i += 1) {
-      const key = sessionStorage.key(i);
-      if (key) {
-        data[key] = sessionStorage.getItem(key);
-      }
-    }
-    return data;
-  });
-}
-
-async function restoreSessionStorage(page, sessionStorageData) {
-  if (!sessionStorageData || Object.keys(sessionStorageData).length === 0) {
-    return;
+async function waitForServiceWorkers(context, timeoutMs = 10000) {
+  let workers = context.serviceWorkers();
+  if (workers.length > 0) {
+    return workers;
   }
 
-  await page.evaluate((data) => {
-    for (const [key, value] of Object.entries(data)) {
-      try {
-        sessionStorage.setItem(key, value);
-      } catch {
-        // ignore sessionStorage restore failures
-      }
-    }
-  }, sessionStorageData);
+  await context.waitForEvent("serviceworker", { timeout: timeoutMs }).catch(() => null);
+  workers = context.serviceWorkers();
+  return workers;
 }
 
-async function checkAuthStatus(page) {
-  const url = page.url();
-  if (url.includes("auth.openai.com") || url.includes("/log-in") || url.includes("/login")) {
-    return { authenticated: false, status: "redirected_to_login", url };
-  }
-
-  const result = await page.evaluate(() => {
-    const hasAccountTrigger = Boolean(document.querySelector('button[data-testid="account-trigger"]'));
-    const hasComposer = Boolean(document.querySelector('[contenteditable="true"][role="textbox"], textarea'));
-    const hasSidebar = Boolean(document.querySelector('[data-testid*="sidebar-history"]'));
-    const title = document.title;
-    return { hasAccountTrigger, hasComposer, hasSidebar, title, url: window.location.href };
-  }).catch(() => ({ hasAccountTrigger: false, hasComposer: false, hasSidebar: false, title: "", url }));
+async function collectOverlayEvidence(page) {
+  const overlayCount = await page.locator(".chatgpt-bridge-overlay").count();
+  const dataset = await page
+    .locator(".chatgpt-bridge-overlay")
+    .first()
+    .evaluate((node) => ({
+      extensionId: node.dataset.extensionId || "",
+      tabId: node.dataset.tabId || "",
+      phase: node.querySelector("[data-slot='phase-badge']")?.getAttribute("data-phase") || ""
+    }))
+    .catch(() => ({ extensionId: "", tabId: "", phase: "" }));
 
   return {
-    authenticated: result.hasAccountTrigger || result.hasComposer || result.hasSidebar,
-    status: result.hasAccountTrigger
-      ? "authenticated_account_visible"
-      : result.hasComposer
-        ? "authenticated_composer_visible"
-        : result.hasSidebar
-          ? "authenticated_sidebar_visible"
-          : "unknown_landing",
-    url: result.url,
-    title: result.title
+    ok: overlayCount > 0,
+    count: overlayCount,
+    dataset
   };
 }
 
-async function phaseOneCapture() {
-  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "chatgpt-storage-capture-"));
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: false,
-    args: ["--no-first-run", "--no-default-browser-check"]
-  });
-  const page = context.pages()[0] || await context.newPage();
+async function collectPopupEvidence(context, extensionId) {
+  const popupPage = await openPopup(context, extensionId);
 
   try {
-    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(3000);
+    await popupPage.waitForSelector(".popup", { timeout: 15000 });
+    await popupPage.waitForSelector("#bindAButton", { state: "attached", timeout: 15000 });
+    await popupPage.waitForSelector("#startButton", { state: "attached", timeout: 15000 });
 
-    let auth = await checkAuthStatus(page);
-    if (!auth.authenticated) {
-      log(`manual login required (${auth.status})`);
-      log("Complete login in the Playwright Chromium window, then press Enter here.");
-      await new Promise((resolve) => process.stdin.once("data", resolve));
-      await page.waitForTimeout(2000);
-      auth = await checkAuthStatus(page);
-    }
-
-    if (!auth.authenticated) {
-      throw new Error(`phase_one_not_authenticated:${auth.status}:${auth.url}`);
-    }
-
-    await fs.mkdir(OUT_DIR, { recursive: true });
-    const storageState = await context.storageState({ indexedDB: true });
-    await fs.writeFile(STORAGE_STATE_PATH, JSON.stringify(storageState, null, 2), "utf8");
-
-    const sessionStorageData = await extractSessionStorage(page);
-    await fs.writeFile(SESSION_STATE_PATH, JSON.stringify(sessionStorageData, null, 2), "utf8");
+    const runtimeState = await getRuntimeState(popupPage);
+    const runtimeOk = !runtimeState.error;
 
     return {
-      auth,
-      userDataDir,
-      sessionStorageCount: Object.keys(sessionStorageData).length
+      ok: true,
+      url: popupPage.url(),
+      runtimePing: {
+        ok: runtimeOk,
+        phase: runtimeState.phase ?? null,
+        error: runtimeState.error ?? null
+      }
     };
   } finally {
-    await context.close().catch(() => {});
-    await fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
+    await popupPage.close().catch(() => {});
   }
 }
 
-async function phaseTwoReplay() {
-  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "chatgpt-storage-replay-"));
-  const sessionStateRaw = await fs.readFile(SESSION_STATE_PATH, "utf8").catch(() => "{}");
-  const sessionState = JSON.parse(sessionStateRaw || "{}");
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: false,
-    storageState: STORAGE_STATE_PATH,
-    args: ["--no-first-run", "--no-default-browser-check"]
+async function main() {
+  await fs.mkdir(OUT_DIR, { recursive: true });
+
+  const explicitSessionStatePath = readPathFlag("--session-state");
+  const defaultSessionStatePath = path.resolve(process.cwd(), DEFAULT_AUTH_PATHS.sessionStorage);
+  let inferredSessionStatePath = explicitSessionStatePath;
+  if (!inferredSessionStatePath) {
+    inferredSessionStatePath = await fs.access(defaultSessionStatePath)
+      .then(() => defaultSessionStatePath)
+      .catch(() => null);
+  }
+
+  const authStateArg = readPathFlag("--auth-state") || DEFAULT_AUTH_PATHS.storageState;
+  const sessionStateArg = inferredSessionStatePath || undefined;
+  const authOptions = resolveAuthOptions({
+    authStateArg,
+    sessionStateArg
   });
-  const page = context.pages()[0] || await context.newPage();
+
+  const authFiles = await validateAuthFiles(
+    authOptions.storageStatePath,
+    authOptions.sessionStoragePath
+  );
+
+  if (!authFiles.valid) {
+    throw new Error(authFiles.error || "auth_files_invalid");
+  }
+
+  const sessionStorageData = authOptions.sessionStoragePath
+    ? await loadSessionStorageData(authOptions.sessionStoragePath)
+    : null;
+
+  let context = null;
+  let userDataDir = null;
+  /** @type {Record<string, unknown>} */
+  let summary = {};
 
   try {
+    const launched = await launchBrowserWithExtension({
+      extensionPath: EXTENSION_PATH,
+      browserExecutablePath: BROWSER_EXECUTABLE_PATH,
+      storageStatePath: authOptions.storageStatePath,
+      sessionStorageData,
+      userDataDir: null
+    });
+
+    context = launched.context;
+    userDataDir = launched.userDataDir;
+
+    const page = context.pages()[0] || (await context.newPage());
     await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await restoreSessionStorage(page, sessionState);
-    await page.reload({ waitUntil: "domcontentloaded" });
+    await restoreSessionStorage(page, sessionStorageData);
+    await reloadAfterSessionRestore(page, sessionStorageData);
     await page.waitForTimeout(3000);
 
-    const auth = await checkAuthStatus(page);
-    return {
-      auth,
-      sessionStorageCount: Object.keys(sessionState).length
+    const auth = await probeChatGptAuthState(page);
+    await ensureOverlay(page);
+    const overlay = await collectOverlayEvidence(page);
+    const extensionId = overlay.dataset.extensionId || (await getExtensionId(page));
+
+    const serviceWorkers = await waitForServiceWorkers(context);
+    const popup = await collectPopupEvidence(context, extensionId);
+
+    await page.screenshot({ path: SCREENSHOT_PATH, fullPage: true }).catch(() => {});
+
+    const serviceWorkerEvidence = {
+      ok: serviceWorkers.length > 0,
+      count: serviceWorkers.length,
+      urls: serviceWorkers.map((worker) => worker.url())
+    };
+
+    const verdict =
+      auth.authenticated &&
+      serviceWorkerEvidence.ok &&
+      overlay.ok &&
+      popup.ok &&
+      popup.runtimePing.ok
+        ? "PASS"
+        : "FAIL";
+
+    summary = {
+      timestamp: new Date().toISOString(),
+      verdict,
+      browser: {
+        ok: true,
+        mode: "playwright-storage-replay-diagnostic",
+        authStatePath: authOptions.storageStatePath,
+        sessionStatePath: authOptions.sessionStoragePath,
+        extensionPath: EXTENSION_PATH,
+        targetUrl: CHATGPT_URL
+      },
+      auth: {
+        ok: auth.authenticated,
+        status: auth.status,
+        evidence: auth.evidence,
+        url: auth.url,
+        title: auth.title,
+        markers: auth.markers
+      },
+      serviceWorker: serviceWorkerEvidence,
+      overlay,
+      popup,
+      artifacts: {
+        summary: SUMMARY_PATH,
+        screenshot: SCREENSHOT_PATH
+      }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    summary = {
+      timestamp: new Date().toISOString(),
+      verdict: "FAIL",
+      browser: {
+        ok: false,
+        mode: "playwright-storage-replay-diagnostic",
+        authStatePath: authOptions.storageStatePath,
+        sessionStatePath: authOptions.sessionStoragePath,
+        extensionPath: EXTENSION_PATH,
+        targetUrl: CHATGPT_URL
+      },
+      error: message,
+      artifacts: {
+        summary: SUMMARY_PATH,
+        screenshot: SCREENSHOT_PATH
+      }
     };
   } finally {
-    await context.close().catch(() => {});
-    await fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
+    await fs.writeFile(SUMMARY_PATH, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+
+    if (context) {
+      await context.close().catch(() => {});
+    }
+
+    if (userDataDir) {
+      await fs.rm(userDataDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 250
+      }).catch(() => {});
+    }
+  }
+
+  log(`verdict: ${summary.verdict}`);
+  console.log(JSON.stringify(summary, null, 2));
+
+  if (summary.verdict !== "PASS") {
+    process.exitCode = 1;
   }
 }
 
-await fs.mkdir(OUT_DIR, { recursive: true });
-
-const phaseOne = replayOnly
-  ? {
-      auth: { authenticated: true, status: "replay_only_existing_state" },
-      userDataDir: null,
-      sessionStorageCount: 0
-    }
-  : await phaseOneCapture();
-const phaseTwo = await phaseTwoReplay();
-
-const summary = {
-  phaseOne,
-  phaseTwo,
-  files: {
-    storageState: STORAGE_STATE_PATH,
-    sessionStorage: SESSION_STATE_PATH
-  },
-  verdict: phaseTwo.auth.authenticated ? "PASS" : "FAIL"
-};
-
-await fs.writeFile(path.join(OUT_DIR, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-console.log(JSON.stringify(summary, null, 2));
-
-if (!phaseTwo.auth.authenticated) {
-  process.exitCode = 1;
-}
+await main();

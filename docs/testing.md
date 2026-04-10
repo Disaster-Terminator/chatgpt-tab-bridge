@@ -1,48 +1,67 @@
 # Testing Lanes
 
-## Browser carrier smoke
+## Infrastructure smoke first
 
-Use this first when validating the CDP attach model:
+The default infrastructure gate is now the persistent Playwright profile lane:
 
 ```bash
-CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run test:cdp-smoke
+pnpm run auth:bootstrap-profile
+pnpm run test:smoke
 ```
 
-It only proves:
+`auth:bootstrap-profile` is the one-time manual-login bootstrap for the fixed Playwright Chromium profile.
 
-1. Playwright can attach over CDP
-2. at least one browser context exists
-3. pages are visible to the attached context
-4. an already-open ChatGPT tab can be detected
-5. basic page facts can be read without navigation
+`test:smoke` is the repeatable gate. It proves only:
 
-## Primary login-carrier experiment
+1. ChatGPT is logged in
+2. the extension is loaded
+3. the page is testable
 
-Use this to validate the preferred testing baseline:
+It does **not** bind tabs, seed source prompts, run hops, or validate provided-thread continuity.
+
+## Fallback infrastructure smoke
+
+If the Playwright persistent profile lane is unsuitable, use the dedicated real-browser profile + CDP attach lane:
 
 ```bash
 pnpm run browser:cdp-launch
-# log in manually once in that browser
-CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run auth:export
+CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run test:cdp-smoke
+```
+
+This must satisfy the same minimal contract as `test:smoke` before any business-regression testing resumes.
+
+## Diagnostic replay lane
+
+Storage replay is now diagnostic-only:
+
+```bash
+pnpm run auth:export
+pnpm run auth:verify
 pnpm run test:storage-auth-smoke
 ```
 
 Interpretation:
 
-- If replay succeeds, Playwright Chromium + extension becomes a viable primary test baseline
-- Real browser + CDP attach remains the fallback carrier when replay is unsuitable
-- sessionStorage remains a compatibility concern, but in current local evidence it may not be required for basic ChatGPT entry
+- `PASS`: exported replay happened to work in that diagnostic lane
+- `FAIL`: meaningful diagnostic result; does **not** by itself invalidate the primary persistent-profile carrier
 
-## Authenticity sentinel
+Do not treat this lane as the default browser-auth baseline.
 
-`real-hop` remains the stronger page-fact-first authenticity lane.
+## Business lanes stay paused until smoke passes
 
-- `PASS`: first-hop proof succeeded by page facts
-- `BLOCKED`: environment/login diversion prevented a valid proof attempt
-- `FAIL`: proof was attempted and page facts contradicted expectations
+The following stay out of scope until infrastructure smoke proves all three facts at once:
 
-## Browser control-flow coverage
+1. logged in
+2. extension loaded
+3. page testable
 
-`e2e` / `semi` remain browser-control-flow layers, not the authenticity truth source.
+Paused work:
 
-Under anonymous root-page conditions they may legitimately surface `BLOCKED` when the site diverts source seeding to login. That should not be conflated with a product regression.
+- four business regressions
+- provided-thread continuity
+- post-bind drift
+- auth-backed source-seed expansion
+
+## Authenticity and control-flow lanes
+
+`real-hop`, `semi`, and `e2e` remain higher-level lanes. They are not the infrastructure truth source and should not be used to decide the auth carrier baseline.

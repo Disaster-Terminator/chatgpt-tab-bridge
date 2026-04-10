@@ -3,7 +3,8 @@
     "build": "node scripts/build-extension.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
-    "test:smoke": "node scripts/smoke-extension-playwright.mjs",
+    "test:smoke": "node scripts/persistent-profile-auth-smoke.mjs",
+    "auth:bootstrap-profile": "node scripts/persistent-profile-auth-smoke.mjs --interactive",
     "test:cdp-smoke": "node scripts/cdp-attach-smoke.mjs",
     "test:storage-auth-smoke": "node scripts/storage-state-auth-smoke.mjs",
     "browser:cdp-launch": "node scripts/launch-chatgpt-cdp-browser.mjs",
@@ -16,7 +17,7 @@
     "test:real-hop:anon": "node scripts/real-hop-playwright.mjs",
     "test:semi:anon": "node scripts/semi-bridge-playwright.mjs",
     "test:e2e:anon": "node scripts/e2e-bridge-playwright.mjs",
-    "auth:export": "node scripts/export-storage-state-from-cdp.mjs",
+    "auth:export": "node scripts/export-playwright-auth-state.mjs",
     "auth:export:cdp-storage": "node scripts/export-storage-state-from-cdp.mjs",
     "auth:export:legacy": "node scripts/export-chatgpt-auth.mjs",
     "auth:verify": "node scripts/verify-chatgpt-auth.mjs"

@@ -31,6 +31,10 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
 
+import {
+  probeChatGptAuthState
+} from "./_playwright-bridge-helpers.mjs";
+
 const AUTH_DIR = path.resolve(process.cwd(), "playwright/.auth");
 const STORAGE_STATE = path.join(AUTH_DIR, "chatgpt.json");
 const SESSION_STATE = path.join(AUTH_DIR, "chatgpt.session.json");
@@ -53,57 +57,6 @@ async function extractSessionStorage(page) {
     }
     return data;
   });
-}
-
-/**
- * Check if user is authenticated on chatgpt.com.
- * @param {import("playwright").Page} page
- * @returns {Promise<{ authenticated: boolean, status: string }>}
- */
-async function checkAuthStatus(page) {
-  const url = page.url();
-
-  if (url.includes("/auth/") || url.includes("login")) {
-    return { authenticated: false, status: "unauthenticated_auth_page" };
-  }
-
-  try {
-    const accountTrigger = page.locator('button[data-testid="account-trigger"]').first();
-    if (await accountTrigger.isVisible({ timeout: 8000 }).catch(() => false)) {
-      return { authenticated: true, status: "authenticated_account_visible" };
-    }
-
-    const hasThreads = await page
-      .locator('[data-testid*="sidebar-history"]').first()
-      .isVisible({ timeout: 5000 })
-      .catch(() => false);
-    if (hasThreads) {
-      return { authenticated: true, status: "authenticated_sidebar_visible" };
-    }
-
-    const composer = page.locator('[contenteditable="true"][role="textbox"]').first();
-    if (await composer.isVisible({ timeout: 5000 }).catch(() => false)) {
-      return { authenticated: true, status: "authenticated_composer_visible" };
-    }
-
-    const loginPrompt = page.locator('text=Log in').first();
-    if (await loginPrompt.isVisible({ timeout: 3000 }).catch(() => false)) {
-      return { authenticated: false, status: "unauthenticated_login_prompt" };
-    }
-
-    const continueWithButton = page.locator('[data-provider]').first();
-    if (await continueWithButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-      return { authenticated: false, status: "unauthenticated_oauth_page" };
-    }
-
-    if (url.match(/\/c\/[a-zA-Z0-9-]+/) || url.match(/\/g\/[a-zA-Z0-9-]+\/c\/[a-zA-Z0-9-]+/)) {
-      return { authenticated: true, status: "authenticated_thread_url" };
-    }
-
-    return { authenticated: false, status: "unknown_landing" };
-  } catch {
-    return { authenticated: false, status: "page_check_error" };
-  }
 }
 
 async function main() {
@@ -163,7 +116,7 @@ async function main() {
     await page.waitForTimeout(3000);
 
     // Check auth status
-    const authStatus = await checkAuthStatus(page);
+    const authStatus = await probeChatGptAuthState(page);
     log(`认证状态: ${authStatus.status}`);
 
     if (!authStatus.authenticated) {
@@ -174,7 +127,7 @@ async function main() {
       });
 
       // Re-check after user interaction
-      const finalStatus = await checkAuthStatus(page);
+      const finalStatus = await probeChatGptAuthState(page);
       if (!finalStatus.authenticated) {
         console.error("仍未检测到有效登录态。请确认已完成验证后重试。");
         await context.close();

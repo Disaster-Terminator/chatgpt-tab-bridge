@@ -1,106 +1,88 @@
 # Auth Carrier Baseline
 
-This document is the current baseline for browser-auth carrier strategy in this repo.
+This document is the current browser-auth carrier baseline for this repo.
 
-It replaces the earlier experiment framing and should be treated as the source of truth for how browser testing is expected to acquire and reuse ChatGPT login state.
+It only defines how login state is carried into the browser harness. It does not claim any of the four business regressions are fixed.
 
 ## Current baseline
 
-Preferred primary path:
+### Primary
 
-1. use **Playwright Chromium** as the test browser runtime
-2. obtain login state by exporting `storageState({ indexedDB: true })` from a **real manually logged-in browser**
-3. replay that state into Chromium + extension
+Use **Playwright Chromium persistent profile + extension loaded + one-time manual login**.
 
-Fallback path:
-
-1. keep a **persistent real browser profile**
-2. log in manually once
-3. attach Playwright over **CDP**
-4. reuse already-open ChatGPT tabs where possible
-5. avoid extra `goto`, reload, or homepage reset on attach
-
-## What is no longer primary
-
-These are no longer the main strategy:
-
-- exporting auth from one profile and replaying it into a different fresh browser as the default story
-- auth-first / URL-first harness assumptions
-- treating WSL Chrome as the only viable login-state source
-
-They may still exist as compatibility/debugging utilities, but they are not the recommended baseline.
-
-## Why the baseline changed
-
-Current repo-local evidence shows:
-
-- CDP attach itself is viable as a fallback carrier model
-- exporting `storageState({ indexedDB: true })` from a real logged-in browser and replaying it into Playwright Chromium can preserve enough state to reach the ChatGPT main UI with the extension loaded
-- current observed replay evidence included:
-  - `title: "ChatGPT"`
-  - `composer: true`
-  - `overlay: true`
-
-This proves that WSL Chrome is not the only practical login-state source.
-
-## Recommended flows
-
-### Primary: Chromium replay flow
-
-1. launch a real browser and log in manually once
-2. export carrier state from that browser:
+Operator flow:
 
 ```bash
-CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run auth:export
+pnpm run auth:bootstrap-profile
+pnpm run test:smoke
 ```
 
-3. validate replay in Playwright Chromium:
+What this proves:
 
-```bash
-pnpm run test:storage-auth-smoke
-```
+1. login persists in the same Playwright profile
+2. extension loads in that profile
+3. overlay / popup / runtime are available
+4. the page is testable
 
-4. run browser/product verification on top of the exported state:
+### Fallback
 
-```bash
-pnpm run test:real-hop
-pnpm run test:semi
-pnpm run test:e2e
-```
+Use **real browser profile + CDP attach**.
 
-### Fallback: real browser CDP attach
-
-1. launch a dedicated browser/profile:
+Operator flow:
 
 ```bash
 pnpm run browser:cdp-launch
-```
-
-2. log in manually once in that browser
-3. keep that browser running
-4. validate attach:
-
-```bash
 CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run test:cdp-smoke
 ```
 
-Use this path when Chromium replay is unsuitable or when you need to preserve the already-open real browser session exactly as-is.
+Use this when the primary persistent-profile lane is unsuitable.
+
+### Diagnostic-only
+
+Use exported replay only for diagnosis, not as the main auth carrier:
+
+```bash
+pnpm run auth:export
+pnpm run auth:verify
+pnpm run test:storage-auth-smoke
+CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run auth:export:cdp-storage
+```
+
+These commands answer “what replay material exists?” and “does replay happen to work?”, but they do not define the baseline.
+
+## Why the baseline changed
+
+External evidence:
+
+- Playwright issue `#31129`: extension loading and `storageState` replay are not a trustworthy combined path
+- Playwright issue `#7634`: persistent-context initialization from `storageState` remains a longstanding feature gap
+- Playwright issue `#14949`: persistent-context storage/session initialization remains unsettled
+
+Repo-local evidence:
+
+- extension loading is proven: service worker / overlay / popup / runtime are all good
+- current `storageState` replay is not proven: current result is `unauthenticated_auth_cta_visible`
+- the same exported auth package also failed in ordinary `browser.newContext({ storageState })`
+
+Therefore exported replay remains diagnostic-only.
 
 ## Script surface summary
 
 Primary-facing scripts:
 
-- `pnpm run auth:export`
-- `pnpm run auth:verify`
-- `pnpm run test:storage-auth-smoke`
-- `pnpm run test:real-hop`
-- `pnpm run test:semi`
-- `pnpm run test:e2e`
+- `pnpm run auth:bootstrap-profile`
+- `pnpm run test:smoke`
 
-Fallback / carrier utilities:
+Fallback scripts:
 
 - `pnpm run browser:cdp-launch`
 - `pnpm run test:cdp-smoke`
+
+Diagnostic scripts:
+
+- `pnpm run auth:export`
+- `pnpm run auth:verify`
+- `pnpm run test:storage-auth-smoke`
 - `pnpm run auth:export:cdp-storage`
 
 Legacy / compatibility:
@@ -110,11 +92,10 @@ Legacy / compatibility:
 - `pnpm run test:semi:anon`
 - `pnpm run test:e2e:anon`
 
-## Constraints still true
+## Gate for resuming business regressions
 
-- page-fact-first remains the truth source
-- session-first / URL-later remains intact
-- popup/runtime self-report is auxiliary only
-- browser carrier work does **not** by itself prove the four business regressions are fixed
+Do not resume later regression lanes until one smoke path proves all three at once:
 
-This document only defines how login state is carried into the browser harness.
+1. logged in
+2. extension loaded
+3. page testable

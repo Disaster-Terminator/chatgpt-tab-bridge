@@ -1,94 +1,97 @@
 # Auth Carrier Modes
 
-## Recommended primary path
+## Primary path
 
-Preferred primary path for this repo is now:
+The primary browser-auth carrier for this repo is now:
 
-1. use Playwright Chromium as the test browser runtime
-2. obtain a reusable login carrier by exporting `storageState({ indexedDB: true })` from a real manually logged-in browser
-3. replay that state into Chromium + extension
+1. use **Playwright Chromium**
+2. keep a fixed **persistent Playwright profile** (`userDataDir`)
+3. load the extension in that profile
+4. log into ChatGPT manually once
+5. close and reopen the same profile for future smoke runs
 
-This gives Playwright-native control plus extension loading, while avoiding fresh auth export into unrelated profiles as the default story.
+Why this is primary:
 
-### Primary sequence
+- it preserves the full browser profile that Playwright persistent contexts are designed to reuse
+- it supports extension loading directly
+- it avoids relying on `storageState` as a persistent-context initializer, which is not a trustworthy baseline here
 
-1. launch a dedicated real browser/profile and log in manually once
-2. export carrier state from that already-logged-in browser
-3. replay it in Playwright Chromium
+Primary commands:
 
 ```bash
-pnpm run browser:cdp-launch
-# log in manually once in that browser
-CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run auth:export
-pnpm run test:storage-auth-smoke
+pnpm run auth:bootstrap-profile
+pnpm run test:smoke
 ```
 
-## Fallback carrier
+`auth:bootstrap-profile` is the one-time bootstrap lane for manual login in the persistent Playwright profile.
 
-Fallback browser-auth carrier for this repo is:
+`test:smoke` is the repeatable infrastructure gate and answers only:
 
-1. launch a dedicated real Chrome/Chromium profile with remote debugging
-2. log in to ChatGPT manually once
+1. is ChatGPT still logged in?
+2. is the extension loaded?
+3. is the page testable?
+
+Only when all three are true should later business-regression lanes resume.
+
+## Fallback path
+
+Fallback carrier for this repo is:
+
+1. keep a **persistent real browser profile**
+2. log in manually once
 3. keep that profile on disk
-4. attach Playwright with `chromium.connectOverCDP()`
-5. prefer reusing already-open ChatGPT tabs
-6. avoid unnecessary `goto`, reload, or homepage reset after attach
+4. attach Playwright over **CDP**
+5. verify only the same minimal infrastructure contract
 
-Recommended launch helper:
+Commands:
 
 ```bash
 pnpm run browser:cdp-launch
-```
-
-Or manually:
-
-```bash
-google-chrome \
-  --remote-debugging-port=9333 \
-  --user-data-dir=/home/raystorm/.chatgpt-cdp-profile \
-  --no-first-run \
-  --no-default-browser-check \
-  --load-extension=/absolute/path/to/dist/extension \
-  --disable-extensions-except=/absolute/path/to/dist/extension \
-  https://chatgpt.com
-```
-
-Then attach with:
-
-```bash
 CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run test:cdp-smoke
 ```
 
-If you want to extract a reusable login carrier from that already-logged-in real browser, export it into Playwright-friendly files with:
+Use this path when the Playwright persistent profile lane is unsuitable or fails to hold login.
+
+## Diagnostic-only paths
+
+These commands remain useful, but they are **diagnostic only** and are not the default auth carrier story:
 
 ```bash
+pnpm run auth:export
+pnpm run auth:verify
+pnpm run test:storage-auth-smoke
 CHATGPT_CDP_ENDPOINT=http://127.0.0.1:9333 pnpm run auth:export:cdp-storage
 ```
 
-That produces:
+They help answer questions like:
 
-- `playwright/.auth/chatgpt.cdp.storage.json`
-- `playwright/.auth/chatgpt.cdp.session.json`
+- what cookies/origins/session material were exported?
+- does replay work in a clean context?
+- what is missing from replay compared with a real persistent profile?
 
-Preferred operator flow:
+They do **not** define the primary carrier.
 
-1. start the dedicated browser/profile once
-2. log in manually in that browser
-3. keep that browser running
-4. run attach-based scripts from the repo
+## Why `storageState` is not primary
 
-Do not treat script-exported auth as the main way to obtain login state.
+This repo now assumes the following external constraints are real:
 
-Use direct attach as the fallback path when Chromium replay is unsuitable, not as the default first choice.
+- Playwright issue `#31129`: extension loading and `storageState` replay are not a trustworthy combined baseline
+- Playwright issue `#7634`: persistent-context initialization from `storageState` has long been a feature gap
+- Playwright issue `#14949`: setting storage/session state for persistent context remains an unresolved problem area
+
+Repo-local evidence also showed:
+
+- extension load is proven
+- current `storageState` replay is **not** proven
+- the same exported auth material failed even in plain `browser.newContext({ storageState })`
+
+So exported JSON replay is retained for diagnostics, not promoted as the main carrier.
 
 ## Legacy compatibility
 
-These scripts still exist for compatibility and investigation, but they are no longer the primary recommendation:
+These scripts still exist for compatibility/investigation and should not be read as primary guidance:
 
 - `pnpm run auth:export:legacy`
-- `pnpm run auth:verify`
 - `pnpm run test:real-hop:auth`
 - `pnpm run test:semi:auth`
 - `pnpm run test:e2e:auth`
-
-Their model is older compatibility around explicit auth file replay. Keep them for debugging, but do not treat them as the main carrier story for this repo anymore.
