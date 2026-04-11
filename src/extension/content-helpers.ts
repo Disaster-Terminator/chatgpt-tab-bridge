@@ -68,6 +68,18 @@ export function stillContainsExpectedPayload(currentText: string, expectedText: 
 }
 
 export function isGenerationInProgressFromDoc(): boolean {
+  return hasGenerationControlButtonFromDoc();
+}
+
+export function isReplyGenerationInProgressFromDoc(latestAssistantText: unknown): boolean {
+  if (hasTerminalBridgeDirective(latestAssistantText)) {
+    return false;
+  }
+
+  return hasGenerationControlButtonFromDoc();
+}
+
+function hasGenerationControlButtonFromDoc(): boolean {
   if (
     document.querySelector('button[data-testid="stop-button"]') ||
     document.querySelector('button[data-testid="stop-generating-button"]')
@@ -80,6 +92,26 @@ export function isGenerationInProgressFromDoc(): boolean {
     document.querySelector('button[aria-label*="Stop"]') ||
     document.querySelector('button[aria-label*="Cancel"]')
   );
+}
+
+function hasTerminalBridgeDirective(value: unknown): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return false;
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i.test(lines[index] ?? "")) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function readComposerTextFromDoc(composer: Element | null | undefined): string {

@@ -138,6 +138,18 @@ function hasWaitingLikeStep(stepText) {
   return normalizeText(stepText).toLowerCase().startsWith("waiting ");
 }
 
+/**
+ * Check if step indicates continuation is in progress - either waiting for target reply
+ * or already verifying the next submission. Both indicate successful continuation
+ * without manual focus switch.
+ */
+function isContinuationInProgress(stepText) {
+  const normalized = normalizeText(stepText).toLowerCase();
+  const waiting = normalized.startsWith("waiting ");
+  const verifying = normalized.includes("verifying") && normalized.includes("submission");
+  return waiting || verifying;
+}
+
 async function ensureBoundRole(page, popupPage, role) {
   let lastError = "bind_not_attempted";
 
@@ -1626,8 +1638,8 @@ async function runContinuationWithoutFocusSwitch(env) {
   const popupState = await readPopupState(popupPage);
   assert.equal(popupState.phase, "running");
   assert.ok(
-    hasWaitingLikeStep(popupState.currentStep),
-    `Expected relay to keep running without manual focus switching, got ${JSON.stringify(popupState)}`
+    isContinuationInProgress(popupState.currentStep),
+    `Expected relay to keep running without manual focus switching (waiting for reply or verifying next submission), got ${JSON.stringify(popupState)}`
   );
   return { success: true };
 }

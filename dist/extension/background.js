@@ -2463,8 +2463,7 @@ async function waitForSettledReply({
       stableHash = currentHash;
       stableCount = 1;
     }
-    const hasTerminalDirective = parseBridgeDirective(latestAssistant.text) !== null;
-    const replySettleConfirmed = observation.sample.generating === false || hasTerminalDirective;
+    const replySettleConfirmed = observation.sample.generating === false;
     if (stableCount >= settings.settleSamplesRequired && replySettleConfirmed) {
       return {
         ok: true,

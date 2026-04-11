@@ -15,6 +15,53 @@
     return `h${(hash >>> 0).toString(16)}`;
   }
 
+  function isGenerationInProgressFromDoc() {
+    return hasGenerationControlButtonFromDoc();
+  }
+
+  function isReplyGenerationInProgressFromDoc(latestAssistantText) {
+    if (hasTerminalBridgeDirective(latestAssistantText)) {
+      return false;
+    }
+
+    return hasGenerationControlButtonFromDoc();
+  }
+
+  function hasGenerationControlButtonFromDoc() {
+    if (
+      document.querySelector('button[data-testid="stop-button"]') ||
+      document.querySelector('button[data-testid="stop-generating-button"]')
+    ) {
+      return true;
+    }
+
+    return Boolean(
+      document.querySelector('button[aria-label*="停止"]') ||
+      document.querySelector('button[aria-label*="Stop"]') ||
+      document.querySelector('button[aria-label*="Cancel"]')
+    );
+  }
+
+  function hasTerminalBridgeDirective(value) {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+      return false;
+    }
+
+    const lines = normalized
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      if (/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i.test(lines[index] ?? "")) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function findBestComposer(root) {
     const selectors = [
       '[contenteditable="true"][role="textbox"]',
@@ -226,7 +273,9 @@
     findBestComposer,
     findSendButton,
     hashText,
+    isGenerationInProgressFromDoc,
     isElementVisible,
+    isReplyGenerationInProgressFromDoc,
     normalizeText,
     readComposerText,
     triggerComposerSend

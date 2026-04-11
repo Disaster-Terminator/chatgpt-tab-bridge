@@ -548,17 +548,15 @@ test("waitForSettledReply requires a stable changed assistant hash with generati
   }
 });
 
-test("waitForSettledReply settles on a stable changed assistant hash with terminal bridge directive even if generating stays stale", async () => {
+test("waitForSettledReply still requires sampled generating false even for a terminal bridge directive", async () => {
   const originalDateNow = Date.now;
   let tick = 0;
   Date.now = () => tick++;
-  let polls = 0;
   const terminalReply = "finished reply\n[BRIDGE_STATE] CONTINUE";
 
   chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
     assert.equal(message.type, "GET_THREAD_ACTIVITY");
     assert.equal(tabId, 2);
-    polls += 1;
 
     return {
       ok: true,
@@ -597,10 +595,66 @@ test("waitForSettledReply settles on a stable changed assistant hash with termin
       token: 83
     });
 
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("waitForSettledReply settles when terminal bridge evidence arrives with sampled generating false", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+  let polls = 0;
+  const terminalReply = "finished reply\n[BRIDGE_STATE] CONTINUE";
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    polls += 1;
+
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestAssistantText: terminalReply,
+          generating: false
+        }),
+        generating: false,
+        latestAssistantHash: hashText(terminalReply),
+        latestUserHash: null,
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(85);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 4,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 85
+    });
+
     assert.equal(settled.ok, true);
     assert.equal(settled.result.hash, hashText(terminalReply));
-    assert.equal(settled.result.sample.generating, true);
-    assert.equal(polls, 2, "terminal marker fallback should settle without waiting for fresh stop-button state");
+    assert.equal(settled.result.sample.generating, false);
+    assert.equal(polls, 2);
   } finally {
     Date.now = originalDateNow;
   }

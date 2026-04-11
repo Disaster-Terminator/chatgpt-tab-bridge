@@ -8,6 +8,7 @@ import {
   hashText,
   isElementVisible,
   isGenerationInProgressFromDoc,
+  isReplyGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
   stillContainsExpectedPayload,
@@ -628,7 +629,7 @@ function readTargetObservationSample(): { ok: true; result: TargetObservationSam
       },
       latestUser,
       latestAssistant,
-      generating: isGenerationInProgressFromDoc(),
+      generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),
       composer: {
         available: composer !== null,
         text: readComposerText(composer),

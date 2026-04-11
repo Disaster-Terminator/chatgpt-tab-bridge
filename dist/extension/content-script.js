@@ -41,12 +41,34 @@ function stillContainsExpectedPayload(currentText, expectedText) {
   return similarity >= 0.5;
 }
 function isGenerationInProgressFromDoc() {
+  return hasGenerationControlButtonFromDoc();
+}
+function isReplyGenerationInProgressFromDoc(latestAssistantText) {
+  if (hasTerminalBridgeDirective(latestAssistantText)) {
+    return false;
+  }
+  return hasGenerationControlButtonFromDoc();
+}
+function hasGenerationControlButtonFromDoc() {
   if (document.querySelector('button[data-testid="stop-button"]') || document.querySelector('button[data-testid="stop-generating-button"]')) {
     return true;
   }
   return Boolean(
     document.querySelector('button[aria-label*="\u505C\u6B62"]') || document.querySelector('button[aria-label*="Stop"]') || document.querySelector('button[aria-label*="Cancel"]')
   );
+}
+function hasTerminalBridgeDirective(value) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return false;
+  }
+  const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/^\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)$/i.test(lines[index] ?? "")) {
+      return true;
+    }
+  }
+  return false;
 }
 function readComposerTextFromDoc(composer) {
   if (!composer) {
@@ -1199,7 +1221,7 @@ function readTargetObservationSample() {
       },
       latestUser,
       latestAssistant,
-      generating: isGenerationInProgressFromDoc(),
+      generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),
       composer: {
         available: composer !== null,
         text: readComposerText(composer),

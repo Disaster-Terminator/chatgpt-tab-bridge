@@ -150,3 +150,49 @@ test("triggerComposerSend fails explicitly when send button is unavailable", () 
   assert.equal(result.mode, "form_submit");
   assert.equal(form.called, true);
 });
+
+test("isReplyGenerationInProgressFromDoc treats terminal bridge directives as settled even with stale stop UI", () => {
+  const mockDoc = {
+    querySelector: (selector) => {
+      if (selector.includes("stop-button") || selector.includes("stop-generating-button")) {
+        return {};
+      }
+      return null;
+    }
+  };
+  const originalGlobal = globalThis.document;
+  const originalContextDocument = context.document;
+  globalThis.document = mockDoc;
+  context.document = mockDoc;
+
+  try {
+    const result = helpers.isReplyGenerationInProgressFromDoc("done\n[BRIDGE_STATE] CONTINUE");
+    assert.equal(result, false);
+  } finally {
+    globalThis.document = originalGlobal;
+    context.document = originalContextDocument;
+  }
+});
+
+test("isReplyGenerationInProgressFromDoc stays true for streaming replies without terminal evidence", () => {
+  const mockDoc = {
+    querySelector: (selector) => {
+      if (selector.includes("stop-button") || selector.includes("stop-generating-button")) {
+        return {};
+      }
+      return null;
+    }
+  };
+  const originalGlobal = globalThis.document;
+  const originalContextDocument = context.document;
+  globalThis.document = mockDoc;
+  context.document = mockDoc;
+
+  try {
+    const result = helpers.isReplyGenerationInProgressFromDoc("reply still streaming");
+    assert.equal(result, true);
+  } finally {
+    globalThis.document = originalGlobal;
+    context.document = originalContextDocument;
+  }
+});
