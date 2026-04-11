@@ -321,6 +321,15 @@ function reducePause(state: RuntimeState): RuntimeState {
     return state;
   }
 
+  if (!isFreshPendingHop(state.activeHop, state)) {
+    state.runtimeActivity = {
+      ...state.runtimeActivity,
+      step: "pause_requested",
+      lastActionAt: new Date().toISOString()
+    };
+    return state;
+  }
+
   state.phase = PHASES.PAUSED;
   state.runtimeActivity = {
     ...state.runtimeActivity,
@@ -398,6 +407,8 @@ function reduceHopCompleted(state: RuntimeState, event: HopCompletedEvent): Runt
     return state;
   }
 
+   const pauseRequestedAtBoundary = state.runtimeActivity.step === "pause_requested";
+
   state.round += 1;
   state.nextHopSource = event.targetRole ?? otherRole(event.sourceRole);
   state.activeHop = createPendingHop(state, state.nextHopSource);
@@ -419,7 +430,7 @@ function reduceHopCompleted(state: RuntimeState, event: HopCompletedEvent): Runt
   }
 
   state.runtimeActivity = {
-    step: "hop_completed",
+    step: pauseRequestedAtBoundary ? "paused" : "hop_completed",
     sourceRole: event.sourceRole ?? null,
     targetRole: event.targetRole ?? null,
     pendingRound: state.round,
@@ -427,6 +438,10 @@ function reduceHopCompleted(state: RuntimeState, event: HopCompletedEvent): Runt
     transport: "ok",
     selector: "ok"
   };
+
+  if (pauseRequestedAtBoundary) {
+    state.phase = PHASES.PAUSED;
+  }
 
   return state;
 }

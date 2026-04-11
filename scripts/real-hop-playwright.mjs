@@ -36,7 +36,10 @@ import {
   buildBootstrapPrompt,
   ensureOverlay,
   bindFromPage,
+  findPageByOverlayTabId,
   getRuntimeState,
+  expectPopupActionEnabled,
+  clickPopupAction,
   clickOverlayAction,
   expectOverlayActionEnabled,
   expectPopupPhaseState,
@@ -116,6 +119,15 @@ function logLine(message) {
 
 function normalizeText(value) {
   return String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
+}
+
+async function ensureChatGptPage(page, browserStrategy) {
+  const alreadyChatGpt = page.url().startsWith("https://chatgpt.com");
+  if (browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach && alreadyChatGpt) {
+    return;
+  }
+
+  await page.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" });
 }
 
 function calculateTextOverlap(textA, textB) {
@@ -699,12 +711,10 @@ try {
   } else {
     bootstrapMode = "live_session_bootstrap";
     logLine("Live session bootstrap: send prompts and verify acceptance without URL.\n");
-    if (!(browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach)) {
-      await Promise.all([
-        pageA.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" }),
-        pageB.goto("https://chatgpt.com", { waitUntil: "domcontentloaded" })
-      ]);
-    }
+    await Promise.all([
+      ensureChatGptPage(pageA, browserStrategy),
+      ensureChatGptPage(pageB, browserStrategy)
+    ]);
 
     if (sessionStorageData) {
       await restoreSessionStorage(pageA, sessionStorageData);
@@ -787,6 +797,22 @@ try {
   // Final check via popup
   const finalCheck = await getRuntimeState(popupPage);
   logLine(`Final runtime state: ${JSON.stringify(finalCheck)}`);
+
+  if (finalCheck.bindings?.A?.tabId) {
+    const reboundA = await findPageByOverlayTabId(context, finalCheck.bindings.A.tabId);
+    if (reboundA) {
+      pageA = reboundA;
+      logLine(`Reconciled pageA to bound tab ${finalCheck.bindings.A.tabId}`);
+    }
+  }
+
+  if (finalCheck.bindings?.B?.tabId) {
+    const reboundB = await findPageByOverlayTabId(context, finalCheck.bindings.B.tabId);
+    if (reboundB) {
+      pageB = reboundB;
+      logLine(`Reconciled pageB to bound tab ${finalCheck.bindings.B.tabId}`);
+    }
+  }
 
   // Proceed even with partial binding
   const bindingEstablished = Boolean(finalCheck.bindings?.A || finalCheck.bindings?.B);
@@ -924,8 +950,8 @@ try {
   // Try to start relay; if UI checks timeout, just try clicking the start button anyway
   let startClicked = false;
   try {
-    await expectOverlayActionEnabled(pageA, "start");
-    await clickOverlayAction(pageA, "start");
+    await expectPopupActionEnabled(popupPage, "start");
+    await clickPopupAction(popupPage, "start");
     startClicked = true;
   } catch {
     logLine("Start action verification timed out - attempting direct click");
@@ -970,8 +996,8 @@ try {
 
   // Clean stop to avoid leaving running session in manual verification.
   try {
-    await expectOverlayActionEnabled(pageA, "stop");
-    await clickOverlayAction(pageA, "stop");
+    await expectPopupActionEnabled(popupPage, "stop");
+    await clickPopupAction(popupPage, "stop");
   } catch {
     // Ignore stop failures in teardown.
   }

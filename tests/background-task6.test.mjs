@@ -80,10 +80,12 @@ const chromeEnvironment = createChromeEnvironment();
 globalThis.chrome = chromeEnvironment.chrome;
 
 const {
+  formatPendingBoundaryStep,
   classifyTargetObservation,
   getHopExecutionPlan,
   runRelayLoop,
   setActiveLoopTokenForTest,
+  shouldExposePendingHopBoundary,
   waitForSettledReply
 } = await importExtensionModule("background");
 const { createInitialState } = await importExtensionModule("core/state-machine");
@@ -212,6 +214,38 @@ test("getHopExecutionPlan maps pending/verifying/waiting_reply to the Task 6 exe
     shouldVerify: false,
     shouldWait: true
   });
+});
+
+test("shouldExposePendingHopBoundary exposes a fresh pending hop exactly once per boundary", () => {
+  const state = createRunningState({
+    sourceRole: "B",
+    targetRole: "A",
+    targetTabId: 1,
+    round: 2,
+    hopId: null,
+    stage: "pending"
+  });
+  state.runtimeActivity = {
+    ...state.runtimeActivity,
+    step: "hop_completed",
+    sourceRole: "A",
+    targetRole: "B",
+    pendingRound: 1,
+    transport: "ok",
+    selector: "ok"
+  };
+
+  assert.equal(shouldExposePendingHopBoundary(state, state.activeHop), true);
+
+  state.runtimeActivity.step = formatPendingBoundaryStep("B", "A");
+  assert.equal(shouldExposePendingHopBoundary(state, state.activeHop), false);
+
+  state.activeHop = {
+    ...state.activeHop,
+    hopId: "hop-2",
+    stage: "verifying"
+  };
+  assert.equal(shouldExposePendingHopBoundary(state, state.activeHop), false);
 });
 
 test("classifyTargetObservation distinguishes correct, wrong, stale, and unreachable targets", () => {

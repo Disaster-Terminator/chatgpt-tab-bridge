@@ -2,6 +2,17 @@ import { PHASES, STOP_REASONS } from "./constants.ts";
 import { canWriteOverride, hasValidBindings } from "./state-machine.ts";
 import type { BlockReason, BridgeRole, ExecutionReadiness, PopupControls, RuntimeDisplay, RuntimeState, ThreadActivity } from "../shared/types.js";
 
+function resolveDisplayedSourceRole(state: RuntimeState): BridgeRole {
+  const activeHop = state.activeHop;
+  const isFreshPendingBoundary = activeHop?.stage === "pending" && activeHop.hopId === null;
+
+  if (isFreshPendingBoundary) {
+    return state.nextHopOverride ?? activeHop.sourceRole;
+  }
+
+  return activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
+}
+
 export function deriveControls(state: RuntimeState, readiness: ExecutionReadiness): PopupControls {
   return {
     canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
@@ -18,10 +29,7 @@ export function computeReadiness(
   state: RuntimeState,
   sourceThreadActivity: ThreadActivity | null
 ): ExecutionReadiness {
-  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
-  const starterRole = state.starter;
-  
-  const checkRole = state.phase === PHASES.READY ? starterRole : sourceRole;
+  const sourceRole = resolveDisplayedSourceRole(state);
   
   const isGenerating = sourceThreadActivity?.generating ?? false;
   
@@ -51,7 +59,7 @@ export function computeReadiness(
 }
 
 export function buildDisplay(state: RuntimeState): RuntimeDisplay {
-  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = resolveDisplayedSourceRole(state);
   
   const normalStopReasons = new Set([
     STOP_REASONS.STOP_MARKER,

@@ -545,7 +545,8 @@ export function isSupportedChatGptThreadUrl(url) {
  *   historyItemsVisible?: boolean,
  *   loginPromptVisible?: boolean,
  *   oauthButtonsVisible?: boolean,
- *   authCtaVisible?: boolean
+ *   authCtaVisible?: boolean,
+ *   accountChooserModalVisible?: boolean
  * }} snapshot
  * @returns {{
  *   authenticated: boolean,
@@ -561,6 +562,7 @@ export function isSupportedChatGptThreadUrl(url) {
  *     loginPromptVisible: boolean,
  *     oauthButtonsVisible: boolean,
  *     authCtaVisible: boolean,
+ *     accountChooserModalVisible: boolean,
  *     threadUrl: boolean
  *   }
  * }}
@@ -576,6 +578,7 @@ export function classifyChatGptAuthState(snapshot = {}) {
     loginPromptVisible: Boolean(snapshot.loginPromptVisible),
     oauthButtonsVisible: Boolean(snapshot.oauthButtonsVisible),
     authCtaVisible: Boolean(snapshot.authCtaVisible),
+    accountChooserModalVisible: Boolean(snapshot.accountChooserModalVisible),
     threadUrl: isSupportedChatGptThreadUrl(url)
   };
 
@@ -584,6 +587,50 @@ export function classifyChatGptAuthState(snapshot = {}) {
       authenticated: false,
       status: "unauthenticated_auth_page",
       evidence: url,
+      url,
+      title,
+      markers
+    };
+  }
+
+  // RECOVERABLE GATE CHECK: Strong authenticated markers present + account chooser modal = recoverable
+  // NOT a terminal unauthenticated failure. If we have sidebar/history/account evidence,
+  // the user just needs to pick an account to continue, which is recoverable.
+  const hasAuthenticatedMarkers =
+    markers.accountVisible ||
+    markers.sidebarVisible ||
+    markers.historyItemsVisible ||
+    (markers.threadUrl && markers.sidebarVisible);
+
+  if (markers.accountChooserModalVisible && hasAuthenticatedMarkers) {
+    return {
+      authenticated: false,
+      status: "recoverable_account_selection_gate",
+      evidence: "account-chooser-modal-with-authenticated-shell",
+      url,
+      title,
+      markers
+    };
+  }
+
+  // Terminal unauthenticated: auth CTA visible but NO strong authenticated markers
+  if (markers.authCtaVisible && !hasAuthenticatedMarkers) {
+    return {
+      authenticated: false,
+      status: "unauthenticated_auth_cta_visible",
+      evidence: "login-or-signup-cta-visible",
+      url,
+      title,
+      markers
+    };
+  }
+
+  // Fallback: if auth CTA visible but we have some auth markers, treat as recoverable gate
+  if (markers.authCtaVisible && hasAuthenticatedMarkers) {
+    return {
+      authenticated: false,
+      status: "recoverable_auth_cta_with_shell",
+      evidence: "auth-cta-visible-with-authenticated-shell",
       url,
       title,
       markers
@@ -606,17 +653,6 @@ export function classifyChatGptAuthState(snapshot = {}) {
       authenticated: false,
       status: "unauthenticated_oauth_page",
       evidence: "oauth-buttons-visible",
-      url,
-      title,
-      markers
-    };
-  }
-
-  if (markers.authCtaVisible) {
-    return {
-      authenticated: false,
-      status: "unauthenticated_auth_cta_visible",
-      evidence: "login-or-signup-cta-visible",
       url,
       title,
       markers
@@ -721,7 +757,8 @@ export function classifyChatGptAuthState(snapshot = {}) {
  *   historyItemsVisible: boolean,
  *   loginPromptVisible: boolean,
  *   oauthButtonsVisible: boolean,
- *   authCtaVisible: boolean
+ *   authCtaVisible: boolean,
+ *   accountChooserModalVisible: boolean
  * }>}
  */
 export async function captureChatGptAuthSnapshot(page) {
@@ -731,6 +768,43 @@ export async function captureChatGptAuthSnapshot(page) {
   return await page
     .evaluate(() => {
       const textIncludes = (needle) => document.body?.innerText?.includes(needle) || false;
+      const isVisible = (node) => {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+
+      const visibleDialogs = Array.from(document.querySelectorAll('[role="dialog"], dialog')).filter(isVisible);
+      const visibleEmailInput = document.querySelector('input[type="email"], input[name="email"]');
+      const hasVisibleEmailInput = isVisible(visibleEmailInput);
+      const dialogText = visibleDialogs.map((el) => el.textContent || "").join(" ");
+      const dialogTextIncludes = (needle) => dialogText.includes(needle);
+
+      // Account chooser modal: looks for signin/continue modal content
+      // Common patterns: "choose an account to continue", "欢迎回来" (welcome back),
+      // "select account", account list items, "continue with" options in modal
+      const accountChooserModalVisible = Boolean(
+        hasVisibleEmailInput ||
+        visibleDialogs.some((el) => {
+          const text = el.textContent || "";
+          return (
+            text.includes("选择账户") ||
+            text.includes("选择账号") ||
+            text.includes("choose an account") ||
+            text.includes("welcome back") ||
+            text.includes("欢迎回来") ||
+            (text.includes("continue") && text.includes("account"))
+          );
+        }) ||
+        Array.from(document.querySelectorAll('[data-testid*="modal"]')).some(isVisible) ||
+        textIncludes("选择账户") ||
+        textIncludes("选择账号") ||
+        textIncludes("choose an account") ||
+        textIncludes("welcome back") ||
+        textIncludes("欢迎回来") ||
+        (textIncludes("continue") && textIncludes("account"))
+      );
 
       return {
         url: window.location.href,
@@ -745,7 +819,7 @@ export async function captureChatGptAuthSnapshot(page) {
           document.querySelector('[data-testid="create-new-chat-button"]')
         ),
         loginPromptVisible:
-          Boolean(document.querySelector('input[type="email"], input[name="email"]')) ||
+          hasVisibleEmailInput ||
           textIncludes("Log in") ||
           textIncludes("Continue with Google") ||
           textIncludes("Continue with Apple"),
@@ -753,7 +827,8 @@ export async function captureChatGptAuthSnapshot(page) {
         authCtaVisible:
           Boolean(document.querySelector('button[aria-label="登录"], button[aria-label="免费注册"]')) ||
           textIncludes("免费注册") ||
-          textIncludes("获取为你量身定制的回复")
+          textIncludes("获取为你量身定制的回复"),
+        accountChooserModalVisible
       };
     })
     .catch(() => ({
@@ -765,7 +840,8 @@ export async function captureChatGptAuthSnapshot(page) {
       historyItemsVisible: false,
       loginPromptVisible: false,
       oauthButtonsVisible: false,
-      authCtaVisible: false
+      authCtaVisible: false,
+      accountChooserModalVisible: false
     }));
 }
 
@@ -819,7 +895,7 @@ export async function probeChatGptAuthState(page, options = {}) {
 }
 
 /**
- * Validate that auth state is still valid by checking if we can access chatgpt.com.
+ * Validates that auth state is still valid by checking whether chatgpt.com can be accessed.
  * Fails fast with clear message if cookies are expired and redirect to login occurs.
  * @param {import("playwright").Page} page - A page from the context
  * @returns {{ valid: boolean, error?: string }}
@@ -843,6 +919,140 @@ export async function validateAuthState(page) {
     return {
       valid: false,
       error: `Auth validation failed: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Attempt safe generic recovery for recoverable auth gates.
+ * Only attempts actions that are unambiguous and user-agnostic:
+ * - Click a single "登录" (login) button if exactly one obvious candidate
+ * - Click a single remembered-account card if exactly one safe candidate
+ * - Wait for modal dismissal and re-probe
+ *
+ * Returns structured blocker if recovery cannot be safely completed (multiple candidates, ambiguous path).
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{ recovered: boolean, status: string, error?: string }>}
+ */
+export async function attemptRecoverableAuthRecovery(page) {
+  try {
+    // First, capture current state to understand what we're dealing with
+    const beforeSnapshot = await captureChatGptAuthSnapshot(page);
+
+    // If no recoverable markers, nothing to recover
+    const hasRecoverableMarkers =
+      beforeSnapshot.accountChooserModalVisible ||
+      beforeSnapshot.authCtaVisible;
+
+    if (!hasRecoverableMarkers) {
+      return { recovered: false, status: "no_recoverable_gate_detected" };
+    }
+
+    const recoveryEmail = process.env.CHATGPT_RECOVERY_EMAIL || process.env.CHATGPT_LOGIN_EMAIL || "";
+
+    // Try approach 0: if a visible email input and a single continue button exist, fill and continue.
+    // This is safe when the operator has explicitly provided a recovery email via env.
+    if (recoveryEmail) {
+      const emailInputs = await page
+        .locator('input[type="email"], input[name="email"]')
+        .filter({ visible: true })
+        .all();
+      const continueButtons = await page
+        .locator('button[type="submit"], button')
+        .filter({ hasText: /^(继续|Continue)$/ })
+        .all();
+
+      if (emailInputs.length === 1 && continueButtons.length === 1) {
+        const input = emailInputs[0];
+        const button = continueButtons[0];
+        await input.fill(recoveryEmail).catch(() => {});
+        await button.click().catch(() => {});
+        await page.waitForTimeout(2000);
+
+        const afterSnapshot = await captureChatGptAuthSnapshot(page);
+        if (!afterSnapshot.accountChooserModalVisible && !afterSnapshot.authCtaVisible) {
+          return { recovered: true, status: "email_continue_submitted" };
+        }
+      }
+    }
+
+    // Try approach 1: Click a single obvious "登录" (login) button if present
+    // Only safe if there's exactly one candidate
+    const loginButtons = await page
+      .locator('button[aria-label="登录"], button:has-text("登录"), button:has-text("Log in")')
+      .all();
+
+    if (loginButtons.length === 1) {
+      const btn = loginButtons[0];
+      const visible = await btn.isVisible().catch(() => false);
+      if (visible) {
+        await btn.click().catch(() => {});
+        await page.waitForTimeout(2000);
+
+        const afterSnapshot = await captureChatGptAuthSnapshot(page);
+        if (
+          !afterSnapshot.accountChooserModalVisible &&
+          !afterSnapshot.authCtaVisible
+        ) {
+          return { recovered: true, status: "login_button_clicked_gate_dismissed" };
+        }
+      }
+    }
+
+    // Try approach 2: Look for a single remembered account card in chooser modal
+    // Only safe if exactly one account candidate (user-agnostic)
+    const accountCards = await page
+      .locator('[role="button"], button')
+      .filter({
+        hasText: /@/
+      })
+      .all();
+
+    if (accountCards.length === 1) {
+      const card = accountCards[0];
+      const visible = await card.isVisible().catch(() => false);
+      if (visible) {
+        await card.click().catch(() => {});
+        await page.waitForTimeout(2000);
+
+        const afterSnapshot = await captureChatGptAuthSnapshot(page);
+        if (
+          !afterSnapshot.accountChooserModalVisible &&
+          !afterSnapshot.authCtaVisible
+        ) {
+          return { recovered: true, status: "account_card_clicked_gate_dismissed" };
+        }
+      }
+    }
+
+    // Try approach 3: Dismiss any visible modal by clicking outside or pressing Escape
+    const modalVisible = await page.locator('[role="dialog"]').isVisible().catch(() => false);
+    if (modalVisible) {
+      // Click in top-left corner to dismiss modal (common modal dismissal pattern)
+      await page.mouse.click(1, 1).catch(() => {});
+      await page.waitForTimeout(1000);
+
+      const afterSnapshot = await captureChatGptAuthSnapshot(page);
+      if (
+        !afterSnapshot.accountChooserModalVisible &&
+        !afterSnapshot.authCtaVisible
+      ) {
+        return { recovered: true, status: "modal_dismissed" };
+      }
+    }
+
+    // Cannot safely recover - ambiguous or multi-choice scenario
+    // Return explicit blocker instead of guessing
+    return {
+      recovered: false,
+      status: "recoverable_gate_blocked_ambiguous",
+      error: `Cannot safely recover: ${loginButtons.length} login buttons, ${accountCards.length} account cards. User must choose manually.`
+    };
+  } catch (error) {
+    return {
+      recovered: false,
+      status: "recoverable_gate_recovery_error",
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 }
@@ -1092,6 +1302,67 @@ export async function expectPopupControlState(page, expectedStates) {
       { timeout: 30000 }
     );
   }
+}
+
+function popupActionSelector(action) {
+  switch (action) {
+    case "start":
+      return "#startButton";
+    case "pause":
+      return "#pauseButton";
+    case "resume":
+      return "#resumeButton";
+    case "stop":
+      return "#stopButton";
+    case "clear-terminal":
+      return "#clearTerminalButton";
+    default:
+      throw new Error(`Unknown popup action: ${action}`);
+  }
+}
+
+/**
+ * @param {import("playwright").Page} page
+ * @param {"start"|"pause"|"resume"|"stop"} action
+ */
+export async function expectPopupActionEnabled(page, action) {
+  const selector = popupActionSelector(action);
+  await page.waitForFunction(
+    (targetSelector) => {
+      const node = document.querySelector(targetSelector);
+      if (!node) return false;
+      return node.disabled !== true;
+    },
+    selector,
+    { timeout: 30000 }
+  );
+}
+
+/**
+ * @param {import("playwright").Page} page
+ * @param {"start"|"pause"|"resume"|"stop"} action
+ */
+export async function clickPopupAction(page, action) {
+  const messageType = (() => {
+    switch (action) {
+      case "start":
+        return "START_SESSION";
+      case "pause":
+        return "PAUSE_SESSION";
+      case "resume":
+        return "RESUME_SESSION";
+      case "stop":
+        return "STOP_SESSION";
+      case "clear-terminal":
+        return "CLEAR_TERMINAL";
+      default:
+        throw new Error(`Unknown popup action: ${action}`);
+    }
+  })();
+
+  await page.evaluate(async (type) => {
+    await chrome.runtime.sendMessage({ type });
+  }, messageType);
 }
 
 /**
@@ -2193,11 +2464,37 @@ export async function getExtensionId(page) {
  * @returns {Promise<import("playwright").Page>}
  */
 export async function openPopup(context, extensionId) {
+  const popupUrl = `chrome-extension://${extensionId}/popup.html`;
+  const existingPages = context.pages().filter((page) => page.url().startsWith(popupUrl));
+
+  if (existingPages.length > 0) {
+    const primaryPopup = existingPages[0];
+    for (const extraPopup of existingPages.slice(1)) {
+      await extraPopup.close().catch(() => {});
+    }
+
+    if (primaryPopup.isClosed()) {
+      const reopenedPopup = await context.newPage();
+      await reopenedPopup.goto(popupUrl, {
+        waitUntil: "domcontentloaded"
+      });
+      return reopenedPopup;
+    }
+
+    if (!primaryPopup.url().startsWith(popupUrl)) {
+      await primaryPopup.goto(popupUrl, {
+        waitUntil: "domcontentloaded"
+      });
+    }
+
+    return primaryPopup;
+  }
+
   const popupPage = await context.newPage();
-  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
-    waitUntil: "domcontentloaded"
-  });
-  return popupPage;
+   await popupPage.goto(popupUrl, {
+     waitUntil: "domcontentloaded"
+   });
+   return popupPage;
 }
 
 /**
@@ -2231,6 +2528,34 @@ export async function readPopupState(popupPage) {
       overrideDisabled: getAttr("#overrideSelect", "disabled")
     };
   });
+}
+
+function normalizeRuntimeText(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+export function isExpectedPendingBoundaryVisible({
+  popupState,
+  runtimeState,
+  expectedSourceRole,
+  expectedTargetRole
+}) {
+  const activeHop = runtimeState?.activeHop;
+  const expectedHopText = `${expectedSourceRole} -> ${expectedTargetRole}`;
+  const expectedStepText = `pending ${expectedSourceRole} -> ${expectedTargetRole}`;
+
+  return Boolean(
+    activeHop &&
+      activeHop.stage === "pending" &&
+      activeHop.sourceRole === expectedSourceRole &&
+      activeHop.targetRole === expectedTargetRole &&
+      normalizeRuntimeText(popupState?.nextHop) === normalizeRuntimeText(expectedHopText) &&
+      normalizeRuntimeText(popupState?.currentStep) === normalizeRuntimeText(expectedStepText)
+  );
 }
 
 /**
@@ -2384,6 +2709,27 @@ export async function bindFromPage(page, popupPage, role) {
     tabId: tabId,
     role: role
   };
+}
+
+/**
+ * Find the page whose overlay reports the given tabId.
+ * @param {import("playwright").BrowserContext} context
+ * @param {number} tabId
+ * @returns {Promise<import("playwright").Page|null>}
+ */
+export async function findPageByOverlayTabId(context, tabId) {
+  for (const page of context.pages()) {
+    try {
+      const result = await getTabIdFromPage(page);
+      if (!result.error && result.tabId === tabId) {
+        return page;
+      }
+    } catch {
+      // ignore pages without readable overlay state
+    }
+  }
+
+  return null;
 }
 
 /**

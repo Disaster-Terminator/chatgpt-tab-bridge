@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 import {
+  attemptRecoverableAuthRecovery,
   classifyExtensionLoadedEvidence,
   DEFAULT_PLAYWRIGHT_PROFILE_DIR,
   cleanupBrowser,
@@ -55,6 +56,56 @@ async function openAndProbe(context) {
   return { page, auth };
 }
 
+/**
+ * Probe auth state with recovery for recoverable gates.
+ * Attempts generic recovery if the initial state is a recoverable gate,
+ * then re-probes to get the final auth state.
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{ initialAuth: import("./_playwright-bridge-helpers.mjs").ReturnType<typeof probeChatGptAuthState>, auth: import("./_playwright-bridge-helpers.mjs").ReturnType<typeof probeChatGptAuthState>, recovered: boolean, recoveryStatus: string, isRecoverableGate: boolean }>}
+ */
+async function probeAndRecoverAuth(page) {
+  const initialAuth = await probeChatGptAuthState(page);
+
+  // Check if this is a recoverable gate
+  const isRecoverableGate =
+    initialAuth.status === "recoverable_account_selection_gate" ||
+    initialAuth.status === "recoverable_auth_cta_with_shell";
+
+  if (!isRecoverableGate) {
+    return {
+      initialAuth,
+      auth: initialAuth,
+      recovered: false,
+      recoveryStatus: initialAuth.status,
+      isRecoverableGate: false
+    };
+  }
+
+  // Attempt safe generic recovery
+  const recovery = await attemptRecoverableAuthRecovery(page);
+
+  if (recovery.recovered) {
+    // Re-probe after successful recovery
+    const finalAuth = await probeChatGptAuthState(page);
+    return {
+      initialAuth,
+      auth: finalAuth,
+      recovered: true,
+      recoveryStatus: recovery.status,
+      isRecoverableGate: true
+    };
+  }
+
+  // Recovery failed - return initial auth with recovery status for explicit blocker
+  return {
+    initialAuth,
+    auth: initialAuth,
+    recovered: false,
+    recoveryStatus: recovery.status,
+    isRecoverableGate: true
+  };
+}
+
 async function collectInfrastructureEvidence(context, page) {
   await ensureOverlay(page);
   const overlay = await collectOverlayEvidence(page);
@@ -105,7 +156,20 @@ async function main() {
     const secondLaunch = await launchPersistentProfile();
     try {
       const reopened = await openAndProbe(secondLaunch.context);
-      const infrastructure = await collectInfrastructureEvidence(secondLaunch.context, reopened.page);
+
+      // Probe with recovery for recoverable gates BEFORE making final verdict
+      const {
+        initialAuth,
+        auth: finalAuth,
+        recovered,
+        recoveryStatus,
+        isRecoverableGate
+      } = await probeAndRecoverAuth(reopened.page);
+
+      const infrastructure = await collectInfrastructureEvidence(
+        secondLaunch.context,
+        reopened.page
+      );
       await reopened.page.screenshot({ path: SCREENSHOT_PATH, fullPage: true }).catch(() => {});
 
       const extensionEvidence = classifyExtensionLoadedEvidence({
@@ -114,7 +178,13 @@ async function main() {
         popupOk: infrastructure.popup.ok,
         runtimePingOk: infrastructure.popup.runtimePing.ok
       });
-      const loggedIn = reopened.auth.authenticated;
+
+      // LoggedIn verdict: must be fully authenticated (not recoverable gate)
+      const loggedIn =
+        finalAuth.authenticated &&
+        finalAuth.status !== "recoverable_account_selection_gate" &&
+        finalAuth.status !== "recoverable_auth_cta_with_shell";
+
       const pageTestable = loggedIn && extensionEvidence.ok;
       const verdict = pageTestable ? "PASS" : "FAIL";
 
@@ -140,12 +210,17 @@ async function main() {
         finalLaunch: {
           loggedIn,
           auth: {
-            ok: reopened.auth.authenticated,
-            status: reopened.auth.status,
-            evidence: reopened.auth.evidence,
-            url: reopened.auth.url,
-            title: reopened.auth.title,
-            markers: reopened.auth.markers
+            ok: finalAuth.authenticated,
+            status: finalAuth.status,
+            evidence: finalAuth.evidence,
+            url: finalAuth.url,
+            title: finalAuth.title,
+            markers: finalAuth.markers
+          },
+          recovery: {
+            attempted: isRecoverableGate,
+            recovered,
+            status: recoveryStatus
           },
           extensionLoaded: extensionEvidence.ok,
           extensionEvidenceMode: extensionEvidence.mode,

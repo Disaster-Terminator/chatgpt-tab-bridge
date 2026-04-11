@@ -325,6 +325,14 @@ function reducePause(state) {
   if (state.phase !== PHASES.RUNNING) {
     return state;
   }
+  if (!isFreshPendingHop(state.activeHop, state)) {
+    state.runtimeActivity = {
+      ...state.runtimeActivity,
+      step: "pause_requested",
+      lastActionAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    return state;
+  }
   state.phase = PHASES.PAUSED;
   state.runtimeActivity = {
     ...state.runtimeActivity,
@@ -384,6 +392,7 @@ function reduceHopCompleted(state, event) {
   if (state.phase !== PHASES.RUNNING) {
     return state;
   }
+  const pauseRequestedAtBoundary = state.runtimeActivity.step === "pause_requested";
   state.round += 1;
   state.nextHopSource = event.targetRole ?? otherRole(event.sourceRole);
   state.activeHop = createPendingHop(state, state.nextHopSource);
@@ -402,7 +411,7 @@ function reduceHopCompleted(state, event) {
     state.lastAssistantHashes[event.targetRole] = event.targetHash;
   }
   state.runtimeActivity = {
-    step: "hop_completed",
+    step: pauseRequestedAtBoundary ? "paused" : "hop_completed",
     sourceRole: event.sourceRole ?? null,
     targetRole: event.targetRole ?? null,
     pendingRound: state.round,
@@ -410,6 +419,9 @@ function reduceHopCompleted(state, event) {
     transport: "ok",
     selector: "ok"
   };
+  if (pauseRequestedAtBoundary) {
+    state.phase = PHASES.PAUSED;
+  }
   return state;
 }
 function reduceSetRuntimeActivity(state, event) {
@@ -947,6 +959,14 @@ function evaluateSubmissionVerification(input) {
 }
 
 // core/popup-model.ts
+function resolveDisplayedSourceRole(state) {
+  const activeHop = state.activeHop;
+  const isFreshPendingBoundary = activeHop?.stage === "pending" && activeHop.hopId === null;
+  if (isFreshPendingBoundary) {
+    return state.nextHopOverride ?? activeHop.sourceRole;
+  }
+  return activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
+}
 function deriveControls(state, readiness) {
   return {
     canStart: state.phase === PHASES.READY && !state.requiresTerminalClear && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
@@ -959,9 +979,7 @@ function deriveControls(state, readiness) {
   };
 }
 function computeReadiness(state, sourceThreadActivity) {
-  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
-  const starterRole = state.starter;
-  const checkRole = state.phase === PHASES.READY ? starterRole : sourceRole;
+  const sourceRole = resolveDisplayedSourceRole(state);
   const isGenerating = sourceThreadActivity?.generating ?? false;
   const starterReady = !isGenerating;
   let blockReason = null;
@@ -982,7 +1000,7 @@ function computeReadiness(state, sourceThreadActivity) {
   };
 }
 function buildDisplay(state) {
-  const sourceRole = state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource;
+  const sourceRole = resolveDisplayedSourceRole(state);
   const normalStopReasons = /* @__PURE__ */ new Set([
     STOP_REASONS.STOP_MARKER,
     STOP_REASONS.USER_STOP,
@@ -1574,6 +1592,12 @@ function getHopExecutionPlan(stage) {
     shouldWait: true
   };
 }
+function formatPendingBoundaryStep(sourceRole, targetRole) {
+  return `pending ${sourceRole} -> ${targetRole}`;
+}
+function shouldExposePendingHopBoundary(state, activeHop) {
+  return activeHop.stage === "pending" && activeHop.hopId === null && state.runtimeActivity.step !== formatPendingBoundaryStep(activeHop.sourceRole, activeHop.targetRole);
+}
 async function runRelayLoop(token, settings) {
   while (token === activeLoopToken) {
     const state = await getState();
@@ -1593,6 +1617,23 @@ async function runRelayLoop(token, settings) {
     const sourceBinding = state.bindings[sourceRole];
     const targetBinding = state.bindings[targetRole];
     const stagePlan = getHopExecutionPlan(activeHop.stage);
+    if (shouldExposePendingHopBoundary(state, activeHop)) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: formatPendingBoundaryStep(sourceRole, targetRole),
+          sourceRole,
+          targetRole,
+          pendingRound: activeHop.round,
+          transport: null,
+          selector: "pending"
+        }
+      });
+      if (settings.pollIntervalMs > 0) {
+        await sleep(Math.max(settings.pollIntervalMs, 3e3));
+      }
+      continue;
+    }
     if (stagePlan.shouldSend) {
       await updateState({
         type: "set_runtime_activity",
@@ -1631,8 +1672,14 @@ async function runRelayLoop(token, settings) {
     if (!sourceTab || !targetTab) {
       return;
     }
+    if (!await shouldContinueRelayLoop(token)) {
+      return;
+    }
     const targetPreflight = await runTargetPreflight(targetRole, targetBinding, state, token);
     if (!targetPreflight) {
+      return;
+    }
+    if (!await shouldContinueRelayLoop(token)) {
       return;
     }
     const sourceSnapshot = await requestAssistantSnapshot(sourceBinding.tabId);
@@ -1641,6 +1688,9 @@ async function runRelayLoop(token, settings) {
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:source:${sourceRole}`
       });
+      return;
+    }
+    if (!await shouldContinueRelayLoop(token)) {
       return;
     }
     const sourceText = normalizeAssistantText(sourceSnapshot.result.text);
@@ -1672,6 +1722,9 @@ async function runRelayLoop(token, settings) {
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target:${targetRole}`
       });
+      return;
+    }
+    if (!await shouldContinueRelayLoop(token)) {
       return;
     }
     const verificationHopId = createVerificationHopId(state.sessionId, activeHop.round);
@@ -1713,6 +1766,9 @@ async function runRelayLoop(token, settings) {
       });
       return;
     }
+    if (!await shouldContinueRelayLoop(token)) {
+      return;
+    }
     const baselineUserHash = baselineCapture.sample.latestUser.hash;
     const baselineGenerating = baselineCapture.sample.generating;
     const baselineLatestUserText = baselineCapture.sample.latestUser.text;
@@ -1734,6 +1790,9 @@ async function runRelayLoop(token, settings) {
       verificationVerdict: "baseline_ready"
     });
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
+    if (!await shouldContinueRelayLoop(token)) {
+      return;
+    }
     const dispatchReadbackSummary = summarizeDispatchReadback(sendResult);
     const dispatchEvidenceSummary = summarizeDispatchEvidence(sendResult);
     const dispatchFailureCode = resolveDispatchFailureCode(sendResult);
@@ -2557,13 +2616,22 @@ function sleep(durationMs) {
     setTimeout(resolve, durationMs);
   });
 }
+async function shouldContinueRelayLoop(token) {
+  if (token !== activeLoopToken) {
+    return false;
+  }
+  const state = await getState();
+  return state.phase === PHASES.RUNNING;
+}
 function structuredCloneSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
 export {
   classifyTargetObservation,
+  formatPendingBoundaryStep,
   getHopExecutionPlan,
   runRelayLoop,
   setActiveLoopTokenForTest,
+  shouldExposePendingHopBoundary,
   waitForSettledReply
 };

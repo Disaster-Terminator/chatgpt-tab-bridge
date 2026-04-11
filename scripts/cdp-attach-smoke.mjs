@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 import {
+  attemptRecoverableAuthRecovery,
   classifyExtensionLoadedEvidence,
   cleanupBrowserConnection,
   collectOverlayEvidence,
@@ -16,6 +17,50 @@ import {
   resolveBrowserStrategyFromCli,
   waitForExtensionServiceWorkers
 } from "./_playwright-bridge-helpers.mjs";
+
+/**
+ * Probe auth state with recovery for CDP smoke workflow.
+ * @param {import("playwright").Page} page
+ * @returns {Promise<{ initialAuth: ReturnType<typeof probeChatGptAuthState>, auth: ReturnType<typeof probeChatGptAuthState>, recovered: boolean, recoveryStatus: string, isRecoverableGate: boolean }>}
+ */
+async function probeAndRecoverAuthWithResult(page) {
+  const initialAuth = await probeChatGptAuthState(page);
+
+  const isRecoverableGate =
+    initialAuth.status === "recoverable_account_selection_gate" ||
+    initialAuth.status === "recoverable_auth_cta_with_shell";
+
+  if (!isRecoverableGate) {
+    return {
+      initialAuth,
+      auth: initialAuth,
+      recovered: false,
+      recoveryStatus: initialAuth.status,
+      isRecoverableGate: false
+    };
+  }
+
+  const recovery = await attemptRecoverableAuthRecovery(page);
+
+  if (recovery.recovered) {
+    const finalAuth = await probeChatGptAuthState(page);
+    return {
+      initialAuth,
+      auth: finalAuth,
+      recovered: true,
+      recoveryStatus: recovery.status,
+      isRecoverableGate: true
+    };
+  }
+
+  return {
+    initialAuth,
+    auth: initialAuth,
+    recovered: false,
+    recoveryStatus: recovery.status,
+    isRecoverableGate: true
+  };
+}
 
 const OUT_DIR = path.resolve(process.cwd(), "tmp", "cdp-smoke");
 const SUMMARY_PATH = path.join(OUT_DIR, "summary.json");
@@ -65,7 +110,16 @@ try {
     count: serviceWorkers.length,
     urls: serviceWorkers.map((worker) => worker.url())
   };
-  const auth = await probeChatGptAuthState(targetPage);
+
+  // Probe auth state with recovery for recoverable gates
+  const {
+    initialAuth,
+    auth: finalAuth,
+    recovered,
+    recoveryStatus,
+    isRecoverableGate
+  } = await probeAndRecoverAuthWithResult(targetPage);
+
   let overlay = {
     ok: false,
     count: 0,
@@ -102,7 +156,14 @@ try {
     runtimePingOk: popup.runtimePing.ok
   });
   const extensionLoaded = extensionEvidence.ok;
-  const pageTestable = auth.authenticated && extensionLoaded;
+
+  // LoggedIn verdict: must be fully authenticated (not recoverable gate)
+  const loggedIn =
+    finalAuth.authenticated &&
+    finalAuth.status !== "recoverable_account_selection_gate" &&
+    finalAuth.status !== "recoverable_auth_cta_with_shell";
+
+  const pageTestable = loggedIn && extensionLoaded;
   const verdict = pageTestable ? "PASS" : "FAIL";
 
   await targetPage.screenshot({ path: SCREENSHOT_PATH, fullPage: true }).catch(() => {});
@@ -116,14 +177,19 @@ try {
       targetUrl: targetPage.url() || TARGET_URL
     },
     finalLaunch: {
-      loggedIn: auth.authenticated,
+      loggedIn,
       auth: {
-        ok: auth.authenticated,
-        status: auth.status,
-        evidence: auth.evidence,
-        url: auth.url,
-        title: auth.title,
-        markers: auth.markers
+        ok: finalAuth.authenticated,
+        status: finalAuth.status,
+        evidence: finalAuth.evidence,
+        url: finalAuth.url,
+        title: finalAuth.title,
+        markers: finalAuth.markers
+      },
+      recovery: {
+        attempted: isRecoverableGate,
+        recovered,
+        status: recoveryStatus
       },
       extensionLoaded,
       extensionEvidenceMode: extensionEvidence.mode,

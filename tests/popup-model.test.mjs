@@ -223,3 +223,23 @@ test("deferred nextHopOverride does not rewrite display when activeHop is claime
   const readiness = computeReadiness(state, null);
   assert.equal(readiness.sourceRole, "A", "Override should not rewrite active readiness");
 });
+
+test("fresh pending boundary display uses nextHopOverride before resume", () => {
+  const state = bind(bind(createInitialState(), "A", 1), "B", 2);
+  state.phase = PHASES.PAUSED;
+  state.nextHopSource = "B";
+  state.nextHopOverride = "A";
+  state.activeHop = {
+    sourceRole: "B",
+    targetRole: "A",
+    round: 2,
+    hopId: null,
+    stage: "pending"
+  };
+
+  const display = buildDisplay(state);
+  const readiness = computeReadiness(state, null);
+
+  assert.equal(display.nextHop, "A -> B", "Fresh pending boundary should preview override in display");
+  assert.equal(readiness.sourceRole, "A", "Fresh pending boundary should preview override in readiness");
+});

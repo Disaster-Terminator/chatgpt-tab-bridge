@@ -838,6 +838,18 @@ export function getHopExecutionPlan(stage: RuntimeHopTruth["stage"]): HopExecuti
   };
 }
 
+export function formatPendingBoundaryStep(sourceRole: BridgeRole, targetRole: BridgeRole): string {
+  return `pending ${sourceRole} -> ${targetRole}`;
+}
+
+export function shouldExposePendingHopBoundary(state: RuntimeState, activeHop: RuntimeHopTruth): boolean {
+  return (
+    activeHop.stage === "pending" &&
+    activeHop.hopId === null &&
+    state.runtimeActivity.step !== formatPendingBoundaryStep(activeHop.sourceRole, activeHop.targetRole)
+  );
+}
+
 export async function runRelayLoop(token: number, settings: RuntimeSettings): Promise<void> {
   while (token === activeLoopToken) {
     const state = await getState();
@@ -859,6 +871,26 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
     const sourceBinding = state.bindings[sourceRole];
     const targetBinding = state.bindings[targetRole];
     const stagePlan = getHopExecutionPlan(activeHop.stage);
+
+    if (shouldExposePendingHopBoundary(state, activeHop)) {
+      await updateState({
+        type: "set_runtime_activity",
+        activity: {
+          step: formatPendingBoundaryStep(sourceRole, targetRole),
+          sourceRole,
+          targetRole,
+          pendingRound: activeHop.round,
+          transport: null,
+          selector: "pending"
+        }
+      });
+
+      if (settings.pollIntervalMs > 0) {
+        await sleep(Math.max(settings.pollIntervalMs, 3000));
+      }
+
+      continue;
+    }
 
     if (stagePlan.shouldSend) {
       await updateState({
@@ -905,10 +937,18 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
       return;
     }
 
+    if (!(await shouldContinueRelayLoop(token))) {
+      return;
+    }
+
     // P0-1: Target-side preflight - check target is ready to receive
     const targetPreflight = await runTargetPreflight(targetRole, targetBinding, state, token);
     if (!targetPreflight) {
       return; // Target not ready, stop condition already set
+    }
+
+    if (!(await shouldContinueRelayLoop(token))) {
+      return;
     }
 
     const sourceSnapshot = await requestAssistantSnapshot(sourceBinding.tabId);
@@ -917,6 +957,10 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:source:${sourceRole}`
       });
+      return;
+    }
+
+    if (!(await shouldContinueRelayLoop(token))) {
       return;
     }
 
@@ -954,6 +998,10 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
         type: "selector_failure",
         reason: `${ERROR_REASONS.SELECTOR_FAILURE}:target:${targetRole}`
       });
+      return;
+    }
+
+    if (!(await shouldContinueRelayLoop(token))) {
       return;
     }
 
@@ -1003,6 +1051,10 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
       return;
     }
 
+    if (!(await shouldContinueRelayLoop(token))) {
+      return;
+    }
+
     const baselineUserHash = baselineCapture.sample.latestUser.hash;
     const baselineGenerating = baselineCapture.sample.generating;
     const baselineLatestUserText = baselineCapture.sample.latestUser.text;
@@ -1026,6 +1078,10 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
     });
 
     const sendResult = await sendRelayMessage(targetBinding.tabId, envelope);
+    if (!(await shouldContinueRelayLoop(token))) {
+      return;
+    }
+
     const dispatchReadbackSummary = summarizeDispatchReadback(sendResult);
     const dispatchEvidenceSummary = summarizeDispatchEvidence(sendResult);
     const dispatchFailureCode = resolveDispatchFailureCode(sendResult);
@@ -2029,6 +2085,15 @@ function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
+}
+
+async function shouldContinueRelayLoop(token: number): Promise<boolean> {
+  if (token !== activeLoopToken) {
+    return false;
+  }
+
+  const state = await getState();
+  return state.phase === PHASES.RUNNING;
 }
 
 function structuredCloneSafe<T>(value: T): T {
