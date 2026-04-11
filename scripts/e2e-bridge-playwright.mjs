@@ -739,6 +739,60 @@ function classifyHopFailure({
   return `round_${expectedRound}_beat_4_acceptance_timeout`;
 }
 
+function resolvePageForRole(env, role) {
+  if (role === "A") {
+    return env.pageA;
+  }
+
+  if (role === "B") {
+    return env.pageB;
+  }
+
+  return env.pageB || env.pageA || null;
+}
+
+async function resolveCanonicalTargetDiagnostics(env) {
+  let runtimeState = null;
+  let runtimeEvents = [];
+
+  try {
+    runtimeState = await getRuntimeState(env.popupPage);
+  } catch {
+    runtimeState = null;
+  }
+
+  try {
+    const runtimeResult = await fetchRuntimeEventsFromPopup(env.popupPage);
+    if (runtimeResult.ok) {
+      runtimeEvents = runtimeResult.events;
+    }
+  } catch {
+    runtimeEvents = [];
+  }
+
+  const preferredTargetEvent = [...runtimeEvents].reverse().find((event) => {
+    return (
+      ["reply_timeout", "reply_observation_failed", "waiting_reply"].includes(event.phaseStep) &&
+      (event.targetRole === "A" || event.targetRole === "B")
+    );
+  });
+
+  const fallbackTargetEvent = [...runtimeEvents].reverse().find((event) => {
+    return event.targetRole === "A" || event.targetRole === "B";
+  });
+
+  const targetRole =
+    preferredTargetEvent?.targetRole ??
+    runtimeState?.activeHop?.targetRole ??
+    fallbackTargetEvent?.targetRole ??
+    "B";
+
+  return {
+    targetRole,
+    targetPage: resolvePageForRole(env, targetRole)
+  };
+}
+
 async function waitForAcceptedHop({ popupPage, targetPage, baselineTarget, expectedRound, targetRole }) {
   const startedAt = Date.now();
   const initialRuntimeResult = await fetchRuntimeEventsFromPopup(popupPage);
@@ -892,6 +946,8 @@ async function runScenario(name, scenarioFn) {
     }
 
     if (env) {
+      const canonicalTarget = await resolveCanonicalTargetDiagnostics(env);
+
       try {
         const popupState = await readPopupState(env.popupPage);
         diagContent += `\nPopup State:\n${JSON.stringify(popupState, null, 2)}\n`;
@@ -915,7 +971,7 @@ async function runScenario(name, scenarioFn) {
 
       // P0-5: Add target thread activity diagnostics
       try {
-        const targetActivity = await env.pageB.evaluate(() => {
+        const targetActivity = await canonicalTarget.targetPage.evaluate(() => {
           const result = { generating: false, sendButtonReady: false, userMessages: 0, assistantMessages: 0 };
           
           // Check for stop button (generating)
@@ -934,14 +990,14 @@ async function runScenario(name, scenarioFn) {
           
           return result;
         });
-        diagContent += `\nTarget Thread Activity:\n${JSON.stringify(targetActivity, null, 2)}\n`;
+        diagContent += `\nTarget Thread Activity (${canonicalTarget.targetRole}):\n${JSON.stringify(targetActivity, null, 2)}\n`;
       } catch (e) {
         diagContent += `\nTarget thread activity capture failed: ${e.message}`;
       }
 
       // P0-4: Add real Ack Debug from content-script via GET_LAST_ACK_DEBUG
       try {
-        const ackDebugResponse = await env.pageA.evaluate(() => {
+        const ackDebugResponse = await canonicalTarget.targetPage.evaluate(() => {
           return new Promise((resolve) => {
             chrome.runtime.sendMessage({ type: "GET_LAST_ACK_DEBUG" }, (response) => {
               resolve(response);
@@ -950,9 +1006,9 @@ async function runScenario(name, scenarioFn) {
         }).catch(() => null);
         
         if (ackDebugResponse) {
-          diagContent += `\nAck Debug (GET_LAST_ACK_DEBUG):\n${JSON.stringify(ackDebugResponse, null, 2)}\n`;
+          diagContent += `\nAck Debug (${canonicalTarget.targetRole}, GET_LAST_ACK_DEBUG):\n${JSON.stringify(ackDebugResponse, null, 2)}\n`;
         } else {
-          diagContent += `\nAck Debug: unavailable\n`;
+          diagContent += `\nAck Debug (${canonicalTarget.targetRole}): unavailable\n`;
         }
       } catch (e) {
         diagContent += `\nAck Debug capture failed: ${e.message}`;
@@ -1646,9 +1702,40 @@ async function runTask9Suite(env) {
 
   await normalizeRuntimeToReady(popupPage);
   await pauseAtPendingBtoA(env);
+
+  // Step 1: Select override A
   await popupPage.locator("#overrideSelect").selectOption("A");
   await popupPage.waitForTimeout(500);
+
+  // Step 2: Verify A -> B pending next-hop AFTER override selection
+  // The override-A selection should change the pending next-hop from B->A to A->B
+  // before we accept the terminal stop as valid proof
+  const popupAfterOverrideSelect = await readPopupState(popupPage);
+  assert.equal(
+    normalizeText(popupAfterOverrideSelect.nextHop).toUpperCase(),
+    "A -> B",
+    `Expected override-A to show A -> B pending after selection, got ${JSON.stringify(popupAfterOverrideSelect)}`
+  );
+
+  // Step 3: Click resume and wait briefly for hop activity to start
   await clickPopupAction(popupPage, "resume");
+  const hopActivityStartedAt = Date.now();
+  let observedHopActivity = false;
+  while (Date.now() - hopActivityStartedAt < 10000) {
+    const runtimeState = await getRuntimeState(popupPage);
+    if (runtimeState.phase === "running" && runtimeState.activeHop) {
+      observedHopActivity = true;
+      break;
+    }
+    await sleep(300);
+  }
+
+  // Gate: fail if no hop activity was observed before terminal stop
+  if (!observedHopActivity) {
+    throw new Error(`Override A failed to initiate hop activity within 10s - expected terminal stop but proof is invalid`);
+  }
+
+  // Step 4: Wait for terminal stop
   const overrideAStartedAt = Date.now();
   let overrideARuntimeState = await getRuntimeState(popupPage);
   while (Date.now() - overrideAStartedAt < 90000) {
@@ -1658,9 +1745,11 @@ async function runTask9Suite(env) {
     }
     await sleep(500);
   }
+
   if (overrideARuntimeState.phase !== "stopped") {
     throw new Error(`Override A expected terminal stop, got ${JSON.stringify(overrideARuntimeState)}`);
   }
+
   branchResults.push({
     branch: "resume-with-override-a",
     status: "PASS",

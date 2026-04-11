@@ -600,6 +600,58 @@ test("waitForSettledReply keeps hop_timeout for correct-target observations that
   }
 });
 
+test("waitForSettledReply classifies missing assistant facts on the correct target distinctly from hop_timeout", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestAssistantText: null,
+          generating: false
+        }),
+        generating: false,
+        latestAssistantHash: null,
+        latestUserHash: null,
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(82);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 3,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 1,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 82
+    });
+
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, "reply_observation_missing");
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("waitForSettledReply does not treat stale_target observation as hop_timeout progress", async () => {
   const originalDateNow = Date.now;
   let tick = 0;

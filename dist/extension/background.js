@@ -84,6 +84,7 @@ var STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
+  REPLY_OBSERVATION_MISSING: "reply_observation_missing",
   WRONG_TARGET: "wrong_target",
   STALE_TARGET: "stale_target",
   UNREACHABLE_TARGET: "unreachable_target",
@@ -1136,6 +1137,7 @@ async function handleSettledReplyFailure({
     return false;
   }
   const observationFailureReasons = /* @__PURE__ */ new Set([
+    STOP_REASONS.REPLY_OBSERVATION_MISSING,
     STOP_REASONS.WRONG_TARGET,
     STOP_REASONS.STALE_TARGET,
     STOP_REASONS.UNREACHABLE_TARGET
@@ -2420,6 +2422,7 @@ async function waitForSettledReply({
   const startedAt = Date.now();
   let stableHash = null;
   let stableCount = 0;
+  let pendingObservationFailure = null;
   while (Date.now() - startedAt < settings.hopTimeoutMs) {
     if (token !== activeLoopToken) {
       return {
@@ -2442,10 +2445,12 @@ async function waitForSettledReply({
     }
     const latestAssistant = observation.sample.latestAssistant;
     if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
+      pendingObservationFailure = STOP_REASONS.REPLY_OBSERVATION_MISSING;
       stableHash = null;
       stableCount = 0;
       continue;
     }
+    pendingObservationFailure = null;
     const currentHash = latestAssistant.hash;
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
@@ -2471,7 +2476,7 @@ async function waitForSettledReply({
   }
   return {
     ok: false,
-    reason: STOP_REASONS.HOP_TIMEOUT
+    reason: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
   };
 }
 async function getPopupModel(activeTabId) {

@@ -78,7 +78,7 @@ type SettledReplySuccess = {
 
 type ReplyObservationFailureReason = Extract<
   StopReason,
-  "wrong_target" | "stale_target" | "unreachable_target"
+  "reply_observation_missing" | "wrong_target" | "stale_target" | "unreachable_target"
 >;
 
 type OverlaySettingsResult = {
@@ -267,6 +267,7 @@ async function handleSettledReplyFailure({
   }
 
   const observationFailureReasons = new Set<ReplyObservationFailureReason>([
+    STOP_REASONS.REPLY_OBSERVATION_MISSING,
     STOP_REASONS.WRONG_TARGET,
     STOP_REASONS.STALE_TARGET,
     STOP_REASONS.UNREACHABLE_TARGET
@@ -1844,6 +1845,7 @@ export async function waitForSettledReply({
   const startedAt = Date.now();
   let stableHash: string | null = null;
   let stableCount = 0;
+  let pendingObservationFailure: ReplyObservationFailureReason | null = null;
 
   while (Date.now() - startedAt < settings.hopTimeoutMs) {
     if (token !== activeLoopToken) {
@@ -1870,10 +1872,13 @@ export async function waitForSettledReply({
 
     const latestAssistant = observation.sample.latestAssistant;
     if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
+      pendingObservationFailure = STOP_REASONS.REPLY_OBSERVATION_MISSING;
       stableHash = null;
       stableCount = 0;
       continue;
     }
+
+    pendingObservationFailure = null;
 
     const currentHash = latestAssistant.hash;
     if (!currentHash || currentHash === baselineHash) {
@@ -1903,7 +1908,7 @@ export async function waitForSettledReply({
 
   return {
     ok: false,
-    reason: STOP_REASONS.HOP_TIMEOUT
+    reason: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
   };
 }
 
