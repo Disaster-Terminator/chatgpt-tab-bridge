@@ -31,7 +31,8 @@ import {
   formatNextHop,
   guardReasonToStopReason,
   hashText,
-  normalizeAssistantText
+  normalizeAssistantText,
+  parseBridgeDirective
 } from "./core/relay-core.ts";
 import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
 import {
@@ -1894,7 +1895,11 @@ export async function waitForSettledReply({
       stableCount = 1;
     }
 
-    if (stableCount >= settings.settleSamplesRequired && observation.sample.generating === false) {
+    const hasTerminalDirective = parseBridgeDirective(latestAssistant.text) !== null;
+    const replySettleConfirmed =
+      observation.sample.generating === false || hasTerminalDirective;
+
+    if (stableCount >= settings.settleSamplesRequired && replySettleConfirmed) {
       return {
         ok: true,
         result: {

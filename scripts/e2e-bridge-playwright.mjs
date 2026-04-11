@@ -121,6 +121,10 @@ function normalizeText(value) {
   return String(value || "").replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
 }
 
+function hasTerminalBridgeDirective(text) {
+  return /(?:^|\n)\[BRIDGE_STATE\]\s+(CONTINUE|FREEZE)\s*$/i.test(normalizeText(text));
+}
+
 async function ensureChatGptPage(page) {
   const alreadyChatGpt = page.url().startsWith("https://chatgpt.com");
   if (browserStrategy.mode === "cdp" && browserStrategy.noNavOnAttach && alreadyChatGpt) {
@@ -206,13 +210,19 @@ async function waitForTargetReplyAndPendingHop({
     const targetReplyObserved =
       targetObservation.latestAssistantHash !== null &&
       targetObservation.latestAssistantHash !== baselineTarget.latestAssistantHash &&
-      targetObservation.generating === false;
+      (targetObservation.generating === false || hasTerminalBridgeDirective(targetObservation.latestAssistantText));
     const atExpectedPendingBoundary = isExpectedPendingBoundaryVisible({
       popupState,
       runtimeState,
       expectedSourceRole,
       expectedTargetRole
     });
+    const progressedIntoExpectedHop = Boolean(
+      runtimeState.activeHop &&
+        runtimeState.activeHop.sourceRole === expectedSourceRole &&
+        runtimeState.activeHop.targetRole === expectedTargetRole &&
+        ["verifying", "waiting_reply"].includes(runtimeState.activeHop.stage)
+    );
 
     if (pauseOnBoundary && targetReplyObserved && atExpectedPendingBoundary && !pauseRequested) {
       await sendPopupRuntimeAction(popupPage, "PAUSE_SESSION");
@@ -238,7 +248,7 @@ async function waitForTargetReplyAndPendingHop({
       return collectThreadObservation(sourcePage);
     }
 
-    if (!pauseOnBoundary && targetReplyObserved && atExpectedPendingBoundary) {
+    if (!pauseOnBoundary && targetReplyObserved && (atExpectedPendingBoundary || progressedIntoExpectedHop)) {
       return collectThreadObservation(sourcePage);
     }
 

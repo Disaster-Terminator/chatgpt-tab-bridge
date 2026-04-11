@@ -548,6 +548,116 @@ test("waitForSettledReply requires a stable changed assistant hash with generati
   }
 });
 
+test("waitForSettledReply settles on a stable changed assistant hash with terminal bridge directive even if generating stays stale", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+  let polls = 0;
+  const terminalReply = "finished reply\n[BRIDGE_STATE] CONTINUE";
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    polls += 1;
+
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestAssistantText: terminalReply,
+          generating: true
+        }),
+        generating: true,
+        latestAssistantHash: hashText(terminalReply),
+        latestUserHash: null,
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(83);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 4,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 83
+    });
+
+    assert.equal(settled.ok, true);
+    assert.equal(settled.result.hash, hashText(terminalReply));
+    assert.equal(settled.result.sample.generating, true);
+    assert.equal(polls, 2, "terminal marker fallback should settle without waiting for fresh stop-button state");
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("waitForSettledReply does not settle on a stable changed assistant hash without terminal bridge directive when generating stays stale", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestAssistantText: "stable reply without terminal marker",
+          generating: true
+        }),
+        generating: true,
+        latestAssistantHash: hashText("stable reply without terminal marker"),
+        latestUserHash: null,
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(84);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 3,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 84
+    });
+
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("waitForSettledReply keeps hop_timeout for correct-target observations that never settle", async () => {
   const originalDateNow = Date.now;
   let tick = 0;

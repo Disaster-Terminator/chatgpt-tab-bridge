@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { importExtensionModule } from "./extension-test-harness.mjs";
 
 const { STOP_REASONS } = await importExtensionModule("core/constants");
+const { parseBridgeDirective } = await importExtensionModule("core/relay-core");
 
 // =============================================================================
 // P0-4: Polling and cancellation boundary tests
@@ -79,8 +80,11 @@ function simulateWaitForSettledReply({
       stableCount = 1;
     }
 
+    const hasTerminalDirective = parseBridgeDirective(sample.text || "") !== null;
+    const replySettleConfirmed = sample.generating === false || hasTerminalDirective;
+
     // Check if settled
-    if (stableCount >= settleSamplesRequired && sample.generating === false) {
+    if (stableCount >= settleSamplesRequired && replySettleConfirmed) {
       return {
         ok: true,
         hash,
@@ -269,9 +273,9 @@ test("waitForSettledReply does not settle while the stable changed hash is still
   const result = simulateWaitForSettledReply({
     baselineHash: "h0",
     samples: [
-      { hash: "h1", generating: true },
-      { hash: "h1", generating: true },
-      { hash: "h1", generating: true }
+      { hash: "h1", text: "reply still streaming", generating: true },
+      { hash: "h1", text: "reply still streaming", generating: true },
+      { hash: "h1", text: "reply still streaming", generating: true }
     ],
     settleSamplesRequired: 2,
     hopTimeoutMs: 60000,
@@ -282,6 +286,25 @@ test("waitForSettledReply does not settle while the stable changed hash is still
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, STOP_REASONS.HOP_TIMEOUT);
+});
+
+test("waitForSettledReply settles on a stable terminal directive even if generating stays stale", () => {
+  const result = simulateWaitForSettledReply({
+    baselineHash: "h0",
+    samples: [
+      { hash: "h1", text: "done\n[BRIDGE_STATE] CONTINUE", generating: true },
+      { hash: "h1", text: "done\n[BRIDGE_STATE] CONTINUE", generating: true }
+    ],
+    settleSamplesRequired: 2,
+    hopTimeoutMs: 60000,
+    pollIntervalMs: 1500,
+    token: 1,
+    activeToken: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.hash, "h1");
+  assert.equal(result.polls, 2);
 });
 
 test("waitForSettledReply classifies wrong-target observations distinctly from hop_timeout", () => {
