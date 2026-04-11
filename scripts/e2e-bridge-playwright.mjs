@@ -483,6 +483,16 @@ async function buildTask9ReadyEnv(env) {
 
 async function startLiveRelayFromA(env) {
   const { pageA, pageB, popupPage } = await buildTask9ReadyEnv(env);
+
+  await (authOptions.useAuth
+    ? ensureAuthBackedSourceSeedWithBlocker(pageA, {
+        prompt: "Hello from A. Reply briefly with a short identifier for relay testing.",
+        label: "source-seed-refresh"
+      })
+    : ensureAnonymousSourceSeedWithBlocker(pageA, {
+        label: "source-seed-refresh"
+      }));
+
   const initialRound = Number(await popupPage.locator("#roundValue").innerText());
   const baselineTarget = await collectThreadObservation(pageB);
 
@@ -1411,9 +1421,17 @@ async function runPopupOverlaySync(env) {
   assert.ok(comparisonB.consistent, `Popup vs Overlay B mismatch: ${comparisonB.mismatches.join(", ")}`);
 
   // Stop
-  await expectOverlayActionEnabled(pageA, "stop");
-  await clickOverlayAction(pageA, "stop");
-  await expectPopupPhaseState(popupPage, "stopped");
+  await clickPopupAction(popupPage, "stop");
+  const stopStartedAt = Date.now();
+  let finalRuntimeState = await getRuntimeState(popupPage);
+  while (Date.now() - stopStartedAt < 30000) {
+    finalRuntimeState = await getRuntimeState(popupPage);
+    if (finalRuntimeState.phase === "stopped") break;
+    await sleep(250);
+  }
+  if (finalRuntimeState.phase !== "stopped") {
+    throw new Error(`Task 9 suite stop did not settle: ${JSON.stringify(finalRuntimeState)}`);
+  }
 
   return { success: true };
 }
@@ -1653,9 +1671,12 @@ async function runTask9Suite(env) {
     }
   });
 
-  await expectOverlayActionEnabled(pageA, "stop");
-  await clickOverlayAction(pageA, "stop");
-  await expectPopupPhaseState(popupPage, "stopped");
+  const finalRuntimeState = await getRuntimeState(popupPage);
+  assert.equal(
+    finalRuntimeState.phase,
+    "stopped",
+    `Task 9 suite expected override-A branch to leave runtime stopped, got ${JSON.stringify(finalRuntimeState)}`
+  );
 
   console.log("[e2e] Task 9 suite reused one seeded live session across continuation/default/override branches");
   console.log(`[e2e] Task 9 suite branch results: ${JSON.stringify(branchResults)}`);
