@@ -16,8 +16,8 @@
 
 ### Debug Logs
 
-- Add a popup export/download action for debug logs. The existing runtime event ring buffer is useful but only visible through the debug snapshot, and local JSONL logging requires `pnpm run debug:log-server`.
-- Export should work without new extension permissions first, using a Blob download from popup.
+- Popup export/download is available from Debug. It reuses the debug snapshot collector and uses a Blob download without new extension permissions.
+- Keep local JSONL logging via `pnpm run debug:log-server` as the preferred continuous log sink when the user can run the server.
 - Include current runtime state, popup model summary, current tab, recent runtime events, last ack debug, and latest user preview when available.
 - Keep copied debug snapshots readable enough for bug reports: real timestamps, state-transition summaries, and enough before/after state to trace starter, override, nextHop, and activeHop.
 

@@ -143,9 +143,12 @@ var zhCN = {
     openHelp: "\u5E2E\u52A9",
     resetPosition: "\u91CD\u7F6E\u4F4D\u7F6E",
     copyDebug: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
+    downloadDebug: "\u4E0B\u8F7D\u65E5\u5FD7",
     copied: "\u8C03\u8BD5\u5FEB\u7167\u5DF2\u590D\u5236",
     copiedDebugSnapshot: "\u5DF2\u590D\u5236\u8C03\u8BD5\u5FEB\u7167",
+    downloadedDebugSnapshot: "\u5DF2\u4E0B\u8F7D\u8C03\u8BD5\u65E5\u5FD7",
     failedToCopyDebugSnapshot: "\u590D\u5236\u8C03\u8BD5\u5FEB\u7167\u5931\u8D25",
+    failedToDownloadDebugSnapshot: "\u4E0B\u8F7D\u8C03\u8BD5\u65E5\u5FD7\u5931\u8D25",
     noActiveTab: "\u65E0\u53EF\u7528\u6D3B\u52A8\u6807\u7B7E\u9875\u3002",
     unsupportedTab: "\u5F53\u524D\u6807\u7B7E\u9875\u4E0D\u662F\u652F\u6301\u7684 ChatGPT \u7EBF\u7A0B\u3002",
     tabBoundAs: (role) => `\u5F53\u524D\u6807\u7B7E\u9875\u5DF2\u7ED1\u5B9A\u4E3A ${role}\u3002`,
@@ -243,9 +246,12 @@ var en = {
     openHelp: "Help",
     resetPosition: "Reset position",
     copyDebug: "Copy debug snapshot",
+    downloadDebug: "Download logs",
     copied: "Debug snapshot copied",
     copiedDebugSnapshot: "Copied debug snapshot",
+    downloadedDebugSnapshot: "Downloaded debug log",
     failedToCopyDebugSnapshot: "Failed to copy debug snapshot",
+    failedToDownloadDebugSnapshot: "Failed to download debug log",
     noActiveTab: "No active tab available.",
     unsupportedTab: "Current tab is not a supported ChatGPT thread.",
     tabBoundAs: (role) => `Current tab is bound as ${role}.`,
@@ -371,6 +377,7 @@ var elements = {
   stopButton: requireElement("#stopButton"),
   clearTerminalButton: requireElement("#clearTerminalButton"),
   copyDebugButton: requireElement("#copyDebugButton"),
+  downloadDebugButton: requireElement("#downloadDebugButton"),
   openHelpButton: requireElement("#openHelpButton"),
   roundValue: requireElement("#roundValue"),
   nextHopValue: requireElement("#nextHopValue"),
@@ -482,6 +489,9 @@ function wireEvents() {
   });
   elements.copyDebugButton.addEventListener("click", () => {
     void copyDebugSnapshot();
+  });
+  elements.downloadDebugButton.addEventListener("click", () => {
+    void downloadDebugSnapshot();
   });
   elements.openHelpButton.addEventListener("click", () => {
     window.open("https://github.com/raystorm1/chatgpt-tab-bridge#readme", "_blank");
@@ -638,15 +648,60 @@ function showCopyFeedback(message, isSuccess) {
   }, 1800);
 }
 async function copyDebugSnapshot() {
+  const payload = await collectDebugSnapshotPayload();
+  if (!payload) {
+    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(payload);
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = payload;
+    fallback.setAttribute("readonly", "true");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    fallback.remove();
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
+  }
+}
+async function downloadDebugSnapshot() {
+  const copy = getPopupCopy(currentLocale);
+  const payload = await collectDebugSnapshotPayload();
+  if (!payload) {
+    showCopyFeedback(copy.failedToDownloadDebugSnapshot, false);
+    return;
+  }
+  try {
+    const blob = new Blob([payload], {
+      type: "text/plain;charset=utf-8"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `chatgpt-tab-bridge-debug-${formatFileTimestamp(/* @__PURE__ */ new Date())}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showCopyFeedback(copy.downloadedDebugSnapshot, true);
+  } catch (error) {
+    console.warn("Failed to download debug snapshot:", error);
+    showCopyFeedback(copy.failedToDownloadDebugSnapshot, false);
+  }
+}
+async function collectDebugSnapshotPayload() {
   const latestModel = await refresh() ?? currentModel;
   if (!latestModel) {
-    showCopyFeedback("No data available", false);
-    return;
+    return null;
   }
   const ackTarget = resolveAckDebugTarget(latestModel, currentTabId);
   if (!ackTarget.tabId) {
-    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
-    return;
+    return null;
   }
   let ackDebug = null;
   let runtimeEvents = [];
@@ -669,22 +724,7 @@ async function copyDebugSnapshot() {
   } catch (error) {
     console.warn("Failed to fetch runtime events:", error);
   }
-  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
-  try {
-    await navigator.clipboard.writeText(payload);
-    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
-  } catch {
-    const fallback = document.createElement("textarea");
-    fallback.value = payload;
-    fallback.setAttribute("readonly", "true");
-    fallback.style.position = "fixed";
-    fallback.style.opacity = "0";
-    document.body.appendChild(fallback);
-    fallback.select();
-    document.execCommand("copy");
-    fallback.remove();
-    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
-  }
+  return buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
 }
 function buildDebugSnapshot(model, ackDebug, ackTarget, runtimeEvents = []) {
   const copy = getPopupCopy(currentLocale);
@@ -768,6 +808,9 @@ function formatTimestamp(value) {
   }
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+function formatFileTimestamp(value) {
+  return value.toISOString().replace(/[:.]/g, "-");
 }
 function formatRoundProgress(enabled, round, maxRounds) {
   return `${round} / ${enabled ? maxRounds : "\u221E"}`;

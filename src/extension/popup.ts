@@ -63,6 +63,7 @@ interface PopupElements {
   stopButton: HTMLButtonElement;
   clearTerminalButton: HTMLButtonElement;
   copyDebugButton: HTMLButtonElement;
+  downloadDebugButton: HTMLButtonElement;
   openHelpButton: HTMLButtonElement;
   roundValue: HTMLElement;
   nextHopValue: HTMLElement;
@@ -132,6 +133,7 @@ const elements: PopupElements = {
   stopButton: requireElement<HTMLButtonElement>("#stopButton"),
   clearTerminalButton: requireElement<HTMLButtonElement>("#clearTerminalButton"),
   copyDebugButton: requireElement<HTMLButtonElement>("#copyDebugButton"),
+  downloadDebugButton: requireElement<HTMLButtonElement>("#downloadDebugButton"),
   openHelpButton: requireElement<HTMLButtonElement>("#openHelpButton"),
   roundValue: requireElement<HTMLElement>("#roundValue"),
   nextHopValue: requireElement<HTMLElement>("#nextHopValue"),
@@ -261,6 +263,10 @@ function wireEvents(): void {
 
   elements.copyDebugButton.addEventListener("click", () => {
     void copyDebugSnapshot();
+  });
+
+  elements.downloadDebugButton.addEventListener("click", () => {
+    void downloadDebugSnapshot();
   });
 
   elements.openHelpButton.addEventListener("click", () => {
@@ -449,16 +455,65 @@ function showCopyFeedback(message: string, isSuccess: boolean): void {
 }
 
 async function copyDebugSnapshot(): Promise<void> {
+  const payload = await collectDebugSnapshotPayload();
+  if (!payload) {
+    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(payload);
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = payload;
+    fallback.setAttribute("readonly", "true");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    fallback.remove();
+    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
+  }
+}
+
+async function downloadDebugSnapshot(): Promise<void> {
+  const copy = getPopupCopy(currentLocale);
+  const payload = await collectDebugSnapshotPayload();
+  if (!payload) {
+    showCopyFeedback(copy.failedToDownloadDebugSnapshot, false);
+    return;
+  }
+
+  try {
+    const blob = new Blob([payload], {
+      type: "text/plain;charset=utf-8"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `chatgpt-tab-bridge-debug-${formatFileTimestamp(new Date())}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showCopyFeedback(copy.downloadedDebugSnapshot, true);
+  } catch (error) {
+    console.warn("Failed to download debug snapshot:", error);
+    showCopyFeedback(copy.failedToDownloadDebugSnapshot, false);
+  }
+}
+
+async function collectDebugSnapshotPayload(): Promise<string | null> {
   const latestModel = (await refresh()) ?? currentModel;
   if (!latestModel) {
-    showCopyFeedback("No data available", false);
-    return;
+    return null;
   }
 
   const ackTarget = resolveAckDebugTarget(latestModel, currentTabId);
   if (!ackTarget.tabId) {
-    showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
-    return;
+    return null;
   }
 
   let ackDebug: any = null;
@@ -484,23 +539,7 @@ async function copyDebugSnapshot(): Promise<void> {
     console.warn("Failed to fetch runtime events:", error);
   }
 
-  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
-
-  try {
-    await navigator.clipboard.writeText(payload);
-    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
-  } catch {
-    const fallback = document.createElement("textarea");
-    fallback.value = payload;
-    fallback.setAttribute("readonly", "true");
-    fallback.style.position = "fixed";
-    fallback.style.opacity = "0";
-    document.body.appendChild(fallback);
-    fallback.select();
-    document.execCommand("copy");
-    fallback.remove();
-    showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
-  }
+  return buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
 }
 
 function buildDebugSnapshot(
@@ -616,6 +655,10 @@ function formatTimestamp(value: unknown): string {
   }
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function formatFileTimestamp(value: Date): string {
+  return value.toISOString().replace(/[:.]/g, "-");
 }
 
 function formatRoundProgress(enabled: boolean, round: number, maxRounds: number): string {
