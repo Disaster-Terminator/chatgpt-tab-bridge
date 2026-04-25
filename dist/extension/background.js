@@ -2543,11 +2543,20 @@ async function waitForSettledReply({
   round = 0
 }) {
   const startedAt = Date.now();
+  let lastProgressAt = startedAt;
   let elapsedMs = 0;
+  let idleMs = 0;
   let stableHash = null;
+  let lastObservedAssistantHash = baselineHash;
   let stableCount = 0;
   let pendingObservationFailure = null;
-  while ((elapsedMs = Date.now() - startedAt) < settings.hopTimeoutMs) {
+  while (true) {
+    const now = Date.now();
+    elapsedMs = now - startedAt;
+    idleMs = now - lastProgressAt;
+    if (idleMs >= settings.hopTimeoutMs) {
+      break;
+    }
     if (token !== activeLoopToken) {
       return {
         ok: false,
@@ -2604,6 +2613,11 @@ async function waitForSettledReply({
     }
     pendingObservationFailure = null;
     const currentHash = latestAssistant.hash;
+    if (currentHash && currentHash !== baselineHash && currentHash !== lastObservedAssistantHash) {
+      lastObservedAssistantHash = currentHash;
+      lastProgressAt = Date.now();
+      idleMs = 0;
+    }
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
       stableCount = 0;
@@ -2669,7 +2683,7 @@ async function waitForSettledReply({
     dispatchReadbackSummary: "reply_wait",
     sendTriggerMode: "observation",
     verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
-    verificationPollSample: `elapsed_ms:${elapsedMs}|stable_hash:${stableHash ?? "null"}|stable_count:${stableCount}`,
+    verificationPollSample: `elapsed_ms:${elapsedMs}|idle_ms:${idleMs}|stable_hash:${stableHash ?? "null"}|stable_count:${stableCount}`,
     verificationVerdict: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
   });
   return {

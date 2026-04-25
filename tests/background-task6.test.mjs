@@ -548,6 +548,64 @@ test("waitForSettledReply requires a stable changed assistant hash with generati
   }
 });
 
+test("waitForSettledReply extends the reply deadline while assistant text keeps changing", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+  let polls = 0;
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    polls += 1;
+
+    const assistantText = polls < 6 ? `streaming reply chunk ${polls}` : "streaming reply complete";
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestAssistantText: assistantText,
+          generating: polls < 6
+        }),
+        generating: polls < 6,
+        latestAssistantHash: hashText(assistantText),
+        latestUserHash: null,
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(86);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 4,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 1,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 86
+    });
+
+    assert.equal(settled.ok, true);
+    assert.equal(settled.result.hash, hashText("streaming reply complete"));
+    assert.equal(settled.result.sample.generating, false);
+    assert.equal(polls, 6);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("waitForSettledReply still requires sampled generating false even for a terminal bridge directive", async () => {
   const originalDateNow = Date.now;
   let tick = 0;
