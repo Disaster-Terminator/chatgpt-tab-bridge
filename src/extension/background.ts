@@ -651,6 +651,7 @@ function addStateTransitionEvent(
     "pause",
     "resume",
     "stop",
+    "stop_condition",
     "set_runtime_settings"
   ]);
 
@@ -659,6 +660,7 @@ function addStateTransitionEvent(
   }
 
   const sourceRole = nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+  const eventReason = getRuntimeStateEventReason(event);
   addRuntimeEvent({
     phaseStep: `state:${event.type}`,
     sourceRole,
@@ -669,13 +671,18 @@ function addStateTransitionEvent(
       `starter:${previousState.starter}->${nextState.starter}`,
       `next:${previousState.nextHopSource}->${nextState.nextHopSource}`,
       `override:${previousState.nextHopOverride ?? "none"}->${nextState.nextHopOverride ?? "none"}`,
-      `active:${summarizeActiveHop(previousState.activeHop)}->${summarizeActiveHop(nextState.activeHop)}`
+      `active:${summarizeActiveHop(previousState.activeHop)}->${summarizeActiveHop(nextState.activeHop)}`,
+      `reason:${eventReason ?? "none"}`
     ].join("|"),
     sendTriggerMode: "state_transition",
-    verificationBaseline: `event:${event.type}`,
+    verificationBaseline: eventReason ? `event:${event.type}|reason:${eventReason}` : `event:${event.type}`,
     verificationPollSample: "n/a",
-    verificationVerdict: "recorded"
+    verificationVerdict: eventReason ?? "recorded"
   });
+}
+
+function getRuntimeStateEventReason(event: RuntimeStateEvent): string | null {
+  return "reason" in event && typeof event.reason === "string" ? event.reason : null;
 }
 
 function summarizeActiveHop(activeHop: RuntimeHopTruth | null): string {
