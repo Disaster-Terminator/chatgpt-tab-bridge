@@ -163,7 +163,7 @@ function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
   const runtimeEvent = {
     ...event,
     id: `evt_${runtimeEventSequence}_${Math.random().toString(36).slice(2, 9)}`,
-    timestamp: `seq:${runtimeEventSequence}`
+    timestamp: new Date().toISOString()
   };
   runtimeEvents.push(runtimeEvent);
   if (runtimeEvents.length > MAX_RUNTIME_EVENTS) {

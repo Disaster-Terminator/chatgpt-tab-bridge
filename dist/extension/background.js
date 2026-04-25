@@ -1116,7 +1116,7 @@ function addRuntimeEvent(event) {
   const runtimeEvent = {
     ...event,
     id: `evt_${runtimeEventSequence}_${Math.random().toString(36).slice(2, 9)}`,
-    timestamp: `seq:${runtimeEventSequence}`
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
   };
   runtimeEvents.push(runtimeEvent);
   if (runtimeEvents.length > MAX_RUNTIME_EVENTS) {
