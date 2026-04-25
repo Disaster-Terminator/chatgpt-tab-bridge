@@ -40,14 +40,18 @@ test("paused enables override and resume, running does not", () => {
   let readiness = computeReadiness(state, null);
   let controls = deriveControls(state, readiness);
   assert.equal(controls.canResume, true);
+  assert.equal(controls.canSetStarter, true);
   assert.equal(controls.canSetOverride, true);
+  assert.equal(controls.canSetSettings, true);
   assert.equal(controls.canPause, false);
 
   state.phase = PHASES.RUNNING;
   readiness = computeReadiness(state, null);
   controls = deriveControls(state, readiness);
   assert.equal(controls.canPause, true);
+  assert.equal(controls.canSetStarter, false);
   assert.equal(controls.canSetOverride, false);
+  assert.equal(controls.canSetSettings, false);
   assert.equal(controls.canResume, false);
 });
 

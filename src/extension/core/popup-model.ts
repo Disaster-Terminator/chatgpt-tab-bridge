@@ -20,9 +20,9 @@ export function deriveControls(state: RuntimeState, readiness: ExecutionReadines
     canResume: state.phase === PHASES.PAUSED && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
     canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
     canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
-    canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY) && !readiness.preflightPending,
+    canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY || state.phase === PHASES.PAUSED) && !readiness.preflightPending,
     canSetOverride: canWriteOverride(state) && !readiness.preflightPending,
-    canSetSettings: state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED
+    canSetSettings: state.phase !== PHASES.RUNNING
   };
 }
 

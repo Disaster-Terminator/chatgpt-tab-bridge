@@ -291,10 +291,13 @@ function reduceSetStarter(state, event) {
   if (state.phase === PHASES.READY) {
     state.nextHopSource = state.starter;
   }
+  if (state.phase === PHASES.PAUSED) {
+    state.nextHopOverride = state.starter;
+  }
   return state;
 }
 function reduceSetRuntimeSettings(state, event) {
-  if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
+  if (state.phase === PHASES.RUNNING) {
     return state;
   }
   const maxRounds = "maxRounds" in event.settings ? normalizeMaxRounds(event.settings.maxRounds) : state.settings.maxRounds;
@@ -1024,9 +1027,9 @@ function deriveControls(state, readiness) {
     canResume: state.phase === PHASES.PAUSED && hasValidBindings(state) && !readiness.preflightPending && readiness.starterReady,
     canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
     canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
-    canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY) && !readiness.preflightPending,
+    canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY || state.phase === PHASES.PAUSED) && !readiness.preflightPending,
     canSetOverride: canWriteOverride(state) && !readiness.preflightPending,
-    canSetSettings: state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED
+    canSetSettings: state.phase !== PHASES.RUNNING
   };
 }
 function computeReadiness(state, sourceThreadActivity) {

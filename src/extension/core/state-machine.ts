@@ -283,11 +283,15 @@ function reduceSetStarter(state: RuntimeState, event: SetStarterEvent): RuntimeS
     state.nextHopSource = state.starter;
   }
 
+  if (state.phase === PHASES.PAUSED) {
+    state.nextHopOverride = state.starter;
+  }
+
   return state;
 }
 
 function reduceSetRuntimeSettings(state: RuntimeState, event: SetRuntimeSettingsEvent): RuntimeState {
-  if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
+  if (state.phase === PHASES.RUNNING) {
     return state;
   }
 

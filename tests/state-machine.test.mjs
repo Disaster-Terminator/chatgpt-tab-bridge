@@ -85,6 +85,58 @@ test("runtime settings ignore round limit changes while running", () => {
   assert.equal(state.settings.maxRounds, 8);
 });
 
+test("paused runtime settings accept round limit changes", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, { type: "pause" });
+  state = reduceState(state, {
+    type: "set_runtime_settings",
+    settings: {
+      maxRoundsEnabled: false,
+      maxRounds: 20
+    }
+  });
+
+  assert.equal(state.phase, PHASES.PAUSED);
+  assert.equal(state.settings.maxRoundsEnabled, false);
+  assert.equal(state.settings.maxRounds, 20);
+});
+
+test("paused starter selection defers the next resume source", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, { type: "pause" });
+  state = reduceState(state, { type: "set_starter", role: "B" });
+
+  assert.equal(state.phase, PHASES.PAUSED);
+  assert.equal(state.starter, "B");
+  assert.equal(state.nextHopOverride, "B");
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 2,
+    round: 1,
+    hopId: null,
+    stage: "pending"
+  });
+
+  state = reduceState(state, { type: "resume" });
+  assert.equal(state.nextHopSource, "B");
+  assert.equal(state.nextHopOverride, null);
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "B",
+    targetRole: "A",
+    targetTabId: 1,
+    round: 1,
+    hopId: null,
+    stage: "pending"
+  });
+});
+
 test("binding conflict does not allow the same thread to satisfy both roles", () => {
   let state = createInitialState();
   const binding = createBinding("A", 1, "https://chatgpt.com/c/shared-thread");
