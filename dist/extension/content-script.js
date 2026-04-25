@@ -47,7 +47,7 @@ function isReplyGenerationInProgressFromDoc(latestAssistantText) {
   if (hasTerminalBridgeDirective(latestAssistantText)) {
     return false;
   }
-  return hasGenerationControlButtonFromDoc();
+  return hasGenerationControlButtonFromDoc() || isLatestUserAfterLatestAssistantFromDoc();
 }
 function hasGenerationControlButtonFromDoc() {
   if (document.querySelector('button[data-testid="stop-button"]') || document.querySelector('button[data-testid="stop-generating-button"]')) {
@@ -69,6 +69,37 @@ function hasTerminalBridgeDirective(value) {
     }
   }
   return false;
+}
+function isLatestUserAfterLatestAssistantFromDoc(root = document) {
+  const latestUser = findLatestMessageElementFromRoot(root, "user");
+  const latestAssistant = findLatestMessageElementFromRoot(root, "assistant");
+  if (!latestUser) {
+    return false;
+  }
+  if (!latestAssistant) {
+    return true;
+  }
+  const position = latestAssistant.compareDocumentPosition?.(latestUser);
+  if (typeof position !== "number") {
+    return false;
+  }
+  const following = typeof Node !== "undefined" ? Node.DOCUMENT_POSITION_FOLLOWING : 4;
+  return Boolean(position & following);
+}
+function findLatestMessageElementFromRoot(root, role) {
+  const selectors = [
+    `[data-message-author-role="${role}"]`,
+    `article [data-message-author-role="${role}"]`,
+    `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
+    `main [data-message-author-role="${role}"]`
+  ];
+  const candidates = selectors.flatMap(
+    (selector) => Array.from(root.querySelectorAll?.(selector) ?? [])
+  );
+  const uniqueCandidates = Array.from(new Set(candidates)).filter(
+    (element) => normalizeText(element.textContent || "")
+  );
+  return uniqueCandidates[uniqueCandidates.length - 1] ?? null;
 }
 function readComposerTextFromDoc(composer) {
   if (!composer) {
@@ -1269,6 +1300,7 @@ function readThreadActivity() {
 function readTargetObservationSample() {
   const latestUser = readLatestMessageFacts("user");
   const latestAssistant = readLatestMessageFacts("assistant");
+  const replyPending = isLatestUserAfterLatestAssistantFromDoc();
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
   return {
@@ -1282,6 +1314,7 @@ function readTargetObservationSample() {
       latestUser,
       latestAssistant,
       generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),
+      replyPending,
       composer: {
         available: composer !== null,
         text: readComposerText(composer),

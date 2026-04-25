@@ -8,6 +8,7 @@ import {
   hashText,
   isElementVisible,
   isGenerationInProgressFromDoc,
+  isLatestUserAfterLatestAssistantFromDoc,
   isReplyGenerationInProgressFromDoc,
   normalizeText,
   readComposerText,
@@ -675,6 +676,7 @@ function readThreadActivity(): ThreadActivityResponse {
 function readTargetObservationSample(): { ok: true; result: TargetObservationSample } {
   const latestUser = readLatestMessageFacts("user");
   const latestAssistant = readLatestMessageFacts("assistant");
+  const replyPending = isLatestUserAfterLatestAssistantFromDoc();
   const composer = findBestComposer(document);
   const sendButton = composer ? findSendButton(document, composer) : null;
 
@@ -689,6 +691,7 @@ function readTargetObservationSample(): { ok: true; result: TargetObservationSam
       latestUser,
       latestAssistant,
       generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),
+      replyPending,
       composer: {
         available: composer !== null,
         text: readComposerText(composer),

@@ -76,7 +76,7 @@ export function isReplyGenerationInProgressFromDoc(latestAssistantText: unknown)
     return false;
   }
 
-  return hasGenerationControlButtonFromDoc();
+  return hasGenerationControlButtonFromDoc() || isLatestUserAfterLatestAssistantFromDoc();
 }
 
 function hasGenerationControlButtonFromDoc(): boolean {
@@ -112,6 +112,45 @@ function hasTerminalBridgeDirective(value: unknown): boolean {
   }
 
   return false;
+}
+
+export function isLatestUserAfterLatestAssistantFromDoc(root: ParentNode = document): boolean {
+  const latestUser = findLatestMessageElementFromRoot(root, "user");
+  const latestAssistant = findLatestMessageElementFromRoot(root, "assistant");
+
+  if (!latestUser) {
+    return false;
+  }
+
+  if (!latestAssistant) {
+    return true;
+  }
+
+  const position = latestAssistant.compareDocumentPosition?.(latestUser);
+  if (typeof position !== "number") {
+    return false;
+  }
+
+  const following =
+    typeof Node !== "undefined" ? Node.DOCUMENT_POSITION_FOLLOWING : 4;
+  return Boolean(position & following);
+}
+
+function findLatestMessageElementFromRoot(root: ParentNode, role: "user" | "assistant"): Element | null {
+  const selectors = [
+    `[data-message-author-role="${role}"]`,
+    `article [data-message-author-role="${role}"]`,
+    `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
+    `main [data-message-author-role="${role}"]`
+  ];
+  const candidates = selectors.flatMap((selector) =>
+    Array.from(root.querySelectorAll?.(selector) ?? [])
+  );
+  const uniqueCandidates = Array.from(new Set(candidates)).filter((element) =>
+    normalizeText(element.textContent || "")
+  );
+
+  return uniqueCandidates[uniqueCandidates.length - 1] ?? null;
 }
 
 export function readComposerTextFromDoc(composer: Element | null | undefined): string {

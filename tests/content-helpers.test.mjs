@@ -196,3 +196,47 @@ test("isReplyGenerationInProgressFromDoc stays true for streaming replies withou
     context.document = originalContextDocument;
   }
 });
+
+test("isReplyGenerationInProgressFromDoc treats latest user after assistant as pending generation", () => {
+  const assistant = {
+    textContent: "previous assistant",
+    compareDocumentPosition(other) {
+      return other === user ? context.Node.DOCUMENT_POSITION_FOLLOWING : 0;
+    }
+  };
+  const user = {
+    textContent: "new user message",
+    compareDocumentPosition() {
+      return 0;
+    }
+  };
+  const mockDoc = {
+    querySelector: () => null,
+    querySelectorAll(selector) {
+      if (selector === '[data-message-author-role="assistant"]') {
+        return [assistant];
+      }
+      if (selector === '[data-message-author-role="user"]') {
+        return [user];
+      }
+      return [];
+    }
+  };
+  const originalGlobal = globalThis.document;
+  const originalContextDocument = context.document;
+  const originalContextNode = context.Node;
+  globalThis.document = mockDoc;
+  context.document = mockDoc;
+  context.Node = {
+    DOCUMENT_POSITION_FOLLOWING: 4
+  };
+
+  try {
+    const result = helpers.isReplyGenerationInProgressFromDoc("previous assistant");
+    assert.equal(result, true);
+  } finally {
+    globalThis.document = originalGlobal;
+    context.document = originalContextDocument;
+    context.Node = originalContextNode;
+  }
+});

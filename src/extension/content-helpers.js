@@ -24,7 +24,7 @@
       return false;
     }
 
-    return hasGenerationControlButtonFromDoc();
+    return hasGenerationControlButtonFromDoc() || isLatestUserAfterLatestAssistantFromDoc();
   }
 
   function hasGenerationControlButtonFromDoc() {
@@ -60,6 +60,45 @@
     }
 
     return false;
+  }
+
+  function isLatestUserAfterLatestAssistantFromDoc(root = document) {
+    const latestUser = findLatestMessageElementFromRoot(root, "user");
+    const latestAssistant = findLatestMessageElementFromRoot(root, "assistant");
+
+    if (!latestUser) {
+      return false;
+    }
+
+    if (!latestAssistant) {
+      return true;
+    }
+
+    const position = latestAssistant.compareDocumentPosition?.(latestUser);
+    if (typeof position !== "number") {
+      return false;
+    }
+
+    const following =
+      typeof Node !== "undefined" ? Node.DOCUMENT_POSITION_FOLLOWING : 4;
+    return Boolean(position & following);
+  }
+
+  function findLatestMessageElementFromRoot(root, role) {
+    const selectors = [
+      `[data-message-author-role="${role}"]`,
+      `article [data-message-author-role="${role}"]`,
+      `[data-testid*="conversation-turn"] [data-message-author-role="${role}"]`,
+      `main [data-message-author-role="${role}"]`
+    ];
+    const candidates = selectors.flatMap((selector) =>
+      Array.from(root.querySelectorAll?.(selector) ?? [])
+    );
+    const uniqueCandidates = Array.from(new Set(candidates)).filter((element) =>
+      normalizeText(element.textContent || "")
+    );
+
+    return uniqueCandidates[uniqueCandidates.length - 1] ?? null;
   }
 
   function findBestComposer(root) {
@@ -274,6 +313,7 @@
     findSendButton,
     hashText,
     isGenerationInProgressFromDoc,
+    isLatestUserAfterLatestAssistantFromDoc,
     isElementVisible,
     isReplyGenerationInProgressFromDoc,
     normalizeText,

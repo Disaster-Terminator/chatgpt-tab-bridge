@@ -118,7 +118,8 @@ function createObservationSample({
   url,
   latestUserText = null,
   latestAssistantText = null,
-  generating = false
+  generating = false,
+  replyPending = false
 }) {
   return {
     identity: {
@@ -137,6 +138,7 @@ function createObservationSample({
       hash: latestAssistantText ? hashText(latestAssistantText) : null
     },
     generating,
+    replyPending,
     composer: {
       available: true,
       text: "",

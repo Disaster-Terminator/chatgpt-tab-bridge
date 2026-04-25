@@ -19,6 +19,23 @@
 - Add a popup export/download action for debug logs. The existing runtime event ring buffer is useful but only visible through the debug snapshot, and local JSONL logging requires `pnpm run debug:log-server`.
 - Export should work without new extension permissions first, using a Blob download from popup.
 - Include current runtime state, popup model summary, current tab, recent runtime events, last ack debug, and latest user preview when available.
+- Keep copied debug snapshots readable enough for bug reports: real timestamps, state-transition summaries, and enough before/after state to trace starter, override, nextHop, and activeHop.
+
+### Relay Runtime Bugs
+
+- Investigate false stop / stuck verification reports where the ChatGPT thread is still active but the plugin treats the flow as stopped or remains stuck at `verifying <target> submission`.
+- Use the latest debug snapshot fields to distinguish these cases:
+  - dispatch accepted and target generation started, but verification polling sampled `generating:false` too early or from stale DOM.
+  - verification passed but the relay loop did not advance into `waiting <target> reply`.
+  - target page kept generating after plugin moved to stopped due to timeout, stale target, or max-round guard.
+- Preserve the latest concrete repro:
+  - start side `B`, round `0 / 8`, next hop `B -> A`.
+  - current step `verifying A submission`.
+  - ack target `A (#1463761706, active-hop)`.
+  - ack accepted via `user_message_added`, evidence `currentGenerating:true`.
+  - runtime events show `dispatch_accepted B->A r1` followed by `verification_passed B->A r1`.
+  - user observation: the thread had not stopped, but plugin behavior/status did not continue as expected.
+- Add targeted instrumentation before changing relay semantics again. The next snapshot should prove whether the loop is stuck before `set_execution_hop(waiting_reply)`, inside reply waiting, or after a stop condition.
 
 ### Overlay Interaction
 
@@ -30,6 +47,7 @@
 
 - Re-test the paused starter and resume flow manually after loading the latest build. The reducer now uses starter as a first-round fallback when override is missing, but real browser state sync should still be validated.
 - Use the new state transition runtime events to diagnose any future mismatch between displayed starter, next-hop override, and actual activeHop.
+- Current manual result: lock/unlock and starter selection are fixed; remaining problem is relay progress after accepted submission, not the pause control itself.
 
 ## Relay Envelope
 

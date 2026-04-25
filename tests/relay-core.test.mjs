@@ -32,6 +32,7 @@ function createObservationSample({
   latestUserText = null,
   latestAssistantText = null,
   generating = false,
+  replyPending = false,
   composerAvailable = true,
   sendButtonReady = true
 } = {}) {
@@ -52,6 +53,7 @@ function createObservationSample({
       hash: latestAssistantText ? hashText(latestAssistantText) : null
     },
     generating,
+    replyPending,
     composer: {
       available: composerAvailable,
       text: "",

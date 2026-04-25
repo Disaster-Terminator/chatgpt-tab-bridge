@@ -296,6 +296,7 @@ export interface TargetObservationSample {
   latestUser: TargetObservationMessageFacts;
   latestAssistant: TargetObservationMessageFacts;
   generating: boolean;
+  replyPending: boolean;
   composer: TargetObservationComposerFacts;
 }
 

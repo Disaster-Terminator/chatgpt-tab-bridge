@@ -2676,6 +2676,10 @@ async function waitForSettledReply({
     }
     pendingObservationFailure = null;
     const currentHash = latestAssistant.hash;
+    if (observation.sample.replyPending === true) {
+      lastProgressAt = Date.now();
+      idleMs = 0;
+    }
     if (currentHash && currentHash !== baselineHash && currentHash !== lastObservedAssistantHash) {
       lastObservedAssistantHash = currentHash;
       lastProgressAt = Date.now();
