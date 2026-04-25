@@ -2763,7 +2763,7 @@ async function waitForSettledReply({
     }
     pendingObservationFailure = null;
     const currentHash = latestAssistant.hash;
-    if (observation.sample.replyPending === true) {
+    if (observation.sample.replyPending === true && observation.sample.generating === true) {
       lastProgressAt = Date.now();
       idleMs = 0;
     }
@@ -2862,6 +2862,7 @@ function formatReplyPollSample({
     `stable_hash:${stableHash ?? "null"}`,
     `stable_count:${stableCount}`,
     `generating:${observation.sample.generating}`,
+    `reply_pending:${observation.sample.replyPending}`,
     `preview:${preview || "null"}`
   ].join("|");
 }
