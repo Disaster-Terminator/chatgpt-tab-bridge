@@ -2,7 +2,8 @@
 
 ## Product Polish
 
-- Reduce the ChatGPT page overlay footprint before redesigning it: shrink the full panel, lower visual weight, and make the collapsed state read more like a small status pill.
+- Initial footprint pass is done: popup and ChatGPT page overlay widths are reduced, panel padding is tighter, visual weight is lower, and selects opt into dark color-scheme.
+- Continue visual polish only after manual browser pass: check popup density, overlay readability, and whether the collapsed pill needs a stronger completion/status signal.
 - Keep global ambient overlay optional and off by default; prefer extension action badge/status over intrusive cross-site floating UI.
 - Keep manual ChatGPT testing as the acceptance path. OpenAI risk controls and Cloudflare challenges make full automation unreliable; use local debug logs for agent-side diagnosis.
 
