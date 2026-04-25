@@ -1114,6 +1114,7 @@ var runtimeEventSequence = 0;
 var LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
 var RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
 var RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
+var TAB_MESSAGE_TIMEOUT_MS = 8e3;
 function addRuntimeEvent(event) {
   runtimeEventSequence += 1;
   const runtimeEvent = {
@@ -2324,9 +2325,11 @@ async function ensureRunnableBinding(role, binding) {
 }
 async function requestAssistantSnapshot(tabId) {
   try {
-    return await chrome.tabs.sendMessage(tabId, {
-      type: MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT
-    });
+    return await sendTabMessageWithTimeout(
+      tabId,
+      { type: MESSAGE_TYPES.GET_ASSISTANT_SNAPSHOT },
+      "assistant_snapshot_timeout"
+    );
   } catch (error) {
     return {
       ok: false,
@@ -2336,9 +2339,11 @@ async function requestAssistantSnapshot(tabId) {
 }
 async function requestThreadActivity(tabId) {
   try {
-    return await chrome.tabs.sendMessage(tabId, {
-      type: MESSAGE_TYPES.GET_THREAD_ACTIVITY
-    });
+    return await sendTabMessageWithTimeout(
+      tabId,
+      { type: MESSAGE_TYPES.GET_THREAD_ACTIVITY },
+      "thread_activity_timeout"
+    );
   } catch (error) {
     return {
       ok: false,
@@ -2651,25 +2656,30 @@ async function captureSubmissionVerificationBaseline(tabId, timeoutMs = 5e3, pol
     reason: lastReason
   };
 }
-var SEND_MESSAGE_TIMEOUT_MS = 8e3;
 async function sendRelayMessage(tabId, text) {
   try {
-    return await Promise.race([
-      chrome.tabs.sendMessage(tabId, {
+    return await sendTabMessageWithTimeout(
+      tabId,
+      {
         type: MESSAGE_TYPES.SEND_RELAY_MESSAGE,
         text
-      }),
-      sleep(SEND_MESSAGE_TIMEOUT_MS).then(() => ({
-        ok: false,
-        error: "send_message_timeout"
-      }))
-    ]);
+      },
+      "send_message_timeout"
+    );
   } catch (error) {
     return {
       ok: false,
       error: getErrorMessage(error)
     };
   }
+}
+async function sendTabMessageWithTimeout(tabId, message, timeoutError) {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, message),
+    sleep(TAB_MESSAGE_TIMEOUT_MS).then(() => {
+      throw new Error(timeoutError);
+    })
+  ]);
 }
 async function waitForSettledReply({
   tabId,
