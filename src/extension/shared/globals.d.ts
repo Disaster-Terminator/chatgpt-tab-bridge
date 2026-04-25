@@ -40,6 +40,7 @@ export interface ChromeNamespace {
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;
+    onChanged?: ChromeEvent<ChromeStorageChangeListener>;
   };
   tabs: ChromeTabsApi;
 }
@@ -75,6 +76,16 @@ export interface ChromeMessageSender {
 export interface ChromeStorageArea {
   get(key: string): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
+}
+
+export type ChromeStorageChangeListener = (
+  changes: Record<string, ChromeStorageChange>,
+  areaName: "local" | "sync" | "managed" | "session"
+) => void;
+
+export interface ChromeStorageChange {
+  oldValue?: unknown;
+  newValue?: unknown;
 }
 
 export interface ChromeTabsApi {

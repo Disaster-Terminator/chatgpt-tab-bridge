@@ -15,7 +15,7 @@ import {
   stillContainsExpectedPayload,
   triggerComposerSend
 } from "./content-helpers.ts";
-import { MESSAGE_TYPES } from "./core/constants.ts";
+import { APP_STATE_KEY, MESSAGE_TYPES, OVERLAY_SETTINGS_KEY } from "./core/constants.ts";
 import { getOverlayCopy, formatPhase, formatRoleStatus, formatStarter, formatStepLine, formatIssueLine, type UiLocale } from "./copy/bridge-copy.ts";
 import { readUiLocale, observeUiLocale } from "./ui/preferences.ts";
 import type {
@@ -158,6 +158,7 @@ bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
 startOverlayRefreshLoop();
+observeRuntimeStorageChanges();
 
 function connectKeepAlivePort(): ChromePort {
   const port = chrome.runtime.connect({
@@ -213,6 +214,17 @@ function startOverlayRefreshLoop(): void {
   refreshTimerId = window.setInterval(() => {
     void refreshOverlayModel();
   }, isChatGptPage ? 1500 : 2500);
+}
+
+function observeRuntimeStorageChanges(): void {
+  chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    const stateChanged = areaName === "session" && APP_STATE_KEY in changes;
+    const settingsChanged = areaName === "local" && OVERLAY_SETTINGS_KEY in changes;
+
+    if (stateChanged || settingsChanged) {
+      void refreshOverlayModel();
+    }
+  });
 }
 
 function bindOverlayEvents(): void {
@@ -531,7 +543,7 @@ function renderOverlay(): void {
   overlay.hidden = isAmbient
     ? overlaySettings?.ambientEnabled !== true || !ambientVisible
     : overlaySettings?.enabled === false;
-  applyOverlayPosition(isAmbient ? null : overlaySettings?.position ?? null);
+  applyOverlayPosition(overlaySettings?.position ?? null);
 
   requireOverlayElement<HTMLButtonElement>("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
   requireOverlayElement<HTMLButtonElement>("[data-action='toggle-collapse']").textContent =

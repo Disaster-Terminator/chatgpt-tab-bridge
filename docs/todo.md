@@ -10,7 +10,7 @@
 
 ### State and Refresh Decoupling
 
-- Decouple extension runtime state from page refresh expectations. State changes should be observable from popup, action badge, and injected overlays without requiring the user to manually refresh ChatGPT pages.
+- Runtime state is no longer dependent on page refresh alone: injected overlays refresh from port pushes, periodic polling, focus/visibility, and `chrome.storage.onChanged` for runtime/settings changes.
 - Broadcast runtime state to all relevant ChatGPT tabs after important transitions, not only to currently bound tabs and already-connected overlay ports.
 - Preserve state visibility when the user navigates away from ChatGPT. The global ambient overlay is optional and off by default, so the extension action badge and popup must remain the low-intrusion source of truth.
 
@@ -39,8 +39,7 @@
 
 ### Overlay Interaction
 
-- Fix the global ambient overlay drag behavior. The page overlay can be positioned, but the ambient/all-site overlay currently cannot be dragged.
-- Decide whether ambient overlay should support persistent per-site/global position, or intentionally stay fixed while only the ChatGPT page overlay is draggable.
+- Global ambient overlay drag is supported and uses the same persisted overlay position as the ChatGPT page overlay.
 - Keep the ambient overlay non-intrusive by default: no controls unless enabled, compact status-only presentation, and no accidental page obstruction.
 
 ### Pause / Resume Controls

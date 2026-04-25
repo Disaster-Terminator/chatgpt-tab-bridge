@@ -411,6 +411,8 @@ function defaultInputEvent(type, init) {
 }
 
 // core/constants.ts
+var APP_STATE_KEY = "chatgptBridgeRuntimeState";
+var OVERLAY_SETTINGS_KEY = "chatgptBridgeOverlaySettings";
 var ROLE_A = "A";
 var ROLE_B = "B";
 var ROLES = Object.freeze([ROLE_A, ROLE_B]);
@@ -867,6 +869,7 @@ bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
 startOverlayRefreshLoop();
+observeRuntimeStorageChanges();
 function connectKeepAlivePort() {
   const port = chrome.runtime.connect({
     name: "bridge-tab-keepalive"
@@ -910,6 +913,15 @@ function startOverlayRefreshLoop() {
   refreshTimerId = window.setInterval(() => {
     void refreshOverlayModel();
   }, isChatGptPage ? 1500 : 2500);
+}
+function observeRuntimeStorageChanges() {
+  chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    const stateChanged = areaName === "session" && APP_STATE_KEY in changes;
+    const settingsChanged = areaName === "local" && OVERLAY_SETTINGS_KEY in changes;
+    if (stateChanged || settingsChanged) {
+      void refreshOverlayModel();
+    }
+  });
 }
 function bindOverlayEvents() {
   requireOverlayElement("[data-bind-role='A']").addEventListener("click", () => {
@@ -1185,7 +1197,7 @@ function renderOverlay() {
   overlay.classList.toggle("chatgpt-bridge-overlay--ambient", isAmbient);
   overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed) && !isAmbient);
   overlay.hidden = isAmbient ? overlaySettings?.ambientEnabled !== true || !ambientVisible : overlaySettings?.enabled === false;
-  applyOverlayPosition(isAmbient ? null : overlaySettings?.position ?? null);
+  applyOverlayPosition(overlaySettings?.position ?? null);
   requireOverlayElement("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
   requireOverlayElement("[data-action='toggle-collapse']").textContent = overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
   requireOverlayElement("[data-bind-role='A']").disabled = !canChangeBindings;

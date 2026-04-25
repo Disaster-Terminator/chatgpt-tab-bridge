@@ -29,11 +29,11 @@
   width: 188px;
   padding: 7px;
   border-radius: 12px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__header {
-  cursor: default;
+  cursor: move;
 }
 
 .chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__role-row,
