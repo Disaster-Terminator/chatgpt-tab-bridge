@@ -1104,6 +1104,7 @@ function normalizePosition(position) {
 var activeLoopToken = 0;
 var keepAlivePorts = /* @__PURE__ */ new Set();
 var overlayPortsByTabId = /* @__PURE__ */ new Map();
+var relayLoopRunning = false;
 function setActiveLoopTokenForTest(token) {
   activeLoopToken = token;
 }
@@ -1111,6 +1112,8 @@ var MAX_RUNTIME_EVENTS = 30;
 var runtimeEvents = [];
 var runtimeEventSequence = 0;
 var LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
+var RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
+var RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 function addRuntimeEvent(event) {
   runtimeEventSequence += 1;
   const runtimeEvent = {
@@ -1261,12 +1264,21 @@ function createVerificationHopId(sessionId, round) {
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeState();
   await initializeOverlaySettings();
+  await configureRelayWatchdogAlarm();
   await updateActionBadge(await getState());
+  void ensureRelayLoopRunning("installed");
 });
 chrome.runtime.onStartup.addListener(async () => {
   await initializeState();
   await initializeOverlaySettings();
+  await configureRelayWatchdogAlarm();
   await updateActionBadge(await getState());
+  void ensureRelayLoopRunning("startup");
+});
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === RELAY_WATCHDOG_ALARM_NAME) {
+    void ensureRelayLoopRunning("alarm");
+  }
 });
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "bridge-tab-keepalive") {
@@ -1280,6 +1292,7 @@ chrome.runtime.onConnect.addListener((port) => {
     overlayPortsByTabId.set(tabId, tabPorts);
   }
   port.onMessage.addListener(() => {
+    void ensureRelayLoopRunning("port_heartbeat");
   });
   port.onDisconnect.addListener(() => {
     keepAlivePorts.delete(port);
@@ -1292,6 +1305,8 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
 });
+void configureRelayWatchdogAlarm();
+void ensureRelayLoopRunning("worker_wakeup");
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   overlayPortsByTabId.delete(tabId);
   const state = await getState();
@@ -1478,6 +1493,7 @@ async function updateState(event) {
   const next = reduceState(current, event);
   if (next.phase !== PHASES.RUNNING) {
     activeLoopToken = 0;
+    relayLoopRunning = false;
   }
   addStateTransitionEvent(event, current, next);
   return persistState(next, current);
@@ -1490,18 +1506,22 @@ function addStateTransitionEvent(event, previousState, nextState) {
     "pause",
     "resume",
     "stop",
+    "hop_completed",
     "stop_condition",
+    "selector_failure",
+    "runtime_error",
     "set_runtime_settings"
   ]);
   if (!observableEvents.has(event.type)) {
     return;
   }
-  const sourceRole = nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+  const sourceRole = getRuntimeStateEventSourceRole(event, nextState);
+  const targetRole = getRuntimeStateEventTargetRole(event, sourceRole);
   const eventReason = getRuntimeStateEventReason(event);
   addRuntimeEvent({
     phaseStep: `state:${event.type}`,
     sourceRole,
-    targetRole: otherRole(sourceRole),
+    targetRole,
     round: nextState.activeHop?.round ?? nextState.round,
     dispatchReadbackSummary: [
       `phase:${previousState.phase}->${nextState.phase}`,
@@ -1519,6 +1539,18 @@ function addStateTransitionEvent(event, previousState, nextState) {
 }
 function getRuntimeStateEventReason(event) {
   return "reason" in event && typeof event.reason === "string" ? event.reason : null;
+}
+function getRuntimeStateEventSourceRole(event, nextState) {
+  if ("sourceRole" in event && isBridgeRole2(event.sourceRole)) {
+    return event.sourceRole;
+  }
+  return nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+}
+function getRuntimeStateEventTargetRole(event, sourceRole) {
+  if ("targetRole" in event && isBridgeRole2(event.targetRole)) {
+    return event.targetRole;
+  }
+  return otherRole(sourceRole);
 }
 function summarizeActiveHop(activeHop) {
   if (!activeHop) {
@@ -1750,10 +1782,49 @@ async function stopSession() {
 async function clearTerminal() {
   return updateState({ type: "clear_terminal" });
 }
-function startRelayLoop(state) {
+async function configureRelayWatchdogAlarm() {
+  try {
+    await chrome.alarms?.create(RELAY_WATCHDOG_ALARM_NAME, {
+      delayInMinutes: RELAY_WATCHDOG_PERIOD_MINUTES,
+      periodInMinutes: RELAY_WATCHDOG_PERIOD_MINUTES
+    });
+  } catch {
+  }
+}
+async function ensureRelayLoopRunning(trigger) {
+  if (relayLoopRunning) {
+    return;
+  }
+  const state = await getState();
+  if (state.phase !== PHASES.RUNNING || !state.activeHop) {
+    return;
+  }
+  const sourceRole = state.activeHop.sourceRole;
+  addRuntimeEvent({
+    phaseStep: "loop_recovered",
+    sourceRole,
+    targetRole: state.activeHop.targetRole,
+    round: state.activeHop.round,
+    dispatchReadbackSummary: `trigger:${trigger}|stage:${state.activeHop.stage}`,
+    sendTriggerMode: "watchdog",
+    verificationBaseline: `active:${summarizeActiveHop(state.activeHop)}`,
+    verificationPollSample: "restart_background_loop",
+    verificationVerdict: "loop_recovered"
+  });
+  startRelayLoop(state, { forceRestart: false });
+}
+function startRelayLoop(state, options = { forceRestart: true }) {
+  if (relayLoopRunning && options.forceRestart === false) {
+    return;
+  }
   activeLoopToken += 1;
   const token = activeLoopToken;
-  void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS);
+  relayLoopRunning = true;
+  void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS).finally(() => {
+    if (token === activeLoopToken) {
+      relayLoopRunning = false;
+    }
+  });
 }
 function getHopExecutionPlan(stage) {
   if (stage === "verifying") {

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Popup-first Edge extension that relays between two open ChatGPT threads.",
   "permissions": [
+    "alarms",
     "storage",
     "tabs"
   ],

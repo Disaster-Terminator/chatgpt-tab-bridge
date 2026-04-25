@@ -37,12 +37,22 @@ export interface ChromeNamespace {
     setTitle?: (details: { title: string }) => Promise<void>;
   };
   runtime: ChromeRuntime;
+  alarms?: ChromeAlarmsApi;
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;
     onChanged?: ChromeEvent<ChromeStorageChangeListener>;
   };
   tabs: ChromeTabsApi;
+}
+
+export interface ChromeAlarmsApi {
+  create(name: string, alarmInfo: { delayInMinutes?: number; periodInMinutes?: number }): Promise<void>;
+  onAlarm: ChromeEvent<(alarm: ChromeAlarm) => void>;
+}
+
+export interface ChromeAlarm {
+  name: string;
 }
 
 export interface ChromeRuntime {

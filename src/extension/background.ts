@@ -147,6 +147,7 @@ type VerificationExecutionResult =
 let activeLoopToken = 0;
 const keepAlivePorts = new Set<ChromePort>();
 const overlayPortsByTabId = new Map<number, Set<ChromePort>>();
+let relayLoopRunning = false;
 
 export function setActiveLoopTokenForTest(token: number): void {
   activeLoopToken = token;
@@ -157,6 +158,8 @@ const MAX_RUNTIME_EVENTS = 30;
 const runtimeEvents: RuntimeEvent[] = [];
 let runtimeEventSequence = 0;
 const LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
+const RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
+const RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 
 function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
   runtimeEventSequence += 1;
@@ -353,13 +356,23 @@ function createVerificationHopId(sessionId: number, round: number): string {
 chrome.runtime.onInstalled.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
+  await configureRelayWatchdogAlarm();
   await updateActionBadge(await getState());
+  void ensureRelayLoopRunning("installed");
 });
 
 chrome.runtime.onStartup.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
+  await configureRelayWatchdogAlarm();
   await updateActionBadge(await getState());
+  void ensureRelayLoopRunning("startup");
+});
+
+chrome.alarms?.onAlarm.addListener((alarm): void => {
+  if (alarm.name === RELAY_WATCHDOG_ALARM_NAME) {
+    void ensureRelayLoopRunning("alarm");
+  }
 });
 
 chrome.runtime.onConnect.addListener((port): void => {
@@ -374,7 +387,9 @@ chrome.runtime.onConnect.addListener((port): void => {
     tabPorts.add(port);
     overlayPortsByTabId.set(tabId, tabPorts);
   }
-  port.onMessage.addListener((): void => {});
+  port.onMessage.addListener((): void => {
+    void ensureRelayLoopRunning("port_heartbeat");
+  });
   port.onDisconnect.addListener((): void => {
     keepAlivePorts.delete(port);
     if (tabId) {
@@ -386,6 +401,9 @@ chrome.runtime.onConnect.addListener((port): void => {
     }
   });
 });
+
+void configureRelayWatchdogAlarm();
+void ensureRelayLoopRunning("worker_wakeup");
 
 chrome.tabs.onRemoved.addListener(async (tabId): Promise<void> => {
   overlayPortsByTabId.delete(tabId);
@@ -633,6 +651,7 @@ async function updateState(event: RuntimeStateEvent): Promise<RuntimeState> {
 
   if (next.phase !== PHASES.RUNNING) {
     activeLoopToken = 0;
+    relayLoopRunning = false;
   }
 
   addStateTransitionEvent(event, current, next);
@@ -651,7 +670,10 @@ function addStateTransitionEvent(
     "pause",
     "resume",
     "stop",
+    "hop_completed",
     "stop_condition",
+    "selector_failure",
+    "runtime_error",
     "set_runtime_settings"
   ]);
 
@@ -659,12 +681,13 @@ function addStateTransitionEvent(
     return;
   }
 
-  const sourceRole = nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+  const sourceRole = getRuntimeStateEventSourceRole(event, nextState);
+  const targetRole = getRuntimeStateEventTargetRole(event, sourceRole);
   const eventReason = getRuntimeStateEventReason(event);
   addRuntimeEvent({
     phaseStep: `state:${event.type}`,
     sourceRole,
-    targetRole: otherRole(sourceRole),
+    targetRole,
     round: nextState.activeHop?.round ?? nextState.round,
     dispatchReadbackSummary: [
       `phase:${previousState.phase}->${nextState.phase}`,
@@ -683,6 +706,22 @@ function addStateTransitionEvent(
 
 function getRuntimeStateEventReason(event: RuntimeStateEvent): string | null {
   return "reason" in event && typeof event.reason === "string" ? event.reason : null;
+}
+
+function getRuntimeStateEventSourceRole(event: RuntimeStateEvent, nextState: RuntimeState): BridgeRole {
+  if ("sourceRole" in event && isBridgeRole(event.sourceRole)) {
+    return event.sourceRole;
+  }
+
+  return nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+}
+
+function getRuntimeStateEventTargetRole(event: RuntimeStateEvent, sourceRole: BridgeRole): BridgeRole {
+  if ("targetRole" in event && isBridgeRole(event.targetRole)) {
+    return event.targetRole;
+  }
+
+  return otherRole(sourceRole);
 }
 
 function summarizeActiveHop(activeHop: RuntimeHopTruth | null): string {
@@ -967,10 +1006,58 @@ async function clearTerminal(): Promise<RuntimeState> {
   return updateState({ type: "clear_terminal" });
 }
 
-function startRelayLoop(state: RuntimeState): void {
+async function configureRelayWatchdogAlarm(): Promise<void> {
+  try {
+    await chrome.alarms?.create(RELAY_WATCHDOG_ALARM_NAME, {
+      delayInMinutes: RELAY_WATCHDOG_PERIOD_MINUTES,
+      periodInMinutes: RELAY_WATCHDOG_PERIOD_MINUTES
+    });
+  } catch {
+    // The alarm is a resilience layer; normal user actions can still wake the worker.
+  }
+}
+
+async function ensureRelayLoopRunning(trigger: string): Promise<void> {
+  if (relayLoopRunning) {
+    return;
+  }
+
+  const state = await getState();
+  if (state.phase !== PHASES.RUNNING || !state.activeHop) {
+    return;
+  }
+
+  const sourceRole = state.activeHop.sourceRole;
+  addRuntimeEvent({
+    phaseStep: "loop_recovered",
+    sourceRole,
+    targetRole: state.activeHop.targetRole,
+    round: state.activeHop.round,
+    dispatchReadbackSummary: `trigger:${trigger}|stage:${state.activeHop.stage}`,
+    sendTriggerMode: "watchdog",
+    verificationBaseline: `active:${summarizeActiveHop(state.activeHop)}`,
+    verificationPollSample: "restart_background_loop",
+    verificationVerdict: "loop_recovered"
+  });
+  startRelayLoop(state, { forceRestart: false });
+}
+
+function startRelayLoop(
+  state: RuntimeState,
+  options: { forceRestart?: boolean } = { forceRestart: true }
+): void {
+  if (relayLoopRunning && options.forceRestart === false) {
+    return;
+  }
+
   activeLoopToken += 1;
   const token = activeLoopToken;
-  void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS);
+  relayLoopRunning = true;
+  void runRelayLoop(token, state.settings ?? DEFAULT_SETTINGS).finally(() => {
+    if (token === activeLoopToken) {
+      relayLoopRunning = false;
+    }
+  });
 }
 
 export function getHopExecutionPlan(stage: RuntimeHopTruth["stage"]): HopExecutionPlan {
