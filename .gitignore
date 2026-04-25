@@ -2,7 +2,10 @@
 .codex/
 AGENTS.md
 node_modules/
+.pnpm-store/
 package-lock.json
 tmp/
 playwright/.auth/
 .gstack/
+*:Zone.Identifier
+*Zone.Identifier
