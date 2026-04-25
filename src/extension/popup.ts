@@ -11,6 +11,7 @@ import type {
   ResetOverlayPositionMessage,
   ResumeSessionMessage,
   RuntimeResponse,
+  RuntimeEvent,
   RuntimeState,
   SetBindingMessage,
   SetAmbientOverlayEnabledMessage,
@@ -461,6 +462,7 @@ async function copyDebugSnapshot(): Promise<void> {
   }
 
   let ackDebug: any = null;
+  let runtimeEvents: RuntimeEvent[] = [];
   try {
     ackDebug = await withTimeout(
       chrome.tabs.sendMessage(ackTarget.tabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
@@ -470,7 +472,19 @@ async function copyDebugSnapshot(): Promise<void> {
     console.warn("Failed to fetch ack debug:", error);
   }
 
-  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget);
+  try {
+    const eventsResponse = await withTimeout(
+      chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS
+      }),
+      5000
+    ) as RuntimeResponse<RuntimeEvent[]>;
+    runtimeEvents = eventsResponse.ok ? eventsResponse.result : [];
+  } catch (error) {
+    console.warn("Failed to fetch runtime events:", error);
+  }
+
+  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
 
   try {
     await navigator.clipboard.writeText(payload);
@@ -492,7 +506,8 @@ async function copyDebugSnapshot(): Promise<void> {
 function buildDebugSnapshot(
   model: PopupModel,
   ackDebug: any,
-  ackTarget: { role: BridgeRole | null; tabId: number | null; source: string }
+  ackTarget: { role: BridgeRole | null; tabId: number | null; source: string },
+  runtimeEvents: RuntimeEvent[] = []
 ): string {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
@@ -550,6 +565,18 @@ function buildDebugSnapshot(
       `    attempts: ${evidence.attempts ?? "N/A"}`,
       `    latestUser: ${preview(evidence.latestUserPreview)}`
     );
+  }
+
+  if (runtimeEvents.length > 0) {
+    lines.push("", "Runtime Events:");
+    for (const event of runtimeEvents.slice(-10)) {
+      lines.push(
+        `  ${formatTimestamp(event.timestamp)} ${event.phaseStep} ${event.sourceRole ?? "-"}->${event.targetRole ?? "-"} r${event.round}`,
+        `    baseline: ${event.verificationBaseline}`,
+        `    poll: ${event.verificationPollSample}`,
+        `    verdict: ${event.verificationVerdict}`
+      );
+    }
   }
 
   return lines.join("\n");

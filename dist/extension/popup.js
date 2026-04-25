@@ -649,6 +649,7 @@ async function copyDebugSnapshot() {
     return;
   }
   let ackDebug = null;
+  let runtimeEvents = [];
   try {
     ackDebug = await withTimeout(
       chrome.tabs.sendMessage(ackTarget.tabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
@@ -657,7 +658,18 @@ async function copyDebugSnapshot() {
   } catch (error) {
     console.warn("Failed to fetch ack debug:", error);
   }
-  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget);
+  try {
+    const eventsResponse = await withTimeout(
+      chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS
+      }),
+      5e3
+    );
+    runtimeEvents = eventsResponse.ok ? eventsResponse.result : [];
+  } catch (error) {
+    console.warn("Failed to fetch runtime events:", error);
+  }
+  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget, runtimeEvents);
   try {
     await navigator.clipboard.writeText(payload);
     showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
@@ -674,7 +686,7 @@ async function copyDebugSnapshot() {
     showCopyFeedback(getPopupCopy(currentLocale).copiedDebugSnapshot, true);
   }
 }
-function buildDebugSnapshot(model, ackDebug, ackTarget) {
+function buildDebugSnapshot(model, ackDebug, ackTarget, runtimeEvents = []) {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
   const tabStatus = currentTab?.assignedRole ? copy.tabBoundAs(currentTab.assignedRole) : currentTab?.urlInfo?.supported ? copy.tabEligible(currentTab.urlInfo.kind) : copy.unsupportedTab;
@@ -724,6 +736,17 @@ function buildDebugSnapshot(model, ackDebug, ackTarget) {
       `    attempts: ${evidence.attempts ?? "N/A"}`,
       `    latestUser: ${preview(evidence.latestUserPreview)}`
     );
+  }
+  if (runtimeEvents.length > 0) {
+    lines.push("", "Runtime Events:");
+    for (const event of runtimeEvents.slice(-10)) {
+      lines.push(
+        `  ${formatTimestamp(event.timestamp)} ${event.phaseStep} ${event.sourceRole ?? "-"}->${event.targetRole ?? "-"} r${event.round}`,
+        `    baseline: ${event.verificationBaseline}`,
+        `    poll: ${event.verificationPollSample}`,
+        `    verdict: ${event.verificationVerdict}`
+      );
+    }
   }
   return lines.join("\n");
 }

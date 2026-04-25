@@ -1091,18 +1091,40 @@ function setActiveLoopTokenForTest(token) {
 }
 var MAX_RUNTIME_EVENTS = 30;
 var runtimeEvents = [];
+var runtimeEventSequence = 0;
+var LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
 function addRuntimeEvent(event) {
-  runtimeEvents.push({
+  runtimeEventSequence += 1;
+  const runtimeEvent = {
     ...event,
-    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-    timestamp: (/* @__PURE__ */ new Date()).toISOString()
-  });
+    id: `evt_${runtimeEventSequence}_${Math.random().toString(36).slice(2, 9)}`,
+    timestamp: `seq:${runtimeEventSequence}`
+  };
+  runtimeEvents.push(runtimeEvent);
   if (runtimeEvents.length > MAX_RUNTIME_EVENTS) {
     runtimeEvents.shift();
+  }
+  if (shouldPostLocalDebugEvents()) {
+    void postLocalDebugEvent(runtimeEvent);
   }
 }
 function getRecentRuntimeEvents() {
   return [...runtimeEvents];
+}
+async function postLocalDebugEvent(event) {
+  try {
+    await fetch(LOCAL_DEBUG_LOG_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(event)
+    });
+  } catch {
+  }
+}
+function shouldPostLocalDebugEvents() {
+  return typeof chrome !== "undefined" && typeof chrome.runtime?.id === "string" && chrome.runtime.id.length > 0;
 }
 function formatVerificationBaseline(baselineUserHash, baselineGenerating, baselineLatestUserText, hopId) {
   if (baselineLatestUserText) {
@@ -2463,7 +2485,10 @@ async function waitForHopReply({
     baselineHash: progress.baselineAssistantHash,
     expectedTargetIdentity: progress.targetIdentity ?? null,
     settings,
-    token
+    token,
+    sourceRole,
+    targetRole,
+    round: activeHop.round
   });
 }
 async function captureSubmissionVerificationBaseline(tabId, timeoutMs = 5e3, pollIntervalMs = 250) {
@@ -2512,13 +2537,17 @@ async function waitForSettledReply({
   baselineHash,
   expectedTargetIdentity,
   settings,
-  token
+  token,
+  sourceRole = null,
+  targetRole = null,
+  round = 0
 }) {
   const startedAt = Date.now();
+  let elapsedMs = 0;
   let stableHash = null;
   let stableCount = 0;
   let pendingObservationFailure = null;
-  while (Date.now() - startedAt < settings.hopTimeoutMs) {
+  while ((elapsedMs = Date.now() - startedAt) < settings.hopTimeoutMs) {
     if (token !== activeLoopToken) {
       return {
         ok: false,
@@ -2533,6 +2562,17 @@ async function waitForSettledReply({
       observation: await requestTargetObservationSample(tabId)
     });
     if (observation.classification !== "correct_target") {
+      addRuntimeEvent({
+        phaseStep: "reply_poll",
+        sourceRole,
+        targetRole,
+        round,
+        dispatchReadbackSummary: "reply_wait",
+        sendTriggerMode: "observation",
+        verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+        verificationPollSample: `classification:${observation.classification}|elapsed_ms:${elapsedMs}`,
+        verificationVerdict: observation.classification
+      });
       return {
         ok: false,
         reason: mapObservationClassificationToStopReason(observation.classification)
@@ -2543,6 +2583,23 @@ async function waitForSettledReply({
       pendingObservationFailure = STOP_REASONS.REPLY_OBSERVATION_MISSING;
       stableHash = null;
       stableCount = 0;
+      addRuntimeEvent({
+        phaseStep: "reply_poll",
+        sourceRole,
+        targetRole,
+        round,
+        dispatchReadbackSummary: "reply_wait",
+        sendTriggerMode: "observation",
+        verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+        verificationPollSample: formatReplyPollSample({
+          observation,
+          baselineHash,
+          stableHash,
+          stableCount,
+          elapsedMs
+        }),
+        verificationVerdict: STOP_REASONS.REPLY_OBSERVATION_MISSING
+      });
       continue;
     }
     pendingObservationFailure = null;
@@ -2550,6 +2607,23 @@ async function waitForSettledReply({
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
       stableCount = 0;
+      addRuntimeEvent({
+        phaseStep: "reply_poll",
+        sourceRole,
+        targetRole,
+        round,
+        dispatchReadbackSummary: "reply_wait",
+        sendTriggerMode: "observation",
+        verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+        verificationPollSample: formatReplyPollSample({
+          observation,
+          baselineHash,
+          stableHash,
+          stableCount,
+          elapsedMs
+        }),
+        verificationVerdict: "assistant_hash_unchanged"
+      });
       continue;
     }
     if (stableHash === currentHash) {
@@ -2559,6 +2633,23 @@ async function waitForSettledReply({
       stableCount = 1;
     }
     const replySettleConfirmed = observation.sample.generating === false;
+    addRuntimeEvent({
+      phaseStep: "reply_poll",
+      sourceRole,
+      targetRole,
+      round,
+      dispatchReadbackSummary: "reply_wait",
+      sendTriggerMode: "observation",
+      verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+      verificationPollSample: formatReplyPollSample({
+        observation,
+        baselineHash,
+        stableHash,
+        stableCount,
+        elapsedMs
+      }),
+      verificationVerdict: replySettleConfirmed ? "settle_candidate" : "still_generating"
+    });
     if (stableCount >= settings.settleSamplesRequired && replySettleConfirmed) {
       return {
         ok: true,
@@ -2570,10 +2661,41 @@ async function waitForSettledReply({
       };
     }
   }
+  addRuntimeEvent({
+    phaseStep: "reply_timeout_final",
+    sourceRole,
+    targetRole,
+    round,
+    dispatchReadbackSummary: "reply_wait",
+    sendTriggerMode: "observation",
+    verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+    verificationPollSample: `elapsed_ms:${elapsedMs}|stable_hash:${stableHash ?? "null"}|stable_count:${stableCount}`,
+    verificationVerdict: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
+  });
   return {
     ok: false,
     reason: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
   };
+}
+function formatReplyPollSample({
+  observation,
+  baselineHash,
+  stableHash,
+  stableCount,
+  elapsedMs
+}) {
+  const assistant = observation.sample.latestAssistant;
+  const preview = normalizeAssistantText(assistant.text).slice(0, 80).replace(/\s+/g, " ");
+  return [
+    `elapsed_ms:${elapsedMs}`,
+    `assistant_present:${assistant.present}`,
+    `assistant_hash:${assistant.hash ?? "null"}`,
+    `baseline_hash:${baselineHash ?? "null"}`,
+    `stable_hash:${stableHash ?? "null"}`,
+    `stable_count:${stableCount}`,
+    `generating:${observation.sample.generating}`,
+    `preview:${preview || "null"}`
+  ].join("|");
 }
 async function getPopupModel(activeTabId) {
   const state = await getState();

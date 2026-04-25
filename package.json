@@ -20,7 +20,8 @@
     "auth:export": "node scripts/export-playwright-auth-state.mjs",
     "auth:export:cdp-storage": "node scripts/export-storage-state-from-cdp.mjs",
     "auth:export:legacy": "node scripts/export-chatgpt-auth.mjs",
-    "auth:verify": "node scripts/verify-chatgpt-auth.mjs"
+    "auth:verify": "node scripts/verify-chatgpt-auth.mjs",
+    "debug:log-server": "node scripts/debug-log-server.mjs"
   },
   "dependencies": {
     "@openai/codex": "^0.118.0",
