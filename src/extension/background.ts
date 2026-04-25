@@ -161,7 +161,6 @@ const LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
 const RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
 const RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 const TAB_MESSAGE_TIMEOUT_MS = 8000;
-const DORMANT_REPLY_WAKE_MS = 8000;
 
 type RuntimeEventInput =
   Omit<RuntimeEvent, "id" | "timestamp" | "level" | "category"> &
@@ -2162,21 +2161,6 @@ async function sendTabMessageWithTimeout<T>(
   ]);
 }
 
-async function wakeTargetTab(tabId: number): Promise<"activated" | "unavailable" | "failed"> {
-  if (typeof chrome.tabs.update !== "function") {
-    return "unavailable";
-  }
-
-  try {
-    await chrome.tabs.update(tabId, {
-      active: true
-    });
-    return "activated";
-  } catch {
-    return "failed";
-  }
-}
-
 export async function waitForSettledReply({
   tabId,
   canonicalTargetTabId,
@@ -2196,7 +2180,6 @@ export async function waitForSettledReply({
   let lastObservedAssistantHash: string | null = baselineHash;
   let stableCount = 0;
   let pendingObservationFailure: ReplyObservationFailureReason | null = null;
-  let targetWakeAttempted = false;
 
   while (true) {
     const now = Date.now();
@@ -2268,11 +2251,6 @@ export async function waitForSettledReply({
     pendingObservationFailure = null;
 
     const currentHash = latestAssistant.hash;
-    if (observation.sample.replyPending === true && observation.sample.generating === true) {
-      lastProgressAt = Date.now();
-      idleMs = 0;
-    }
-
     if (currentHash && currentHash !== baselineHash && currentHash !== lastObservedAssistantHash) {
       lastObservedAssistantHash = currentHash;
       lastProgressAt = Date.now();
@@ -2283,28 +2261,6 @@ export async function waitForSettledReply({
       stableHash = null;
       stableCount = 0;
       idleMs = Date.now() - lastProgressAt;
-
-      if (
-        !targetWakeAttempted &&
-        settings.hopTimeoutMs > DORMANT_REPLY_WAKE_MS &&
-        idleMs >= DORMANT_REPLY_WAKE_MS &&
-        observation.sample.replyPending === true &&
-        observation.sample.generating === false
-      ) {
-        targetWakeAttempted = true;
-        const wakeResult = await wakeTargetTab(canonicalTargetTabId);
-        addRuntimeEvent({
-          phaseStep: "target_wake_requested",
-          sourceRole,
-          targetRole,
-          round,
-          dispatchReadbackSummary: "reply_wait",
-          sendTriggerMode: "tab_activate",
-          verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
-          verificationPollSample: `elapsed_ms:${elapsedMs}|idle_ms:${idleMs}|reply_pending:${observation.sample.replyPending}|generating:${observation.sample.generating}`,
-          verificationVerdict: wakeResult
-        });
-      }
 
       addRuntimeEvent({
         phaseStep: "reply_poll",

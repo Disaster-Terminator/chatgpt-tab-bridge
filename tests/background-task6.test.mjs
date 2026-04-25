@@ -56,15 +56,6 @@ function createChromeEnvironment() {
         sendMessage: async (tabId, message) => {
           callLog.push({ tabId, type: message.type });
           return sendMessageHandler(tabId, message);
-        },
-        update: async (tabId, updateProperties) => {
-          callLog.push({ tabId, type: "TABS_UPDATE", updateProperties });
-          return {
-            id: tabId,
-            url: `https://chatgpt.com/c/tab-${tabId}`,
-            title: `Tab ${tabId}`,
-            ...updateProperties
-          };
         }
       },
       storage: {
@@ -887,13 +878,10 @@ test("waitForSettledReply does not let idle replyPending observations suppress h
   }
 });
 
-test("waitForSettledReply wakes a dormant accepted target once before hop_timeout", async () => {
+test("waitForSettledReply does not let unchanged generating observations suppress hop_timeout", async () => {
   const originalDateNow = Date.now;
-  let now = 0;
-  Date.now = () => {
-    now += 5000;
-    return now;
-  };
+  let tick = 0;
+  Date.now = () => tick++;
 
   chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
     assert.equal(message.type, "GET_THREAD_ACTIVITY");
@@ -904,12 +892,12 @@ test("waitForSettledReply wakes a dormant accepted target once before hop_timeou
         sample: createObservationSample({
           url: "https://chatgpt.com/c/thread-b",
           latestUserText: "submitted bridge payload",
-          latestAssistantText: "baseline assistant",
-          generating: false,
+          latestAssistantText: "unchanged partial assistant",
+          generating: true,
           replyPending: true
         }),
-        generating: false,
-        latestAssistantHash: hashText("baseline assistant"),
+        generating: true,
+        latestAssistantHash: hashText("unchanged partial assistant"),
         latestUserHash: hashText("submitted bridge payload"),
         composerText: "",
         sendButtonReady: true,
@@ -927,7 +915,7 @@ test("waitForSettledReply wakes a dormant accepted target once before hop_timeou
       expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
       settings: {
         maxRounds: 1,
-        hopTimeoutMs: 20000,
+        hopTimeoutMs: 4,
         pollIntervalMs: 0,
         settleSamplesRequired: 2,
         bridgeStatePrefix: "[BRIDGE_STATE]",
@@ -939,15 +927,6 @@ test("waitForSettledReply wakes a dormant accepted target once before hop_timeou
 
     assert.equal(settled.ok, false);
     assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
-    const wakeCalls = chromeEnvironment.callLog.filter((entry) => entry.type === "TABS_UPDATE");
-    assert.equal(wakeCalls.length, 1);
-    assert.deepEqual(wakeCalls[0], {
-      tabId: 2,
-      type: "TABS_UPDATE",
-      updateProperties: {
-        active: true
-      }
-    });
   } finally {
     Date.now = originalDateNow;
   }

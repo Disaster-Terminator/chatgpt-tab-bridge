@@ -1115,7 +1115,6 @@ var LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
 var RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
 var RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 var TAB_MESSAGE_TIMEOUT_MS = 8e3;
-var DORMANT_REPLY_WAKE_MS = 8e3;
 function addRuntimeEvent(event) {
   runtimeEventSequence += 1;
   const runtimeEvent = {
@@ -2714,19 +2713,6 @@ async function sendTabMessageWithTimeout(tabId, message, timeoutError) {
     })
   ]);
 }
-async function wakeTargetTab(tabId) {
-  if (typeof chrome.tabs.update !== "function") {
-    return "unavailable";
-  }
-  try {
-    await chrome.tabs.update(tabId, {
-      active: true
-    });
-    return "activated";
-  } catch {
-    return "failed";
-  }
-}
 async function waitForSettledReply({
   tabId,
   canonicalTargetTabId,
@@ -2746,7 +2732,6 @@ async function waitForSettledReply({
   let lastObservedAssistantHash = baselineHash;
   let stableCount = 0;
   let pendingObservationFailure = null;
-  let targetWakeAttempted = false;
   while (true) {
     const now = Date.now();
     elapsedMs = now - startedAt;
@@ -2811,10 +2796,6 @@ async function waitForSettledReply({
     }
     pendingObservationFailure = null;
     const currentHash = latestAssistant.hash;
-    if (observation.sample.replyPending === true && observation.sample.generating === true) {
-      lastProgressAt = Date.now();
-      idleMs = 0;
-    }
     if (currentHash && currentHash !== baselineHash && currentHash !== lastObservedAssistantHash) {
       lastObservedAssistantHash = currentHash;
       lastProgressAt = Date.now();
@@ -2824,21 +2805,6 @@ async function waitForSettledReply({
       stableHash = null;
       stableCount = 0;
       idleMs = Date.now() - lastProgressAt;
-      if (!targetWakeAttempted && settings.hopTimeoutMs > DORMANT_REPLY_WAKE_MS && idleMs >= DORMANT_REPLY_WAKE_MS && observation.sample.replyPending === true && observation.sample.generating === false) {
-        targetWakeAttempted = true;
-        const wakeResult = await wakeTargetTab(canonicalTargetTabId);
-        addRuntimeEvent({
-          phaseStep: "target_wake_requested",
-          sourceRole,
-          targetRole,
-          round,
-          dispatchReadbackSummary: "reply_wait",
-          sendTriggerMode: "tab_activate",
-          verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
-          verificationPollSample: `elapsed_ms:${elapsedMs}|idle_ms:${idleMs}|reply_pending:${observation.sample.replyPending}|generating:${observation.sample.generating}`,
-          verificationVerdict: wakeResult
-        });
-      }
       addRuntimeEvent({
         phaseStep: "reply_poll",
         sourceRole,
