@@ -316,6 +316,16 @@ body {
   border-color: var(--popup-gold);
 }
 
+.popup__select option {
+  background: #111318;
+  color: var(--popup-text);
+}
+
+.popup__select option:checked {
+  background: #2a251b;
+  color: #f2e5bf;
+}
+
 .popup__hint {
   margin: 6px 0 0;
   font-size: 11px;

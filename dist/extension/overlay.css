@@ -6,17 +6,17 @@
   right: 16px;
   bottom: 16px;
   z-index: 2147483647;
-  width: 288px;
-  padding: 14px;
+  width: 258px;
+  padding: 10px;
   border: 1px solid rgba(159, 132, 87, 0.28);
-  border-radius: 24px;
+  border-radius: 18px;
   background:
     radial-gradient(circle at top right, rgba(214, 186, 125, 0.06), transparent 28%),
     linear-gradient(180deg, rgba(28, 29, 34, 0.98), rgba(9, 10, 14, 0.98));
   color: #f6f1e7;
-  font: 13px/1.35 "Segoe UI", sans-serif;
-  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.52);
-  backdrop-filter: blur(20px);
+  font: 12px/1.32 "Segoe UI", sans-serif;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(16px);
   /* Transition for collapse */
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
@@ -39,9 +39,9 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   cursor: move;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .chatgpt-bridge-overlay__header-left {
@@ -52,8 +52,8 @@
 .chatgpt-bridge-overlay__title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -61,13 +61,13 @@
 }
 
 .chatgpt-bridge-overlay__title-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   color: #c9b37a;
 }
 
 .chatgpt-bridge-overlay__role-row {
-  margin-top: 4px;
+  margin-top: 3px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -90,13 +90,13 @@
 .chatgpt-bridge-overlay__header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .chatgpt-bridge-overlay__phase-badge {
   border-radius: 999px;
-  padding: 3px 8px;
-  font-size: 9px;
+  padding: 2px 6px;
+  font-size: 8px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -143,9 +143,9 @@
 }
 
 .chatgpt-bridge-overlay__collapse {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -153,8 +153,8 @@
   background: rgba(255, 255, 255, 0.04);
   color: rgba(246, 241, 231, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  font-size: 14px;
+  border-radius: 9px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   transition: all 120ms ease;
@@ -171,10 +171,10 @@
   display: none;
   align-items: center;
   justify-content: space-between;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 12px;
+  font-size: 11px;
   color: rgba(246, 241, 231, 0.7);
 }
 
@@ -189,16 +189,16 @@
 /* ── Status Panel ─────────────────────────────────────────────────── */
 
 .chatgpt-bridge-overlay__status-panel {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .chatgpt-bridge-overlay__round-next {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 10px;
   color: rgba(246, 241, 231, 0.5);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .chatgpt-bridge-overlay__round-next span:first-child {
@@ -210,7 +210,7 @@
 .chatgpt-bridge-overlay__round-next .chatgpt-bridge-overlay__value {
   color: rgba(246, 241, 231, 0.9);
   font-weight: 500;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .chatgpt-bridge-overlay__round-next .chatgpt-bridge-overlay__dot {
@@ -221,16 +221,16 @@
 }
 
 .chatgpt-bridge-overlay__step-card {
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(11, 15, 22, 0.58), rgba(8, 10, 15, 0.82));
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 
 .chatgpt-bridge-overlay__step-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -247,17 +247,17 @@
 }
 
 .chatgpt-bridge-overlay__step-value {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: #f6f1e7;
 }
 
 .chatgpt-bridge-overlay__issue-row {
-  margin-top: 8px;
-  border-radius: 10px;
+  margin-top: 6px;
+  border-radius: 9px;
   border: 1px solid rgba(251, 191, 36, 0.16);
   background: rgba(251, 191, 36, 0.06);
-  padding: 6px 8px;
+  padding: 5px 7px;
   font-size: 11px;
   color: rgba(253, 224, 71, 0.9);
 }
@@ -269,11 +269,11 @@
 /* ── Segmented Starter Control ────────────────────────────────────── */
 
 .chatgpt-bridge-overlay__starter-card {
-  margin-top: 8px;
-  border-radius: 16px;
+  margin-top: 6px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(13, 14, 18, 0.9), rgba(9, 10, 14, 0.94));
-  padding: 8px 10px;
+  padding: 6px 8px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.016);
 }
 
@@ -281,7 +281,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
   padding: 0 2px;
 }
 
@@ -300,7 +300,7 @@
 
 .chatgpt-bridge-overlay__starter-seg {
   position: relative;
-  border-radius: 14px;
+  border-radius: 11px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(0, 0, 0, 0.46);
   padding: 3px;
@@ -312,7 +312,7 @@
   top: 3px;
   bottom: 3px;
   width: calc(50% - 4px);
-  border-radius: 11px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016));
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.025);
@@ -336,12 +336,12 @@
 }
 
 .chatgpt-bridge-overlay__starter-option {
-  height: 36px;
-  border-radius: 11px;
+  height: 30px;
+  border-radius: 9px;
   border: none;
   background: transparent;
   color: rgba(246, 241, 231, 0.5);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
   cursor: pointer;
@@ -359,16 +359,16 @@
 /* ── Control Container ─────────────────────────────────────────────── */
 
 .chatgpt-bridge-overlay__control-container {
-  margin-top: 8px;
-  border-radius: 16px;
+  margin-top: 6px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(14, 15, 20, 0.88), rgba(9, 10, 14, 0.94));
-  padding: 8px;
+  padding: 6px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.014);
 }
 
 .chatgpt-bridge-overlay__control-group {
-  padding: 6px 0;
+  padding: 5px 0;
 }
 
 .chatgpt-bridge-overlay__control-group:first-child {
@@ -385,28 +385,28 @@
   letter-spacing: 0.2em;
   color: rgba(246, 241, 231, 0.5);
   display: block;
-  margin-bottom: 6px;
-  padding: 0 4px;
+  margin-bottom: 5px;
+  padding: 0 3px;
 }
 
 /* Binding Buttons */
 .chatgpt-bridge-overlay__binding-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
+  gap: 5px;
 }
 
 .chatgpt-bridge-overlay__binding-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
-  border-radius: 14px;
-  padding: 0 12px;
+  height: 34px;
+  border-radius: 10px;
+  padding: 0 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: rgba(246, 241, 231, 0.8);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -433,8 +433,8 @@
 }
 
 .chatgpt-bridge-overlay__binding-btn-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   color: rgba(246, 241, 231, 0.5);
 }
 
@@ -445,9 +445,9 @@
 .chatgpt-bridge-overlay__binding-status {
   display: inline-flex;
   align-items: center;
-  height: 16px;
+  height: 14px;
   border-radius: 999px;
-  padding: 0 6px;
+  padding: 0 5px;
   font-size: 8px;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -471,8 +471,8 @@
 }
 
 .chatgpt-bridge-overlay__session-primary {
-  height: 36px;
-  border-radius: 11px;
+  height: 32px;
+  border-radius: 9px;
   border: 1px solid rgba(201, 179, 122, 0.18);
   background: linear-gradient(180deg, rgba(60, 51, 31, 0.5), rgba(27, 24, 21, 0.96));
   color: #ead9a6;
@@ -484,7 +484,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 10px;
 }
 
 .chatgpt-bridge-overlay__session-primary:hover:not(:disabled) {
@@ -500,9 +500,9 @@
 }
 
 .chatgpt-bridge-overlay__session-stop {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: rgba(246, 241, 231, 0.6);
@@ -532,8 +532,8 @@
 }
 
 .chatgpt-bridge-overlay__utility-btn {
-  height: 34px;
-  border-radius: 11px;
+  height: 30px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: rgba(246, 241, 231, 0.6);
@@ -545,7 +545,7 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 0 8px;
+  padding: 0 6px;
 }
 
 .chatgpt-bridge-overlay__utility-btn:hover:not(:disabled) {
@@ -562,6 +562,6 @@
 }
 
 .chatgpt-bridge-overlay__utility-btn-icon {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
 }
