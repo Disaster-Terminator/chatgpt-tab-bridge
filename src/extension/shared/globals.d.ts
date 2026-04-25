@@ -104,6 +104,7 @@ export interface ChromeTabsApi {
   get(tabId: number): Promise<ChromeTab>;
   query(queryInfo: { active?: boolean; currentWindow?: boolean; url?: string[] }): Promise<ChromeTab[]>;
   sendMessage<T = unknown>(tabId: number, message: RuntimeMessage): Promise<T>;
+  update?(tabId: number, updateProperties: { active?: boolean }): Promise<ChromeTab>;
 }
 
 export interface ChromeTab {

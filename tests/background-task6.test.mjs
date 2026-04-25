@@ -56,6 +56,15 @@ function createChromeEnvironment() {
         sendMessage: async (tabId, message) => {
           callLog.push({ tabId, type: message.type });
           return sendMessageHandler(tabId, message);
+        },
+        update: async (tabId, updateProperties) => {
+          callLog.push({ tabId, type: "TABS_UPDATE", updateProperties });
+          return {
+            id: tabId,
+            url: `https://chatgpt.com/c/tab-${tabId}`,
+            title: `Tab ${tabId}`,
+            ...updateProperties
+          };
         }
       },
       storage: {
@@ -873,6 +882,72 @@ test("waitForSettledReply does not let idle replyPending observations suppress h
 
     assert.equal(settled.ok, false);
     assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("waitForSettledReply wakes a dormant accepted target once before hop_timeout", async () => {
+  const originalDateNow = Date.now;
+  let now = 0;
+  Date.now = () => {
+    now += 5000;
+    return now;
+  };
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestUserText: "submitted bridge payload",
+          latestAssistantText: "baseline assistant",
+          generating: false,
+          replyPending: true
+        }),
+        generating: false,
+        latestAssistantHash: hashText("baseline assistant"),
+        latestUserHash: hashText("submitted bridge payload"),
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(83);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 20000,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 83
+    });
+
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
+    const wakeCalls = chromeEnvironment.callLog.filter((entry) => entry.type === "TABS_UPDATE");
+    assert.equal(wakeCalls.length, 1);
+    assert.deepEqual(wakeCalls[0], {
+      tabId: 2,
+      type: "TABS_UPDATE",
+      updateProperties: {
+        active: true
+      }
+    });
   } finally {
     Date.now = originalDateNow;
   }

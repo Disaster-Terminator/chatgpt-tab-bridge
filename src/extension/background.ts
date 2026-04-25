@@ -161,6 +161,7 @@ const LOCAL_DEBUG_LOG_URL = "http://127.0.0.1:17761/events";
 const RELAY_WATCHDOG_ALARM_NAME = "bridge-relay-watchdog";
 const RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 const TAB_MESSAGE_TIMEOUT_MS = 8000;
+const DORMANT_REPLY_WAKE_MS = 8000;
 
 function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
   runtimeEventSequence += 1;
@@ -2100,6 +2101,21 @@ async function sendTabMessageWithTimeout<T>(
   ]);
 }
 
+async function wakeTargetTab(tabId: number): Promise<"activated" | "unavailable" | "failed"> {
+  if (typeof chrome.tabs.update !== "function") {
+    return "unavailable";
+  }
+
+  try {
+    await chrome.tabs.update(tabId, {
+      active: true
+    });
+    return "activated";
+  } catch {
+    return "failed";
+  }
+}
+
 export async function waitForSettledReply({
   tabId,
   canonicalTargetTabId,
@@ -2119,6 +2135,7 @@ export async function waitForSettledReply({
   let lastObservedAssistantHash: string | null = baselineHash;
   let stableCount = 0;
   let pendingObservationFailure: ReplyObservationFailureReason | null = null;
+  let targetWakeAttempted = false;
 
   while (true) {
     const now = Date.now();
@@ -2179,7 +2196,8 @@ export async function waitForSettledReply({
           baselineHash,
           stableHash,
           stableCount,
-          elapsedMs
+          elapsedMs,
+          idleMs
         }),
         verificationVerdict: STOP_REASONS.REPLY_OBSERVATION_MISSING
       });
@@ -2203,6 +2221,30 @@ export async function waitForSettledReply({
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
       stableCount = 0;
+      idleMs = Date.now() - lastProgressAt;
+
+      if (
+        !targetWakeAttempted &&
+        settings.hopTimeoutMs > DORMANT_REPLY_WAKE_MS &&
+        idleMs >= DORMANT_REPLY_WAKE_MS &&
+        observation.sample.replyPending === true &&
+        observation.sample.generating === false
+      ) {
+        targetWakeAttempted = true;
+        const wakeResult = await wakeTargetTab(canonicalTargetTabId);
+        addRuntimeEvent({
+          phaseStep: "target_wake_requested",
+          sourceRole,
+          targetRole,
+          round,
+          dispatchReadbackSummary: "reply_wait",
+          sendTriggerMode: "tab_activate",
+          verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+          verificationPollSample: `elapsed_ms:${elapsedMs}|idle_ms:${idleMs}|reply_pending:${observation.sample.replyPending}|generating:${observation.sample.generating}`,
+          verificationVerdict: wakeResult
+        });
+      }
+
       addRuntimeEvent({
         phaseStep: "reply_poll",
         sourceRole,
@@ -2216,7 +2258,8 @@ export async function waitForSettledReply({
           baselineHash,
           stableHash,
           stableCount,
-          elapsedMs
+          elapsedMs,
+          idleMs
         }),
         verificationVerdict: "assistant_hash_unchanged"
       });
@@ -2244,7 +2287,8 @@ export async function waitForSettledReply({
         baselineHash,
         stableHash,
         stableCount,
-        elapsedMs
+        elapsedMs,
+        idleMs
       }),
       verificationVerdict: replySettleConfirmed ? "settle_candidate" : "still_generating"
     });
@@ -2284,18 +2328,21 @@ function formatReplyPollSample({
   baselineHash,
   stableHash,
   stableCount,
-  elapsedMs
+  elapsedMs,
+  idleMs
 }: {
   observation: Extract<ClassifiedTargetObservation, { classification: "correct_target" }>;
   baselineHash: string | null;
   stableHash: string | null;
   stableCount: number;
   elapsedMs: number;
+  idleMs: number;
 }): string {
   const assistant = observation.sample.latestAssistant;
   const preview = normalizeAssistantText(assistant.text).slice(0, 80).replace(/\s+/g, " ");
   return [
     `elapsed_ms:${elapsedMs}`,
+    `idle_ms:${idleMs}`,
     `assistant_present:${assistant.present}`,
     `assistant_hash:${assistant.hash ?? "null"}`,
     `baseline_hash:${baselineHash ?? "null"}`,
