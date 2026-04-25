@@ -381,7 +381,9 @@ function reduceResume(state: RuntimeState): RuntimeState {
   const currentActiveHop = state.activeHop;
 
   if (isFreshPendingHop(currentActiveHop, state)) {
-    const resumeSource = state.nextHopOverride ?? currentActiveHop.sourceRole;
+    const resumeSource =
+      state.nextHopOverride ??
+      (state.round === 0 ? state.starter : currentActiveHop.sourceRole);
     state.nextHopSource = resumeSource;
     state.activeHop =
       resumeSource === currentActiveHop.sourceRole

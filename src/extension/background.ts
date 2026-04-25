@@ -635,7 +635,55 @@ async function updateState(event: RuntimeStateEvent): Promise<RuntimeState> {
     activeLoopToken = 0;
   }
 
+  addStateTransitionEvent(event, current, next);
   return persistState(next, current);
+}
+
+function addStateTransitionEvent(
+  event: RuntimeStateEvent,
+  previousState: RuntimeState,
+  nextState: RuntimeState
+): void {
+  const observableEvents = new Set<RuntimeStateEvent["type"]>([
+    "set_starter",
+    "set_next_hop_override",
+    "start",
+    "pause",
+    "resume",
+    "stop",
+    "set_runtime_settings"
+  ]);
+
+  if (!observableEvents.has(event.type)) {
+    return;
+  }
+
+  const sourceRole = nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+  addRuntimeEvent({
+    phaseStep: `state:${event.type}`,
+    sourceRole,
+    targetRole: otherRole(sourceRole),
+    round: nextState.activeHop?.round ?? nextState.round,
+    dispatchReadbackSummary: [
+      `phase:${previousState.phase}->${nextState.phase}`,
+      `starter:${previousState.starter}->${nextState.starter}`,
+      `next:${previousState.nextHopSource}->${nextState.nextHopSource}`,
+      `override:${previousState.nextHopOverride ?? "none"}->${nextState.nextHopOverride ?? "none"}`,
+      `active:${summarizeActiveHop(previousState.activeHop)}->${summarizeActiveHop(nextState.activeHop)}`
+    ].join("|"),
+    sendTriggerMode: "state_transition",
+    verificationBaseline: `event:${event.type}`,
+    verificationPollSample: "n/a",
+    verificationVerdict: "recorded"
+  });
+}
+
+function summarizeActiveHop(activeHop: RuntimeHopTruth | null): string {
+  if (!activeHop) {
+    return "none";
+  }
+
+  return `${activeHop.sourceRole}->${activeHop.targetRole}/r${activeHop.round}/${activeHop.stage}/${activeHop.hopId ?? "pending"}`;
 }
 
 async function bindTabToRole(

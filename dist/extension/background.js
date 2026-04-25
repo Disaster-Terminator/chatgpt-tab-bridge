@@ -372,7 +372,7 @@ function reduceResume(state) {
   state.phase = PHASES.RUNNING;
   const currentActiveHop = state.activeHop;
   if (isFreshPendingHop(currentActiveHop, state)) {
-    const resumeSource = state.nextHopOverride ?? currentActiveHop.sourceRole;
+    const resumeSource = state.nextHopOverride ?? (state.round === 0 ? state.starter : currentActiveHop.sourceRole);
     state.nextHopSource = resumeSource;
     state.activeHop = resumeSource === currentActiveHop.sourceRole ? { ...currentActiveHop } : createPendingHop(state, resumeSource);
     if (state.nextHopOverride) {
@@ -1479,7 +1479,46 @@ async function updateState(event) {
   if (next.phase !== PHASES.RUNNING) {
     activeLoopToken = 0;
   }
+  addStateTransitionEvent(event, current, next);
   return persistState(next, current);
+}
+function addStateTransitionEvent(event, previousState, nextState) {
+  const observableEvents = /* @__PURE__ */ new Set([
+    "set_starter",
+    "set_next_hop_override",
+    "start",
+    "pause",
+    "resume",
+    "stop",
+    "set_runtime_settings"
+  ]);
+  if (!observableEvents.has(event.type)) {
+    return;
+  }
+  const sourceRole = nextState.activeHop?.sourceRole ?? nextState.nextHopOverride ?? nextState.nextHopSource;
+  addRuntimeEvent({
+    phaseStep: `state:${event.type}`,
+    sourceRole,
+    targetRole: otherRole(sourceRole),
+    round: nextState.activeHop?.round ?? nextState.round,
+    dispatchReadbackSummary: [
+      `phase:${previousState.phase}->${nextState.phase}`,
+      `starter:${previousState.starter}->${nextState.starter}`,
+      `next:${previousState.nextHopSource}->${nextState.nextHopSource}`,
+      `override:${previousState.nextHopOverride ?? "none"}->${nextState.nextHopOverride ?? "none"}`,
+      `active:${summarizeActiveHop(previousState.activeHop)}->${summarizeActiveHop(nextState.activeHop)}`
+    ].join("|"),
+    sendTriggerMode: "state_transition",
+    verificationBaseline: `event:${event.type}`,
+    verificationPollSample: "n/a",
+    verificationVerdict: "recorded"
+  });
+}
+function summarizeActiveHop(activeHop) {
+  if (!activeHop) {
+    return "none";
+  }
+  return `${activeHop.sourceRole}->${activeHop.targetRole}/r${activeHop.round}/${activeHop.stage}/${activeHop.hopId ?? "pending"}`;
 }
 async function bindTabToRole(role, tabId) {
   if (!isBridgeRole2(role) || !tabId) {

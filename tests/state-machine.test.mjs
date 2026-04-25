@@ -137,6 +137,29 @@ test("paused starter selection defers the next resume source", () => {
   });
 });
 
+test("resume falls back to paused starter when override is missing", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, { type: "pause" });
+  state.starter = "B";
+  state.nextHopOverride = null;
+
+  state = reduceState(state, { type: "resume" });
+
+  assert.equal(state.phase, PHASES.RUNNING);
+  assert.equal(state.nextHopSource, "B");
+  assert.deepEqual(state.activeHop, {
+    sourceRole: "B",
+    targetRole: "A",
+    targetTabId: 1,
+    round: 1,
+    hopId: null,
+    stage: "pending"
+  });
+});
+
 test("binding conflict does not allow the same thread to satisfy both roles", () => {
   let state = createInitialState();
   const binding = createBinding("A", 1, "https://chatgpt.com/c/shared-thread");
