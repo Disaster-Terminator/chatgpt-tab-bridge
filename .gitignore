@@ -7,5 +7,7 @@ package-lock.json
 tmp/
 playwright/.auth/
 .gstack/
+.superpowers/
+%SystemDrive%/
 *:Zone.Identifier
 *Zone.Identifier

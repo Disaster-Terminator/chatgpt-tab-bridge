@@ -32,6 +32,9 @@ declare global {
 export interface ChromeNamespace {
   action: {
     openPopup?: () => Promise<void>;
+    setBadgeBackgroundColor?: (details: { color: string }) => Promise<void>;
+    setBadgeText?: (details: { text: string }) => Promise<void>;
+    setTitle?: (details: { title: string }) => Promise<void>;
   };
   runtime: ChromeRuntime;
   storage: {
@@ -59,6 +62,7 @@ export type ChromeRuntimeMessageListener = (
 
 export interface ChromePort {
   name: string;
+  sender?: ChromeMessageSender;
   onDisconnect: ChromeEvent<() => void>;
   onMessage: ChromeEvent<(message: unknown) => void>;
   postMessage(message: unknown): void;

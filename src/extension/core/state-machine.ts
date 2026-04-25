@@ -291,10 +291,16 @@ function reduceSetRuntimeSettings(state: RuntimeState, event: SetRuntimeSettings
     return state;
   }
 
-  const maxRounds = normalizeMaxRounds(event.settings.maxRounds);
+  const maxRounds = "maxRounds" in event.settings
+    ? normalizeMaxRounds(event.settings.maxRounds)
+    : state.settings.maxRounds;
+  const maxRoundsEnabled = "maxRoundsEnabled" in event.settings
+    ? normalizeMaxRoundsEnabled(event.settings.maxRoundsEnabled)
+    : state.settings.maxRoundsEnabled;
   state.settings = {
     ...state.settings,
     ...event.settings,
+    maxRoundsEnabled,
     maxRounds
   };
   return state;
@@ -571,6 +577,13 @@ function normalizeMaxRounds(value: unknown): number {
     return DEFAULT_SETTINGS.maxRounds;
   }
   return Math.min(50, Math.max(1, Math.round(numeric)));
+}
+
+function normalizeMaxRoundsEnabled(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    return DEFAULT_SETTINGS.maxRoundsEnabled;
+  }
+  return value;
 }
 
 function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): RuntimeBinding | null {

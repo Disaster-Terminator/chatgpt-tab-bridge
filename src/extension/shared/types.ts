@@ -44,6 +44,7 @@ export type MessageType =
   | "CLEAR_TERMINAL"
   | "SET_NEXT_HOP_OVERRIDE"
   | "SET_OVERLAY_ENABLED"
+  | "SET_AMBIENT_OVERLAY_ENABLED"
   | "SET_OVERLAY_COLLAPSED"
   | "SET_OVERLAY_POSITION"
   | "RESET_OVERLAY_POSITION"
@@ -118,6 +119,7 @@ export interface RuntimeBinding {
 }
 
 export interface RuntimeSettings {
+  maxRoundsEnabled: boolean;
   maxRounds: number;
   hopTimeoutMs: number;
   pollIntervalMs: number;
@@ -134,6 +136,7 @@ export interface OverlayPosition {
 
 export interface OverlaySettings {
   enabled: boolean;
+  ambientEnabled: boolean;
   collapsed: boolean;
   position: OverlayPosition | null;
 }
@@ -248,6 +251,7 @@ export interface PopupModel {
 export interface OverlayModel {
   phase: RuntimePhase;
   round: number;
+  maxRoundsEnabled: boolean;
   maxRounds: number;
   nextHop: string;
   requiresTerminalClear: boolean;
@@ -442,6 +446,11 @@ export interface SetOverlayEnabledMessage extends MessageBase {
   enabled: boolean;
 }
 
+export interface SetAmbientOverlayEnabledMessage extends MessageBase {
+  type: "SET_AMBIENT_OVERLAY_ENABLED";
+  enabled: boolean;
+}
+
 export interface SetOverlayCollapsedMessage extends MessageBase {
   type: "SET_OVERLAY_COLLAPSED";
   collapsed: boolean;
@@ -519,6 +528,7 @@ export type RuntimeMessage =
   | ClearTerminalMessage
   | SetNextHopOverrideMessage
   | SetOverlayEnabledMessage
+  | SetAmbientOverlayEnabledMessage
   | SetOverlayCollapsedMessage
   | SetOverlayPositionMessage
   | ResetOverlayPositionMessage

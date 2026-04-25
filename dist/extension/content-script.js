@@ -428,6 +428,7 @@ var MESSAGE_TYPES = Object.freeze({
   CLEAR_TERMINAL: "CLEAR_TERMINAL",
   SET_NEXT_HOP_OVERRIDE: "SET_NEXT_HOP_OVERRIDE",
   SET_OVERLAY_ENABLED: "SET_OVERLAY_ENABLED",
+  SET_AMBIENT_OVERLAY_ENABLED: "SET_AMBIENT_OVERLAY_ENABLED",
   SET_OVERLAY_COLLAPSED: "SET_OVERLAY_COLLAPSED",
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
@@ -441,6 +442,7 @@ var MESSAGE_TYPES = Object.freeze({
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
 });
 var DEFAULT_SETTINGS = Object.freeze({
+  maxRoundsEnabled: true,
   maxRounds: 8,
   hopTimeoutMs: 6e4,
   pollIntervalMs: 1500,
@@ -451,6 +453,7 @@ var DEFAULT_SETTINGS = Object.freeze({
 });
 var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
   enabled: true,
+  ambientEnabled: false,
   collapsed: false,
   position: null
 });
@@ -499,13 +502,15 @@ var zhCN = {
     sectionDebug: "\u8C03\u8BD5",
     debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
     labelStarter: "\u8D77\u59CB\u4FA7",
+    labelMaxRoundsLimit: "\u8F6E\u6570\u9650\u5236",
     labelMaxRounds: "\u6865\u63A5\u8F6E\u6570",
-    maxRoundsHelp: "\u62D6\u52A8\u6ED1\u6746\u6216\u7528 +/- \u5FAE\u8C03\uFF1B\u5230\u8FBE\u76EE\u6807\u8F6E\u6570\u540E\u81EA\u52A8\u505C\u6B62\u3002",
+    maxRoundsHelp: "\u5F00\u542F\u540E\u5230\u8FBE\u76EE\u6807\u8F6E\u6570\u81EA\u52A8\u505C\u6B62\uFF1B\u5173\u95ED\u540E\u663E\u793A\u4E3A \u221E\u3002",
     maxRoundsDecrease: "\u51CF\u5C11\u6865\u63A5\u8F6E\u6570",
     maxRoundsIncrease: "\u589E\u52A0\u6865\u63A5\u8F6E\u6570",
     roundUnit: "\u8F6E",
     labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
     labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
+    labelEnableAmbientOverlay: "\u5168\u7AD9\u72B6\u6001\u63D0\u793A",
     labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
     bindingA: "\u7ED1\u5B9A A",
     bindingB: "\u7ED1\u5B9A B",
@@ -597,13 +602,15 @@ var en = {
     sectionDebug: "Debug",
     debugSummary: "Debug info",
     labelStarter: "Starter side",
+    labelMaxRoundsLimit: "Round limit",
     labelMaxRounds: "Bridge rounds",
-    maxRoundsHelp: "Drag the slider or use +/-; stops after the selected round count.",
+    maxRoundsHelp: "When enabled, stops after the selected count; disabled shows \u221E.",
     maxRoundsDecrease: "Decrease bridge rounds",
     maxRoundsIncrease: "Increase bridge rounds",
     roundUnit: "rounds",
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
+    labelEnableAmbientOverlay: "Site-wide status hint",
     labelDefaultExpanded: "Default expanded overlay",
     bindingA: "Binding A",
     bindingB: "Binding B",
@@ -712,6 +719,8 @@ function observeUiLocale(callback) {
 // content-script.ts
 var overlay = createOverlay();
 var keepAlivePort = connectKeepAlivePort();
+var refreshTimerId = null;
+var isChatGptPage = window.location.hostname === "chatgpt.com";
 var defaultControls = {
   canStart: false,
   canPause: false,
@@ -733,6 +742,7 @@ var defaultDisplay = {
 var overlaySnapshot = {
   phase: "idle",
   round: 0,
+  maxRoundsEnabled: true,
   maxRounds: 8,
   nextHop: "A -> B",
   assignedRole: null,
@@ -742,6 +752,7 @@ var overlaySnapshot = {
   display: defaultDisplay,
   overlaySettings: {
     enabled: true,
+    ambientEnabled: false,
     collapsed: false,
     position: null
   },
@@ -818,9 +829,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
+startOverlayRefreshLoop();
 function connectKeepAlivePort() {
   const port = chrome.runtime.connect({
     name: "bridge-tab-keepalive"
+  });
+  port.onMessage.addListener((message) => {
+    if (typeof message === "object" && message !== null && "type" in message && message.type === MESSAGE_TYPES.SYNC_OVERLAY_STATE) {
+      overlaySnapshot = {
+        ...overlaySnapshot,
+        ...message.snapshot ?? {}
+      };
+      renderOverlay();
+    }
   });
   const intervalId = setInterval(() => {
     try {
@@ -839,6 +860,19 @@ function connectKeepAlivePort() {
     }, 1e3);
   });
   return port;
+}
+function startOverlayRefreshLoop() {
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      void refreshOverlayModel();
+    }
+  });
+  window.addEventListener("focus", () => {
+    void refreshOverlayModel();
+  });
+  refreshTimerId = window.setInterval(() => {
+    void refreshOverlayModel();
+  }, isChatGptPage ? 1500 : 2500);
 }
 function bindOverlayEvents() {
   requireOverlayElement("[data-bind-role='A']").addEventListener("click", () => {
@@ -1040,6 +1074,9 @@ function renderOverlay() {
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
+  const isAmbient = !isChatGptPage;
+  const hasIssue = Boolean(display?.lastIssue && display.lastIssue !== "None");
+  const ambientVisible = overlaySnapshot.phase === "running" || overlaySnapshot.phase === "paused" || overlaySnapshot.phase === "stopped" || overlaySnapshot.phase === "error" || hasIssue;
   const overlayRoot = overlay;
   overlayRoot.dataset.tabId = overlaySnapshot.currentTabId !== null ? String(overlaySnapshot.currentTabId) : "";
   setOverlaySlotText("role", formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole));
@@ -1054,7 +1091,7 @@ function renderOverlay() {
   const phaseBadge = requireOverlayElement("[data-slot='phase-badge']");
   phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
   phaseBadge.dataset.phase = overlaySnapshot.phase;
-  setOverlaySlotText("round", `${overlaySnapshot.round} / ${overlaySnapshot.maxRounds}`);
+  setOverlaySlotText("round", formatRoundProgress(overlaySnapshot));
   setOverlaySlotText("next-hop", overlaySnapshot.nextHop);
   setOverlaySlotText("step", display?.currentStep || c.idle);
   const issueRow = requireOverlayElement("[data-slot='issue-row']");
@@ -1108,9 +1145,10 @@ function renderOverlay() {
   if (resumeBtn) resumeBtn.disabled = !controls?.canResume;
   if (stopBtn) stopBtn.disabled = !controls?.canStop;
   overlay.classList.toggle("chatgpt-bridge-overlay--terminal", Boolean(overlaySnapshot.requiresTerminalClear));
-  overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed));
-  overlay.hidden = overlaySettings?.enabled === false;
-  applyOverlayPosition(overlaySettings?.position ?? null);
+  overlay.classList.toggle("chatgpt-bridge-overlay--ambient", isAmbient);
+  overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed) && !isAmbient);
+  overlay.hidden = isAmbient ? overlaySettings?.ambientEnabled !== true || !ambientVisible : overlaySettings?.enabled === false;
+  applyOverlayPosition(isAmbient ? null : overlaySettings?.position ?? null);
   requireOverlayElement("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
   requireOverlayElement("[data-action='toggle-collapse']").textContent = overlaySettings?.collapsed ? c.collapseExpand : c.collapseCollapse;
   requireOverlayElement("[data-bind-role='A']").disabled = !canChangeBindings;
@@ -1119,6 +1157,9 @@ function renderOverlay() {
   if (collapsedRole) {
     collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+function formatRoundProgress(model) {
+  return `${model.round} / ${model.maxRoundsEnabled ? model.maxRounds : "\u221E"}`;
 }
 function setOverlaySlotText(slot, text) {
   overlay.querySelectorAll(`[data-slot='${slot}']`).forEach((node) => {

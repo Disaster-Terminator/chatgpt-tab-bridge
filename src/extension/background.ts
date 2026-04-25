@@ -143,6 +143,7 @@ type VerificationExecutionResult =
 
 let activeLoopToken = 0;
 const keepAlivePorts = new Set<ChromePort>();
+const overlayPortsByTabId = new Map<number, Set<ChromePort>>();
 
 export function setActiveLoopTokenForTest(token: number): void {
   activeLoopToken = token;
@@ -314,11 +315,13 @@ function createVerificationHopId(sessionId: number, round: number): string {
 chrome.runtime.onInstalled.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
+  await updateActionBadge(await getState());
 });
 
 chrome.runtime.onStartup.addListener(async (): Promise<void> => {
   await initializeState();
   await initializeOverlaySettings();
+  await updateActionBadge(await getState());
 });
 
 chrome.runtime.onConnect.addListener((port): void => {
@@ -327,13 +330,27 @@ chrome.runtime.onConnect.addListener((port): void => {
   }
 
   keepAlivePorts.add(port);
+  const tabId = port.sender?.tab?.id;
+  if (tabId) {
+    const tabPorts = overlayPortsByTabId.get(tabId) ?? new Set<ChromePort>();
+    tabPorts.add(port);
+    overlayPortsByTabId.set(tabId, tabPorts);
+  }
   port.onMessage.addListener((): void => {});
   port.onDisconnect.addListener((): void => {
     keepAlivePorts.delete(port);
+    if (tabId) {
+      const tabPorts = overlayPortsByTabId.get(tabId);
+      tabPorts?.delete(port);
+      if (tabPorts?.size === 0) {
+        overlayPortsByTabId.delete(tabId);
+      }
+    }
   });
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId): Promise<void> => {
+  overlayPortsByTabId.delete(tabId);
   const state = await getState();
   const role = findRoleByTabId(state, tabId);
   if (!role) {
@@ -435,6 +452,9 @@ async function handleMessage(
     case MESSAGE_TYPES.SET_OVERLAY_ENABLED:
       return updateOverlaySettings({ enabled: Boolean(message.enabled) });
 
+    case MESSAGE_TYPES.SET_AMBIENT_OVERLAY_ENABLED:
+      return updateOverlaySettings({ ambientEnabled: Boolean(message.enabled) });
+
     case MESSAGE_TYPES.SET_OVERLAY_COLLAPSED:
       return updateOverlaySettings({ collapsed: Boolean(message.collapsed) });
 
@@ -523,8 +543,50 @@ async function persistState(
   previousState: RuntimeState | null = null
 ): Promise<RuntimeState> {
   await setSessionValue(APP_STATE_KEY, nextState);
+  await updateActionBadge(nextState);
   await broadcastOverlayState(nextState, previousState);
   return nextState;
+}
+
+async function updateActionBadge(state: RuntimeState): Promise<void> {
+  if (!chrome.action.setBadgeText) {
+    return;
+  }
+
+  const cleanStopReasons = new Set<string>([
+    STOP_REASONS.MAX_ROUNDS,
+    STOP_REASONS.STOP_MARKER,
+    STOP_REASONS.DUPLICATE_OUTPUT
+  ]);
+
+  let text = "";
+  let color = "#52525b";
+  let title = "ChatGPT Bridge";
+
+  if (state.phase === PHASES.RUNNING) {
+    text = "RUN";
+    color = "#0ea5e9";
+    title = `ChatGPT Bridge running: ${state.round}/${state.settings.maxRoundsEnabled ? state.settings.maxRounds : "∞"}`;
+  } else if (state.phase === PHASES.PAUSED) {
+    text = "PAU";
+    color = "#f59e0b";
+    title = "ChatGPT Bridge paused";
+  } else if (state.phase === PHASES.STOPPED) {
+    const cleanStop = cleanStopReasons.has(state.lastStopReason ?? "");
+    text = cleanStop ? "OK" : "STOP";
+    color = cleanStop ? "#22c55e" : "#71717a";
+    title = cleanStop
+      ? `ChatGPT Bridge completed: ${state.lastStopReason ?? "stopped"}`
+      : `ChatGPT Bridge stopped: ${state.lastStopReason ?? "user_stop"}`;
+  } else if (state.phase === PHASES.ERROR) {
+    text = "ERR";
+    color = "#ef4444";
+    title = `ChatGPT Bridge error: ${state.lastError ?? "unknown"}`;
+  }
+
+  await chrome.action.setBadgeText({ text });
+  await chrome.action.setBadgeBackgroundColor?.({ color });
+  await chrome.action.setTitle?.({ title });
 }
 
 async function updateState(event: RuntimeStateEvent): Promise<RuntimeState> {
@@ -1212,6 +1274,7 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
     const postHop = evaluatePostHopGuard({
       assistantText: settled.result.text,
       round: nextState.round,
+      maxRoundsEnabled: settings.maxRoundsEnabled,
       maxRounds: settings.maxRounds,
       stopMarker: settings.stopMarker
     });
@@ -1314,6 +1377,7 @@ async function resumePersistedHop({
     const postHop = evaluatePostHopGuard({
       assistantText: settled.result.text,
       round: nextState.round,
+      maxRoundsEnabled: settings.maxRoundsEnabled,
       maxRounds: settings.maxRounds,
       stopMarker: settings.stopMarker
     });
@@ -1372,6 +1436,7 @@ async function resumePersistedHop({
   const postHop = evaluatePostHopGuard({
     assistantText: settled.result.text,
     round: nextState.round,
+    maxRoundsEnabled: settings.maxRoundsEnabled,
     maxRounds: settings.maxRounds,
     stopMarker: settings.stopMarker
   });
@@ -1976,6 +2041,9 @@ async function broadcastOverlayState(
 ): Promise<void> {
   const nextOverlaySettings = overlaySettings ?? (await getOverlaySettings());
   const tabIds = new Set<number>(collectOverlaySyncTabIds(previousState, state));
+  for (const tabId of overlayPortsByTabId.keys()) {
+    tabIds.add(tabId);
+  }
 
   if (broadcastAllChatGptTabs) {
     const tabs = await chrome.tabs.query({
@@ -1992,16 +2060,40 @@ async function broadcastOverlayState(
     Array.from(tabIds).map(async (tabId): Promise<null> => {
       try {
         const snapshot = await buildOverlaySnapshot(state, tabId, nextOverlaySettings);
-        await chrome.tabs.sendMessage(tabId, {
+        const message = {
           type: MESSAGE_TYPES.SYNC_OVERLAY_STATE,
           snapshot
-        });
+        } as const;
+        postOverlayStateToPorts(tabId, message);
+        await chrome.tabs.sendMessage(tabId, message);
       } catch {
         return null;
       }
       return null;
     })
   );
+}
+
+function postOverlayStateToPorts(
+  tabId: number,
+  message: { type: "SYNC_OVERLAY_STATE"; snapshot: OverlayModel }
+): void {
+  const tabPorts = overlayPortsByTabId.get(tabId);
+  if (!tabPorts) {
+    return;
+  }
+
+  for (const port of tabPorts) {
+    try {
+      port.postMessage(message);
+    } catch {
+      tabPorts.delete(port);
+    }
+  }
+
+  if (tabPorts.size === 0) {
+    overlayPortsByTabId.delete(tabId);
+  }
 }
 
 async function buildOverlaySnapshot(
@@ -2025,6 +2117,7 @@ async function buildOverlaySnapshot(
   return {
     phase: state.phase,
     round: state.round,
+    maxRoundsEnabled: state.settings.maxRoundsEnabled,
     maxRounds: state.settings.maxRounds,
     nextHop: formatNextHop(state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource),
     requiresTerminalClear: state.requiresTerminalClear,

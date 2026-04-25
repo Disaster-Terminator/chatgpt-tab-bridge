@@ -46,6 +46,7 @@ export interface PopupCopy {
   sectionDebug: string;
   debugSummary: string;
   labelStarter: string;
+  labelMaxRoundsLimit: string;
   labelMaxRounds: string;
   maxRoundsHelp: string;
   maxRoundsDecrease: string;
@@ -53,6 +54,7 @@ export interface PopupCopy {
   roundUnit: string;
   labelOverride: string;
   labelEnableOverlay: string;
+  labelEnableAmbientOverlay: string;
   labelDefaultExpanded: string;
   bindingA: string;
   bindingB: string;
@@ -139,13 +141,15 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     sectionDebug: "调试",
     debugSummary: "调试信息",
     labelStarter: "起始侧",
+    labelMaxRoundsLimit: "轮数限制",
     labelMaxRounds: "桥接轮数",
-    maxRoundsHelp: "拖动滑杆或用 +/- 微调；到达目标轮数后自动停止。",
+    maxRoundsHelp: "开启后到达目标轮数自动停止；关闭后显示为 ∞。",
     maxRoundsDecrease: "减少桥接轮数",
     maxRoundsIncrease: "增加桥接轮数",
     roundUnit: "轮",
     labelOverride: "暂停时下一跳覆盖",
     labelEnableOverlay: "启用悬浮窗",
+    labelEnableAmbientOverlay: "全站状态提示",
     labelDefaultExpanded: "默认展开悬浮窗",
     bindingA: "绑定 A",
     bindingB: "绑定 B",
@@ -238,13 +242,15 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     sectionDebug: "Debug",
     debugSummary: "Debug info",
     labelStarter: "Starter side",
+    labelMaxRoundsLimit: "Round limit",
     labelMaxRounds: "Bridge rounds",
-    maxRoundsHelp: "Drag the slider or use +/-; stops after the selected round count.",
+    maxRoundsHelp: "When enabled, stops after the selected count; disabled shows ∞.",
     maxRoundsDecrease: "Decrease bridge rounds",
     maxRoundsIncrease: "Increase bridge rounds",
     roundUnit: "rounds",
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
+    labelEnableAmbientOverlay: "Site-wide status hint",
     labelDefaultExpanded: "Default expanded overlay",
     bindingA: "Binding A",
     bindingB: "Binding B",

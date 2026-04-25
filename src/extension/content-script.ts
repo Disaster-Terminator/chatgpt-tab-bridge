@@ -34,6 +34,8 @@ import type { ChromePort } from "./shared/globals";
 
 const overlay = createOverlay();
 let keepAlivePort: ChromePort | null = connectKeepAlivePort();
+let refreshTimerId: number | null = null;
+const isChatGptPage = window.location.hostname === "chatgpt.com";
 const defaultControls: PopupControls = {
   canStart: false,
   canPause: false,
@@ -55,6 +57,7 @@ const defaultDisplay: RuntimeDisplay = {
 let overlaySnapshot: OverlayModel = {
   phase: "idle",
   round: 0,
+  maxRoundsEnabled: true,
   maxRounds: 8,
   nextHop: "A -> B",
   assignedRole: null,
@@ -64,6 +67,7 @@ let overlaySnapshot: OverlayModel = {
   display: defaultDisplay,
   overlaySettings: {
     enabled: true,
+    ambientEnabled: false,
     collapsed: false,
     position: null
   },
@@ -152,10 +156,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
+startOverlayRefreshLoop();
 
 function connectKeepAlivePort(): ChromePort {
   const port = chrome.runtime.connect({
     name: "bridge-tab-keepalive"
+  });
+
+  port.onMessage.addListener((message) => {
+    if (
+      typeof message === "object" &&
+      message !== null &&
+      "type" in message &&
+      (message as RuntimeMessage).type === MESSAGE_TYPES.SYNC_OVERLAY_STATE
+    ) {
+      overlaySnapshot = {
+        ...overlaySnapshot,
+        ...((message as { snapshot?: OverlayModel }).snapshot ?? {})
+      };
+      renderOverlay();
+    }
   });
 
   const intervalId = setInterval(() => {
@@ -177,6 +197,21 @@ function connectKeepAlivePort(): ChromePort {
   });
 
   return port;
+}
+
+function startOverlayRefreshLoop(): void {
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      void refreshOverlayModel();
+    }
+  });
+  window.addEventListener("focus", () => {
+    void refreshOverlayModel();
+  });
+
+  refreshTimerId = window.setInterval(() => {
+    void refreshOverlayModel();
+  }, isChatGptPage ? 1500 : 2500);
 }
 
 function bindOverlayEvents(): void {
@@ -398,6 +433,14 @@ function renderOverlay(): void {
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
+  const isAmbient = !isChatGptPage;
+  const hasIssue = Boolean(display?.lastIssue && display.lastIssue !== "None");
+  const ambientVisible =
+    overlaySnapshot.phase === "running" ||
+    overlaySnapshot.phase === "paused" ||
+    overlaySnapshot.phase === "stopped" ||
+    overlaySnapshot.phase === "error" ||
+    hasIssue;
 
   // Expose currentTabId as DOM signal for runner synchronization
   const overlayRoot = overlay as HTMLElement;
@@ -418,7 +461,7 @@ function renderOverlay(): void {
   phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
   phaseBadge.dataset.phase = overlaySnapshot.phase;
 
-  setOverlaySlotText("round", `${overlaySnapshot.round} / ${overlaySnapshot.maxRounds}`);
+  setOverlaySlotText("round", formatRoundProgress(overlaySnapshot));
   setOverlaySlotText("next-hop", overlaySnapshot.nextHop);
   setOverlaySlotText("step", display?.currentStep || c.idle);
 
@@ -482,9 +525,12 @@ function renderOverlay(): void {
   if (stopBtn) stopBtn.disabled = !controls?.canStop;
 
   overlay.classList.toggle("chatgpt-bridge-overlay--terminal", Boolean(overlaySnapshot.requiresTerminalClear));
-  overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed));
-  overlay.hidden = overlaySettings?.enabled === false;
-  applyOverlayPosition(overlaySettings?.position ?? null);
+  overlay.classList.toggle("chatgpt-bridge-overlay--ambient", isAmbient);
+  overlay.classList.toggle("chatgpt-bridge-overlay--collapsed", Boolean(overlaySettings?.collapsed) && !isAmbient);
+  overlay.hidden = isAmbient
+    ? overlaySettings?.ambientEnabled !== true || !ambientVisible
+    : overlaySettings?.enabled === false;
+  applyOverlayPosition(isAmbient ? null : overlaySettings?.position ?? null);
 
   requireOverlayElement<HTMLButtonElement>("[data-action='clear-terminal']").disabled = !controls?.canClearTerminal;
   requireOverlayElement<HTMLButtonElement>("[data-action='toggle-collapse']").textContent =
@@ -497,6 +543,10 @@ function renderOverlay(): void {
   if (collapsedRole) {
     collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+
+function formatRoundProgress(model: OverlayModel): string {
+  return `${model.round} / ${model.maxRoundsEnabled ? model.maxRounds : "∞"}`;
 }
 
 function setOverlaySlotText(slot: string, text: string): void {

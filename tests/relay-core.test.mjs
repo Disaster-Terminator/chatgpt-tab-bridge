@@ -115,6 +115,18 @@ test("evaluatePostHopGuard stops on stop marker and max rounds", () => {
   assert.equal(maxRounds.reason, "max_rounds_reached");
 });
 
+test("evaluatePostHopGuard ignores max rounds when the round limit is disabled", () => {
+  const result = evaluatePostHopGuard({
+    assistantText: "continue",
+    round: 99,
+    maxRoundsEnabled: false,
+    maxRounds: 8
+  });
+
+  assert.equal(result.shouldStop, false);
+  assert.equal(result.reason, null);
+});
+
 test("formatNextHop expresses source to target direction", () => {
   assert.equal(formatNextHop("A"), "A -> B");
   assert.equal(formatNextHop("B"), "B -> A");

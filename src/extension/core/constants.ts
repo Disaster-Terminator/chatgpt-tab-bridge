@@ -55,6 +55,7 @@ export const MESSAGE_TYPES = Object.freeze({
   CLEAR_TERMINAL: "CLEAR_TERMINAL",
   SET_NEXT_HOP_OVERRIDE: "SET_NEXT_HOP_OVERRIDE",
   SET_OVERLAY_ENABLED: "SET_OVERLAY_ENABLED",
+  SET_AMBIENT_OVERLAY_ENABLED: "SET_AMBIENT_OVERLAY_ENABLED",
   SET_OVERLAY_COLLAPSED: "SET_OVERLAY_COLLAPSED",
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
@@ -69,6 +70,7 @@ export const MESSAGE_TYPES = Object.freeze({
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
+  maxRoundsEnabled: true,
   maxRounds: 8,
   hopTimeoutMs: 60000,
   pollIntervalMs: 1500,
@@ -80,6 +82,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
 export const DEFAULT_OVERLAY_SETTINGS = Object.freeze<OverlaySettings>({
   enabled: true,
+  ambientEnabled: false,
   collapsed: false,
   position: null
 });

@@ -13,6 +13,7 @@ import type {
   RuntimeResponse,
   RuntimeState,
   SetBindingMessage,
+  SetAmbientOverlayEnabledMessage,
   SetNextHopOverrideMessage,
   SetOverlayEnabledMessage,
   SetOverlayCollapsedMessage,
@@ -46,9 +47,11 @@ interface PopupElements {
   localeSelect: HTMLSelectElement;
   maxRoundsRange: HTMLInputElement;
   maxRoundsValue: HTMLElement;
+  maxRoundsEnabledCheckbox: HTMLInputElement;
   decreaseMaxRoundsButton: HTMLButtonElement;
   increaseMaxRoundsButton: HTMLButtonElement;
   overlayEnabledCheckbox: HTMLInputElement;
+  ambientOverlayEnabledCheckbox: HTMLInputElement;
   defaultExpandedCheckbox: HTMLInputElement;
   resetOverlayPositionButton: HTMLButtonElement;
   starterSelect: HTMLSelectElement;
@@ -80,6 +83,7 @@ type PopupActionMessage =
   | PauseSessionMessage
   | ResetOverlayPositionMessage
   | ResumeSessionMessage
+  | SetAmbientOverlayEnabledMessage
   | SetBindingMessage
   | SetNextHopOverrideMessage
   | SetOverlayEnabledMessage
@@ -112,9 +116,11 @@ const elements: PopupElements = {
   localeSelect: requireElement<HTMLSelectElement>("#localeSelect"),
   maxRoundsRange: requireElement<HTMLInputElement>("#maxRoundsRange"),
   maxRoundsValue: requireElement<HTMLElement>("#maxRoundsValue"),
+  maxRoundsEnabledCheckbox: requireElement<HTMLInputElement>("#maxRoundsEnabledCheckbox"),
   decreaseMaxRoundsButton: requireElement<HTMLButtonElement>("#decreaseMaxRoundsButton"),
   increaseMaxRoundsButton: requireElement<HTMLButtonElement>("#increaseMaxRoundsButton"),
   overlayEnabledCheckbox: requireElement<HTMLInputElement>("#overlayEnabledCheckbox"),
+  ambientOverlayEnabledCheckbox: requireElement<HTMLInputElement>("#ambientOverlayEnabledCheckbox"),
   defaultExpandedCheckbox: requireElement<HTMLInputElement>("#defaultExpandedCheckbox"),
   resetOverlayPositionButton: requireElement<HTMLButtonElement>("#resetOverlayPositionButton"),
   starterSelect: requireElement<HTMLSelectElement>("#starterSelect"),
@@ -267,6 +273,13 @@ function wireEvents(): void {
     });
   });
 
+  elements.ambientOverlayEnabledCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_AMBIENT_OVERLAY_ENABLED,
+      enabled: elements.ambientOverlayEnabledCheckbox.checked
+    });
+  });
+
   elements.resetOverlayPositionButton.addEventListener("click", () => {
     void perform({
       type: MESSAGE_TYPES.RESET_OVERLAY_POSITION
@@ -290,6 +303,15 @@ function wireEvents(): void {
 
   elements.maxRoundsRange.addEventListener("change", () => {
     void updateMaxRounds(Number(elements.maxRoundsRange.value));
+  });
+
+  elements.maxRoundsEnabledCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_RUNTIME_SETTINGS,
+      settings: {
+        maxRoundsEnabled: elements.maxRoundsEnabledCheckbox.checked
+      }
+    });
   });
 
   elements.decreaseMaxRoundsButton.addEventListener("click", () => {
@@ -324,7 +346,7 @@ function render(model: PopupModel): void {
   elements.phaseBadge.dataset.phase = state.phase;
   elements.bindingA.textContent = summarizeBinding(copy, state.bindings.A);
   elements.bindingB.textContent = summarizeBinding(copy, state.bindings.B);
-  elements.roundValue.textContent = `${state.round} / ${state.settings.maxRounds}`;
+  elements.roundValue.textContent = formatRoundProgress(state.settings.maxRoundsEnabled, state.round, state.settings.maxRounds);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.currentStepValueDebug.textContent = display.currentStep || copy.idle;
@@ -343,11 +365,19 @@ function render(model: PopupModel): void {
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.localeSelect.value = currentLocale;
-  setMaxRoundsControl(state.settings.maxRounds);
+  setMaxRoundsControl(state.settings.maxRounds, state.settings.maxRoundsEnabled);
+  elements.overlayEnabledCheckbox.checked = overlaySettings.enabled;
+  elements.ambientOverlayEnabledCheckbox.checked = overlaySettings.ambientEnabled;
+  elements.defaultExpandedCheckbox.checked = !overlaySettings.collapsed;
 
   const toggle = elements.overlayEnabledCheckbox.closest<HTMLElement>(".popup__toggle");
   if (toggle) {
     toggle.dataset.checked = String(elements.overlayEnabledCheckbox.checked);
+  }
+
+  const ambientToggle = elements.ambientOverlayEnabledCheckbox.closest<HTMLElement>(".popup__toggle");
+  if (ambientToggle) {
+    ambientToggle.dataset.checked = String(elements.ambientOverlayEnabledCheckbox.checked);
   }
 
   const expandedToggle = elements.defaultExpandedCheckbox.closest<HTMLElement>(".popup__toggle");
@@ -373,10 +403,18 @@ function render(model: PopupModel): void {
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
   elements.maxRoundsRange.disabled = !controls.canSetSettings;
-  elements.decreaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds <= MIN_MAX_ROUNDS;
-  elements.increaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds >= MAX_MAX_ROUNDS;
+  elements.maxRoundsEnabledCheckbox.disabled = !controls.canSetSettings;
+  elements.decreaseMaxRoundsButton.disabled =
+    !controls.canSetSettings || !state.settings.maxRoundsEnabled || state.settings.maxRounds <= MIN_MAX_ROUNDS;
+  elements.increaseMaxRoundsButton.disabled =
+    !controls.canSetSettings || !state.settings.maxRoundsEnabled || state.settings.maxRounds >= MAX_MAX_ROUNDS;
   elements.decreaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsDecrease);
   elements.increaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsIncrease);
+
+  const maxRoundsToggle = elements.maxRoundsEnabledCheckbox.closest<HTMLElement>(".popup__toggle");
+  if (maxRoundsToggle) {
+    maxRoundsToggle.dataset.checked = String(elements.maxRoundsEnabledCheckbox.checked);
+  }
 
   if (readiness.blockReason) {
     elements.readinessRow.hidden = false;
@@ -473,7 +511,7 @@ function buildDebugSnapshot(
     `A: ${summarizeBinding(copy, state.bindings.A)}`,
     `B: ${summarizeBinding(copy, state.bindings.B)}`,
     `${copy.labelStarter}: ${state.starter}`,
-    `${copy.roundLabel}: ${state.round} / ${state.settings.maxRounds}`,
+    `${copy.roundLabel}: ${formatRoundProgress(state.settings.maxRoundsEnabled, state.round, state.settings.maxRounds)}`,
     `${copy.nextHopLabel}: ${display.nextHop}`,
     `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
     `${copy.transportLabel}: ${display.transport || copy.none}`,
@@ -551,6 +589,10 @@ function formatTimestamp(value: unknown): string {
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
 }
 
+function formatRoundProgress(enabled: boolean, round: number, maxRounds: number): string {
+  return `${round} / ${enabled ? maxRounds : "∞"}`;
+}
+
 function preview(value: unknown): string {
   const text = String(value ?? "");
   if (!text) {
@@ -570,7 +612,7 @@ function summarizeBinding(copy: PopupCopy, binding: RuntimeState["bindings"][Bri
 
 async function updateMaxRounds(value: number): Promise<void> {
   const maxRounds = clampMaxRounds(value);
-  setMaxRoundsControl(maxRounds);
+  setMaxRoundsControl(maxRounds, elements.maxRoundsEnabledCheckbox.checked);
   await perform({
     type: MESSAGE_TYPES.SET_RUNTIME_SETTINGS,
     settings: {
@@ -579,14 +621,19 @@ async function updateMaxRounds(value: number): Promise<void> {
   });
 }
 
-function setMaxRoundsControl(value: number): void {
+function setMaxRoundsControl(value: number, enabled: boolean): void {
   const maxRounds = clampMaxRounds(value);
   elements.maxRoundsRange.value = String(maxRounds);
-  renderMaxRoundsValue(maxRounds);
+  elements.maxRoundsEnabledCheckbox.checked = enabled;
+  elements.maxRoundsRange.closest<HTMLElement>(".popup__round-control")?.setAttribute(
+    "data-unlimited",
+    String(!enabled)
+  );
+  renderMaxRoundsValue(maxRounds, enabled);
 }
 
-function renderMaxRoundsValue(value: number): void {
-  elements.maxRoundsValue.textContent = String(clampMaxRounds(value));
+function renderMaxRoundsValue(value: number, enabled = elements.maxRoundsEnabledCheckbox.checked): void {
+  elements.maxRoundsValue.textContent = enabled ? String(clampMaxRounds(value)) : "∞";
 }
 
 function clampMaxRounds(value: number): number {

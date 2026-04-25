@@ -27,6 +27,7 @@ interface PreSendGuardInput {
 interface PostHopGuardInput {
   assistantText: unknown;
   round: number;
+  maxRoundsEnabled?: boolean;
   maxRounds: number;
   stopMarker?: string;
 }
@@ -143,6 +144,7 @@ export function evaluatePreSendGuard({
 export function evaluatePostHopGuard({
   assistantText,
   round,
+  maxRoundsEnabled = DEFAULT_SETTINGS.maxRoundsEnabled,
   maxRounds,
   stopMarker = DEFAULT_SETTINGS.stopMarker
 }: PostHopGuardInput): PostHopGuardResult {
@@ -153,7 +155,7 @@ export function evaluatePostHopGuard({
     };
   }
 
-  if (round >= maxRounds) {
+  if (maxRoundsEnabled && round >= maxRounds) {
     return {
       shouldStop: true,
       reason: "max_rounds_reached"

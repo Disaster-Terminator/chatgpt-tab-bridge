@@ -49,6 +49,42 @@ test("bindings move idle to ready only when both roles are valid", () => {
   assert.equal(state.phase, PHASES.READY);
 });
 
+test("runtime settings preserve max rounds when only toggling the round limit", () => {
+  let state = createInitialState();
+  state = reduceState(state, {
+    type: "set_runtime_settings",
+    settings: {
+      maxRounds: 12
+    }
+  });
+  state = reduceState(state, {
+    type: "set_runtime_settings",
+    settings: {
+      maxRoundsEnabled: false
+    }
+  });
+
+  assert.equal(state.settings.maxRounds, 12);
+  assert.equal(state.settings.maxRoundsEnabled, false);
+});
+
+test("runtime settings ignore round limit changes while running", () => {
+  let state = createInitialState();
+  state = reduceState(state, { type: "set_binding", role: "A", binding: createBinding("A", 1) });
+  state = reduceState(state, { type: "set_binding", role: "B", binding: createBinding("B", 2) });
+  state = reduceState(state, { type: "start" });
+  state = reduceState(state, {
+    type: "set_runtime_settings",
+    settings: {
+      maxRoundsEnabled: false,
+      maxRounds: 20
+    }
+  });
+
+  assert.equal(state.settings.maxRoundsEnabled, true);
+  assert.equal(state.settings.maxRounds, 8);
+});
+
 test("binding conflict does not allow the same thread to satisfy both roles", () => {
   let state = createInitialState();
   const binding = createBinding("A", 1, "https://chatgpt.com/c/shared-thread");

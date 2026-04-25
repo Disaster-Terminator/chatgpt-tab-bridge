@@ -25,6 +25,37 @@
   border-color: rgba(242, 146, 72, 0.85);
 }
 
+.chatgpt-bridge-overlay--ambient {
+  width: 220px;
+  padding: 9px;
+  border-radius: 14px;
+  pointer-events: none;
+}
+
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__header {
+  cursor: default;
+}
+
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__role-row,
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__collapse,
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__collapsed-row,
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__starter-card,
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__control-container {
+  display: none;
+}
+
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__title {
+  font-size: 10px;
+}
+
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__status-panel {
+  margin-top: 6px;
+}
+
+.chatgpt-bridge-overlay--ambient .chatgpt-bridge-overlay__round-next {
+  justify-content: space-between;
+}
+
 .chatgpt-bridge-overlay--collapsed .chatgpt-bridge-overlay__body {
   display: none;
 }

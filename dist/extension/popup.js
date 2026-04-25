@@ -47,6 +47,7 @@ var MESSAGE_TYPES = Object.freeze({
   CLEAR_TERMINAL: "CLEAR_TERMINAL",
   SET_NEXT_HOP_OVERRIDE: "SET_NEXT_HOP_OVERRIDE",
   SET_OVERLAY_ENABLED: "SET_OVERLAY_ENABLED",
+  SET_AMBIENT_OVERLAY_ENABLED: "SET_AMBIENT_OVERLAY_ENABLED",
   SET_OVERLAY_COLLAPSED: "SET_OVERLAY_COLLAPSED",
   SET_OVERLAY_POSITION: "SET_OVERLAY_POSITION",
   RESET_OVERLAY_POSITION: "RESET_OVERLAY_POSITION",
@@ -60,6 +61,7 @@ var MESSAGE_TYPES = Object.freeze({
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
 });
 var DEFAULT_SETTINGS = Object.freeze({
+  maxRoundsEnabled: true,
   maxRounds: 8,
   hopTimeoutMs: 6e4,
   pollIntervalMs: 1500,
@@ -70,6 +72,7 @@ var DEFAULT_SETTINGS = Object.freeze({
 });
 var DEFAULT_OVERLAY_SETTINGS = Object.freeze({
   enabled: true,
+  ambientEnabled: false,
   collapsed: false,
   position: null
 });
@@ -118,13 +121,15 @@ var zhCN = {
     sectionDebug: "\u8C03\u8BD5",
     debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
     labelStarter: "\u8D77\u59CB\u4FA7",
+    labelMaxRoundsLimit: "\u8F6E\u6570\u9650\u5236",
     labelMaxRounds: "\u6865\u63A5\u8F6E\u6570",
-    maxRoundsHelp: "\u62D6\u52A8\u6ED1\u6746\u6216\u7528 +/- \u5FAE\u8C03\uFF1B\u5230\u8FBE\u76EE\u6807\u8F6E\u6570\u540E\u81EA\u52A8\u505C\u6B62\u3002",
+    maxRoundsHelp: "\u5F00\u542F\u540E\u5230\u8FBE\u76EE\u6807\u8F6E\u6570\u81EA\u52A8\u505C\u6B62\uFF1B\u5173\u95ED\u540E\u663E\u793A\u4E3A \u221E\u3002",
     maxRoundsDecrease: "\u51CF\u5C11\u6865\u63A5\u8F6E\u6570",
     maxRoundsIncrease: "\u589E\u52A0\u6865\u63A5\u8F6E\u6570",
     roundUnit: "\u8F6E",
     labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
     labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
+    labelEnableAmbientOverlay: "\u5168\u7AD9\u72B6\u6001\u63D0\u793A",
     labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
     bindingA: "\u7ED1\u5B9A A",
     bindingB: "\u7ED1\u5B9A B",
@@ -216,13 +221,15 @@ var en = {
     sectionDebug: "Debug",
     debugSummary: "Debug info",
     labelStarter: "Starter side",
+    labelMaxRoundsLimit: "Round limit",
     labelMaxRounds: "Bridge rounds",
-    maxRoundsHelp: "Drag the slider or use +/-; stops after the selected round count.",
+    maxRoundsHelp: "When enabled, stops after the selected count; disabled shows \u221E.",
     maxRoundsDecrease: "Decrease bridge rounds",
     maxRoundsIncrease: "Increase bridge rounds",
     roundUnit: "rounds",
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
+    labelEnableAmbientOverlay: "Site-wide status hint",
     labelDefaultExpanded: "Default expanded overlay",
     bindingA: "Binding A",
     bindingB: "Binding B",
@@ -349,9 +356,11 @@ var elements = {
   localeSelect: requireElement("#localeSelect"),
   maxRoundsRange: requireElement("#maxRoundsRange"),
   maxRoundsValue: requireElement("#maxRoundsValue"),
+  maxRoundsEnabledCheckbox: requireElement("#maxRoundsEnabledCheckbox"),
   decreaseMaxRoundsButton: requireElement("#decreaseMaxRoundsButton"),
   increaseMaxRoundsButton: requireElement("#increaseMaxRoundsButton"),
   overlayEnabledCheckbox: requireElement("#overlayEnabledCheckbox"),
+  ambientOverlayEnabledCheckbox: requireElement("#ambientOverlayEnabledCheckbox"),
   defaultExpandedCheckbox: requireElement("#defaultExpandedCheckbox"),
   resetOverlayPositionButton: requireElement("#resetOverlayPositionButton"),
   starterSelect: requireElement("#starterSelect"),
@@ -483,6 +492,12 @@ function wireEvents() {
       enabled: elements.overlayEnabledCheckbox.checked
     });
   });
+  elements.ambientOverlayEnabledCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_AMBIENT_OVERLAY_ENABLED,
+      enabled: elements.ambientOverlayEnabledCheckbox.checked
+    });
+  });
   elements.resetOverlayPositionButton.addEventListener("click", () => {
     void perform({
       type: MESSAGE_TYPES.RESET_OVERLAY_POSITION
@@ -503,6 +518,14 @@ function wireEvents() {
   });
   elements.maxRoundsRange.addEventListener("change", () => {
     void updateMaxRounds(Number(elements.maxRoundsRange.value));
+  });
+  elements.maxRoundsEnabledCheckbox.addEventListener("change", () => {
+    void perform({
+      type: MESSAGE_TYPES.SET_RUNTIME_SETTINGS,
+      settings: {
+        maxRoundsEnabled: elements.maxRoundsEnabledCheckbox.checked
+      }
+    });
   });
   elements.decreaseMaxRoundsButton.addEventListener("click", () => {
     void updateMaxRounds(Number(elements.maxRoundsRange.value) - 1);
@@ -532,7 +555,7 @@ function render(model) {
   elements.phaseBadge.dataset.phase = state.phase;
   elements.bindingA.textContent = summarizeBinding(copy, state.bindings.A);
   elements.bindingB.textContent = summarizeBinding(copy, state.bindings.B);
-  elements.roundValue.textContent = `${state.round} / ${state.settings.maxRounds}`;
+  elements.roundValue.textContent = formatRoundProgress(state.settings.maxRoundsEnabled, state.round, state.settings.maxRounds);
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.currentStepValueDebug.textContent = display.currentStep || copy.idle;
@@ -549,10 +572,17 @@ function render(model) {
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.localeSelect.value = currentLocale;
-  setMaxRoundsControl(state.settings.maxRounds);
+  setMaxRoundsControl(state.settings.maxRounds, state.settings.maxRoundsEnabled);
+  elements.overlayEnabledCheckbox.checked = overlaySettings.enabled;
+  elements.ambientOverlayEnabledCheckbox.checked = overlaySettings.ambientEnabled;
+  elements.defaultExpandedCheckbox.checked = !overlaySettings.collapsed;
   const toggle = elements.overlayEnabledCheckbox.closest(".popup__toggle");
   if (toggle) {
     toggle.dataset.checked = String(elements.overlayEnabledCheckbox.checked);
+  }
+  const ambientToggle = elements.ambientOverlayEnabledCheckbox.closest(".popup__toggle");
+  if (ambientToggle) {
+    ambientToggle.dataset.checked = String(elements.ambientOverlayEnabledCheckbox.checked);
   }
   const expandedToggle = elements.defaultExpandedCheckbox.closest(".popup__toggle");
   if (expandedToggle) {
@@ -573,10 +603,15 @@ function render(model) {
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
   elements.maxRoundsRange.disabled = !controls.canSetSettings;
-  elements.decreaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds <= MIN_MAX_ROUNDS;
-  elements.increaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds >= MAX_MAX_ROUNDS;
+  elements.maxRoundsEnabledCheckbox.disabled = !controls.canSetSettings;
+  elements.decreaseMaxRoundsButton.disabled = !controls.canSetSettings || !state.settings.maxRoundsEnabled || state.settings.maxRounds <= MIN_MAX_ROUNDS;
+  elements.increaseMaxRoundsButton.disabled = !controls.canSetSettings || !state.settings.maxRoundsEnabled || state.settings.maxRounds >= MAX_MAX_ROUNDS;
   elements.decreaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsDecrease);
   elements.increaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsIncrease);
+  const maxRoundsToggle = elements.maxRoundsEnabledCheckbox.closest(".popup__toggle");
+  if (maxRoundsToggle) {
+    maxRoundsToggle.dataset.checked = String(elements.maxRoundsEnabledCheckbox.checked);
+  }
   if (readiness.blockReason) {
     elements.readinessRow.hidden = false;
     const reasonKey = readiness.blockReason;
@@ -651,7 +686,7 @@ function buildDebugSnapshot(model, ackDebug, ackTarget) {
     `A: ${summarizeBinding(copy, state.bindings.A)}`,
     `B: ${summarizeBinding(copy, state.bindings.B)}`,
     `${copy.labelStarter}: ${state.starter}`,
-    `${copy.roundLabel}: ${state.round} / ${state.settings.maxRounds}`,
+    `${copy.roundLabel}: ${formatRoundProgress(state.settings.maxRoundsEnabled, state.round, state.settings.maxRounds)}`,
     `${copy.nextHopLabel}: ${display.nextHop}`,
     `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
     `${copy.transportLabel}: ${display.transport || copy.none}`,
@@ -709,6 +744,9 @@ function formatTimestamp(value) {
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
 }
+function formatRoundProgress(enabled, round, maxRounds) {
+  return `${round} / ${enabled ? maxRounds : "\u221E"}`;
+}
 function preview(value) {
   const text = String(value ?? "");
   if (!text) {
@@ -725,7 +763,7 @@ function summarizeBinding(copy, binding) {
 }
 async function updateMaxRounds(value) {
   const maxRounds = clampMaxRounds(value);
-  setMaxRoundsControl(maxRounds);
+  setMaxRoundsControl(maxRounds, elements.maxRoundsEnabledCheckbox.checked);
   await perform({
     type: MESSAGE_TYPES.SET_RUNTIME_SETTINGS,
     settings: {
@@ -733,13 +771,18 @@ async function updateMaxRounds(value) {
     }
   });
 }
-function setMaxRoundsControl(value) {
+function setMaxRoundsControl(value, enabled) {
   const maxRounds = clampMaxRounds(value);
   elements.maxRoundsRange.value = String(maxRounds);
-  renderMaxRoundsValue(maxRounds);
+  elements.maxRoundsEnabledCheckbox.checked = enabled;
+  elements.maxRoundsRange.closest(".popup__round-control")?.setAttribute(
+    "data-unlimited",
+    String(!enabled)
+  );
+  renderMaxRoundsValue(maxRounds, enabled);
 }
-function renderMaxRoundsValue(value) {
-  elements.maxRoundsValue.textContent = String(clampMaxRounds(value));
+function renderMaxRoundsValue(value, enabled = elements.maxRoundsEnabledCheckbox.checked) {
+  elements.maxRoundsValue.textContent = enabled ? String(clampMaxRounds(value)) : "\u221E";
 }
 function clampMaxRounds(value) {
   if (!Number.isFinite(value)) {

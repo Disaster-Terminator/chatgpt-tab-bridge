@@ -5,6 +5,7 @@ export function normalizeOverlaySettings(input) {
 
   return {
     enabled: input?.enabled ?? DEFAULT_OVERLAY_SETTINGS.enabled,
+    ambientEnabled: input?.ambientEnabled ?? DEFAULT_OVERLAY_SETTINGS.ambientEnabled,
     collapsed: input?.collapsed ?? DEFAULT_OVERLAY_SETTINGS.collapsed,
     position
   };
