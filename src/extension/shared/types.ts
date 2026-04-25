@@ -488,6 +488,8 @@ export interface GetRecentRuntimeEventsMessage extends MessageBase {
 
 export interface RuntimeEvent {
   id: string;
+  level: "debug" | "info" | "warn" | "error";
+  category: string;
   phaseStep: string;
   timestamp: string;
   sourceRole: BridgeRole | null;

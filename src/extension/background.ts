@@ -163,10 +163,16 @@ const RELAY_WATCHDOG_PERIOD_MINUTES = 0.5;
 const TAB_MESSAGE_TIMEOUT_MS = 8000;
 const DORMANT_REPLY_WAKE_MS = 8000;
 
-function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
+type RuntimeEventInput =
+  Omit<RuntimeEvent, "id" | "timestamp" | "level" | "category"> &
+  Partial<Pick<RuntimeEvent, "level" | "category">>;
+
+function addRuntimeEvent(event: RuntimeEventInput): void {
   runtimeEventSequence += 1;
   const runtimeEvent = {
     ...event,
+    level: event.level ?? inferRuntimeEventLevel(event),
+    category: event.category ?? inferRuntimeEventCategory(event.phaseStep),
     id: `evt_${runtimeEventSequence}_${Math.random().toString(36).slice(2, 9)}`,
     timestamp: new Date().toISOString()
   };
@@ -177,6 +183,61 @@ function addRuntimeEvent(event: Omit<RuntimeEvent, "id" | "timestamp">): void {
   if (shouldPostLocalDebugEvents()) {
     void postLocalDebugEvent(runtimeEvent);
   }
+}
+
+function inferRuntimeEventLevel(event: RuntimeEventInput): RuntimeEvent["level"] {
+  if (
+    event.phaseStep.includes("failed") ||
+    event.phaseStep.includes("timeout") ||
+    event.verificationVerdict.includes("timeout") ||
+    event.verificationVerdict.includes("failure") ||
+    event.verificationVerdict.includes("missing") ||
+    event.verificationVerdict.includes("rejected") ||
+    event.verificationVerdict === "wrong_target" ||
+    event.verificationVerdict === "stale_target" ||
+    event.verificationVerdict === "unreachable_target"
+  ) {
+    return "error";
+  }
+
+  if (
+    event.phaseStep === "target_wake_requested" ||
+    event.phaseStep === "state:stop_condition" ||
+    event.verificationVerdict === "assistant_hash_unchanged" ||
+    event.verificationVerdict === "still_generating"
+  ) {
+    return "warn";
+  }
+
+  if (event.phaseStep === "reply_poll") {
+    return "debug";
+  }
+
+  return "info";
+}
+
+function inferRuntimeEventCategory(phaseStep: string): RuntimeEvent["category"] {
+  if (phaseStep.startsWith("state:")) {
+    return "state";
+  }
+
+  if (phaseStep.includes("dispatch") || phaseStep.includes("send")) {
+    return "dispatch";
+  }
+
+  if (phaseStep.includes("verification") || phaseStep.includes("baseline")) {
+    return "verification";
+  }
+
+  if (phaseStep.includes("reply") || phaseStep === "target_wake_requested") {
+    return "reply";
+  }
+
+  if (phaseStep.includes("recovered") || phaseStep.includes("watchdog")) {
+    return "recovery";
+  }
+
+  return "runtime";
 }
 
 function getRecentRuntimeEvents(): RuntimeEvent[] {

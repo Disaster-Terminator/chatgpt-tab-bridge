@@ -781,7 +781,7 @@ function buildDebugSnapshot(model, ackDebug, ackTarget, runtimeEvents = []) {
     lines.push("", "Runtime Events:");
     for (const event of runtimeEvents.slice(-10)) {
       lines.push(
-        `  ${formatTimestamp(event.timestamp)} ${event.phaseStep} ${event.sourceRole ?? "-"}->${event.targetRole ?? "-"} r${event.round}`,
+        `  ${formatTimestamp(event.timestamp)} [${event.level ?? "info"}:${event.category ?? "runtime"}] ${event.phaseStep} ${event.sourceRole ?? "-"}->${event.targetRole ?? "-"} r${event.round}`,
         `    summary: ${event.dispatchReadbackSummary}`,
         `    mode: ${event.sendTriggerMode}`,
         `    baseline: ${event.verificationBaseline}`,
