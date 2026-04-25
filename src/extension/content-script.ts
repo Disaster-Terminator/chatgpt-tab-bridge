@@ -41,7 +41,8 @@ const defaultControls: PopupControls = {
   canStop: false,
   canClearTerminal: false,
   canSetStarter: false,
-  canSetOverride: false
+  canSetOverride: false,
+  canSetSettings: false
 };
 const defaultDisplay: RuntimeDisplay = {
   nextHop: "A -> B",
@@ -54,6 +55,7 @@ const defaultDisplay: RuntimeDisplay = {
 let overlaySnapshot: OverlayModel = {
   phase: "idle",
   round: 0,
+  maxRounds: 8,
   nextHop: "A -> B",
   assignedRole: null,
   requiresTerminalClear: false,
@@ -401,7 +403,7 @@ function renderOverlay(): void {
   const overlayRoot = overlay as HTMLElement;
   overlayRoot.dataset.tabId = overlaySnapshot.currentTabId !== null ? String(overlaySnapshot.currentTabId) : "";
 
-  requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
+  setOverlaySlotText("role", formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole));
 
   const roleDot = requireOverlayElement<HTMLElement>("[data-slot='role-dot']");
   if (overlaySnapshot.assignedRole) {
@@ -416,9 +418,9 @@ function renderOverlay(): void {
   phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
   phaseBadge.dataset.phase = overlaySnapshot.phase;
 
-  requireOverlayElement("[data-slot='round']").textContent = String(overlaySnapshot.round);
-  requireOverlayElement("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
-  requireOverlayElement("[data-slot='step']").textContent = display?.currentStep || c.idle;
+  setOverlaySlotText("round", `${overlaySnapshot.round} / ${overlaySnapshot.maxRounds}`);
+  setOverlaySlotText("next-hop", overlaySnapshot.nextHop);
+  setOverlaySlotText("step", display?.currentStep || c.idle);
 
   const issueRow = requireOverlayElement<HTMLElement>("[data-slot='issue-row']");
   const issueText = display?.lastIssue;
@@ -433,6 +435,7 @@ function renderOverlay(): void {
   starterBtns.forEach((btn) => {
     const isActive = btn.dataset.starter === overlaySnapshot.starter;
     btn.dataset.active = String(isActive);
+    btn.disabled = !controls?.canSetStarter;
   });
 
   const slider = requireOverlayElement<HTMLElement>(".chatgpt-bridge-overlay__starter-slider");
@@ -492,8 +495,14 @@ function renderOverlay(): void {
 
   const collapsedRole = overlay.querySelector("[data-slot='collapsed-role']");
   if (collapsedRole) {
-    collapsedRole.textContent = overlaySnapshot.assignedRole ? `Bound as ${overlaySnapshot.assignedRole}` : c.roleUnbound;
+    collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+
+function setOverlaySlotText(slot: string, text: string): void {
+  overlay.querySelectorAll<HTMLElement>(`[data-slot='${slot}']`).forEach((node) => {
+    node.textContent = text;
+  });
 }
 
 function applyOverlayPosition(position: { x: number; y: number } | null): void {

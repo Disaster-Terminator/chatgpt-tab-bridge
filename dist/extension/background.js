@@ -107,6 +107,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_BINDING: "SET_BINDING",
   CLEAR_BINDING: "CLEAR_BINDING",
   SET_STARTER: "SET_STARTER",
+  SET_RUNTIME_SETTINGS: "SET_RUNTIME_SETTINGS",
   START_SESSION: "START_SESSION",
   PAUSE_SESSION: "PAUSE_SESSION",
   RESUME_SESSION: "RESUME_SESSION",
@@ -198,6 +199,8 @@ function reduceState(currentState, event) {
       return reduceClearTerminal(state);
     case "set_starter":
       return reduceSetStarter(state, event);
+    case "set_runtime_settings":
+      return reduceSetRuntimeSettings(state, event);
     case "start":
       return reduceStart(state);
     case "pause":
@@ -285,6 +288,18 @@ function reduceSetStarter(state, event) {
   if (state.phase === PHASES.READY) {
     state.nextHopSource = state.starter;
   }
+  return state;
+}
+function reduceSetRuntimeSettings(state, event) {
+  if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
+    return state;
+  }
+  const maxRounds = normalizeMaxRounds(event.settings.maxRounds);
+  state.settings = {
+    ...state.settings,
+    ...event.settings,
+    maxRounds
+  };
   return state;
 }
 function reduceStart(state) {
@@ -503,6 +518,13 @@ function isBridgeRole(value) {
 }
 function isTabId(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+function normalizeMaxRounds(value) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_SETTINGS.maxRounds;
+  }
+  return Math.min(50, Math.max(1, Math.round(numeric)));
 }
 function normalizeBinding(binding) {
   if (!binding || !isBridgeRole(binding.role) || !isTabId(binding.tabId)) {
@@ -976,7 +998,8 @@ function deriveControls(state, readiness) {
     canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
     canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
     canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY) && !readiness.preflightPending,
-    canSetOverride: canWriteOverride(state) && !readiness.preflightPending
+    canSetOverride: canWriteOverride(state) && !readiness.preflightPending,
+    canSetSettings: state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED
   };
 }
 function computeReadiness(state, sourceThreadActivity) {
@@ -1262,6 +1285,8 @@ async function handleMessage(message, sender) {
       return clearBinding(message.role ?? findRoleByTabId(await getState(), sender.tab?.id ?? null));
     case MESSAGE_TYPES.SET_STARTER:
       return updateState({ type: "set_starter", role: message.role });
+    case MESSAGE_TYPES.SET_RUNTIME_SETTINGS:
+      return updateState({ type: "set_runtime_settings", settings: message.settings });
     case MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE:
       return updateState({ type: "set_next_hop_override", role: message.role });
     case MESSAGE_TYPES.SET_OVERLAY_ENABLED:
@@ -2564,6 +2589,7 @@ async function buildOverlaySnapshot(state, tabId, overlaySettings) {
   return {
     phase: state.phase,
     round: state.round,
+    maxRounds: state.settings.maxRounds,
     nextHop: formatNextHop(state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource),
     requiresTerminalClear: state.requiresTerminalClear,
     assignedRole: findRoleByTabId(state, tabId),

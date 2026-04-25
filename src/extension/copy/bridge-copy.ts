@@ -46,6 +46,11 @@ export interface PopupCopy {
   sectionDebug: string;
   debugSummary: string;
   labelStarter: string;
+  labelMaxRounds: string;
+  maxRoundsHelp: string;
+  maxRoundsDecrease: string;
+  maxRoundsIncrease: string;
+  roundUnit: string;
   labelOverride: string;
   labelEnableOverlay: string;
   labelDefaultExpanded: string;
@@ -134,6 +139,11 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     sectionDebug: "调试",
     debugSummary: "调试信息",
     labelStarter: "起始侧",
+    labelMaxRounds: "桥接轮数",
+    maxRoundsHelp: "拖动滑杆或用 +/- 微调；到达目标轮数后自动停止。",
+    maxRoundsDecrease: "减少桥接轮数",
+    maxRoundsIncrease: "增加桥接轮数",
+    roundUnit: "轮",
     labelOverride: "暂停时下一跳覆盖",
     labelEnableOverlay: "启用悬浮窗",
     labelDefaultExpanded: "默认展开悬浮窗",
@@ -228,6 +238,11 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     sectionDebug: "Debug",
     debugSummary: "Debug info",
     labelStarter: "Starter side",
+    labelMaxRounds: "Bridge rounds",
+    maxRoundsHelp: "Drag the slider or use +/-; stops after the selected round count.",
+    maxRoundsDecrease: "Decrease bridge rounds",
+    maxRoundsIncrease: "Increase bridge rounds",
+    roundUnit: "rounds",
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
     labelDefaultExpanded: "Default expanded overlay",

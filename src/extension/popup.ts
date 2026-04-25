@@ -16,6 +16,7 @@ import type {
   SetNextHopOverrideMessage,
   SetOverlayEnabledMessage,
   SetOverlayCollapsedMessage,
+  SetRuntimeSettingsMessage,
   SetStarterMessage,
   StartSessionMessage,
   StopSessionMessage,
@@ -23,6 +24,8 @@ import type {
 } from "./shared/types.js";
 
 const REFRESH_INTERVAL_MS = 1000;
+const MIN_MAX_ROUNDS = 1;
+const MAX_MAX_ROUNDS = 50;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return Promise.race([
@@ -41,6 +44,10 @@ interface PopupElements {
   bindingA: HTMLElement;
   bindingB: HTMLElement;
   localeSelect: HTMLSelectElement;
+  maxRoundsRange: HTMLInputElement;
+  maxRoundsValue: HTMLElement;
+  decreaseMaxRoundsButton: HTMLButtonElement;
+  increaseMaxRoundsButton: HTMLButtonElement;
   overlayEnabledCheckbox: HTMLInputElement;
   defaultExpandedCheckbox: HTMLInputElement;
   resetOverlayPositionButton: HTMLButtonElement;
@@ -77,6 +84,7 @@ type PopupActionMessage =
   | SetNextHopOverrideMessage
   | SetOverlayEnabledMessage
   | SetOverlayCollapsedMessage
+  | SetRuntimeSettingsMessage
   | SetStarterMessage
   | StartSessionMessage
   | StopSessionMessage;
@@ -102,6 +110,10 @@ const elements: PopupElements = {
   bindingA: requireElement<HTMLElement>("#bindingA"),
   bindingB: requireElement<HTMLElement>("#bindingB"),
   localeSelect: requireElement<HTMLSelectElement>("#localeSelect"),
+  maxRoundsRange: requireElement<HTMLInputElement>("#maxRoundsRange"),
+  maxRoundsValue: requireElement<HTMLElement>("#maxRoundsValue"),
+  decreaseMaxRoundsButton: requireElement<HTMLButtonElement>("#decreaseMaxRoundsButton"),
+  increaseMaxRoundsButton: requireElement<HTMLButtonElement>("#increaseMaxRoundsButton"),
   overlayEnabledCheckbox: requireElement<HTMLInputElement>("#overlayEnabledCheckbox"),
   defaultExpandedCheckbox: requireElement<HTMLInputElement>("#defaultExpandedCheckbox"),
   resetOverlayPositionButton: requireElement<HTMLButtonElement>("#resetOverlayPositionButton"),
@@ -272,6 +284,22 @@ function wireEvents(): void {
     }
   });
 
+  elements.maxRoundsRange.addEventListener("input", () => {
+    renderMaxRoundsValue(Number(elements.maxRoundsRange.value));
+  });
+
+  elements.maxRoundsRange.addEventListener("change", () => {
+    void updateMaxRounds(Number(elements.maxRoundsRange.value));
+  });
+
+  elements.decreaseMaxRoundsButton.addEventListener("click", () => {
+    void updateMaxRounds(Number(elements.maxRoundsRange.value) - 1);
+  });
+
+  elements.increaseMaxRoundsButton.addEventListener("click", () => {
+    void updateMaxRounds(Number(elements.maxRoundsRange.value) + 1);
+  });
+
   elements.defaultExpandedCheckbox.addEventListener("change", () => {
     void perform({
       type: MESSAGE_TYPES.SET_OVERLAY_COLLAPSED,
@@ -292,12 +320,11 @@ async function perform(message: PopupActionMessage): Promise<void> {
 function render(model: PopupModel): void {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, controls, display, overlaySettings, readiness } = model;
-  const canChangeBindings = state.phase !== "running" && state.phase !== "paused";
   elements.phaseBadge.textContent = formatPhase(currentLocale, state.phase);
   elements.phaseBadge.dataset.phase = state.phase;
   elements.bindingA.textContent = summarizeBinding(copy, state.bindings.A);
   elements.bindingB.textContent = summarizeBinding(copy, state.bindings.B);
-  elements.roundValue.textContent = String(state.round);
+  elements.roundValue.textContent = `${state.round} / ${state.settings.maxRounds}`;
   elements.nextHopValue.textContent = display.nextHop;
   elements.currentStepValue.textContent = display.currentStep || copy.idle;
   elements.currentStepValueDebug.textContent = display.currentStep || copy.idle;
@@ -316,6 +343,7 @@ function render(model: PopupModel): void {
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
   elements.localeSelect.value = currentLocale;
+  setMaxRoundsControl(state.settings.maxRounds);
 
   const toggle = elements.overlayEnabledCheckbox.closest<HTMLElement>(".popup__toggle");
   if (toggle) {
@@ -344,6 +372,11 @@ function render(model: PopupModel): void {
   elements.clearTerminalButton.disabled = !controls.canClearTerminal;
   elements.starterSelect.disabled = !controls.canSetStarter;
   elements.overrideSelect.disabled = !controls.canSetOverride;
+  elements.maxRoundsRange.disabled = !controls.canSetSettings;
+  elements.decreaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds <= MIN_MAX_ROUNDS;
+  elements.increaseMaxRoundsButton.disabled = !controls.canSetSettings || state.settings.maxRounds >= MAX_MAX_ROUNDS;
+  elements.decreaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsDecrease);
+  elements.increaseMaxRoundsButton.setAttribute("aria-label", copy.maxRoundsIncrease);
 
   if (readiness.blockReason) {
     elements.readinessRow.hidden = false;
@@ -383,7 +416,8 @@ async function copyDebugSnapshot(): Promise<void> {
     return;
   }
 
-  if (!currentTabId) {
+  const ackTarget = resolveAckDebugTarget(latestModel, currentTabId);
+  if (!ackTarget.tabId) {
     showCopyFeedback(getPopupCopy(currentLocale).failedToCopyDebugSnapshot, false);
     return;
   }
@@ -391,14 +425,14 @@ async function copyDebugSnapshot(): Promise<void> {
   let ackDebug: any = null;
   try {
     ackDebug = await withTimeout(
-      chrome.tabs.sendMessage(currentTabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
+      chrome.tabs.sendMessage(ackTarget.tabId, { type: MESSAGE_TYPES.GET_LAST_ACK_DEBUG }),
       5000
     );
   } catch (error) {
     console.warn("Failed to fetch ack debug:", error);
   }
 
-  const payload = buildDebugSnapshot(latestModel, ackDebug);
+  const payload = buildDebugSnapshot(latestModel, ackDebug, ackTarget);
 
   try {
     await navigator.clipboard.writeText(payload);
@@ -417,7 +451,11 @@ async function copyDebugSnapshot(): Promise<void> {
   }
 }
 
-function buildDebugSnapshot(model: PopupModel, ackDebug: any): string {
+function buildDebugSnapshot(
+  model: PopupModel,
+  ackDebug: any,
+  ackTarget: { role: BridgeRole | null; tabId: number | null; source: string }
+): string {
   const copy = getPopupCopy(currentLocale);
   const { state, currentTab, display } = model;
 
@@ -435,35 +473,90 @@ function buildDebugSnapshot(model: PopupModel, ackDebug: any): string {
     `A: ${summarizeBinding(copy, state.bindings.A)}`,
     `B: ${summarizeBinding(copy, state.bindings.B)}`,
     `${copy.labelStarter}: ${state.starter}`,
-    `${copy.roundLabel}: ${state.round}`,
+    `${copy.roundLabel}: ${state.round} / ${state.settings.maxRounds}`,
     `${copy.nextHopLabel}: ${display.nextHop}`,
     `${copy.currentStepLabel}: ${display.currentStep || copy.idle}`,
     `${copy.transportLabel}: ${display.transport || copy.none}`,
     `${copy.selectorLabel}: ${display.selector || copy.none}`,
-    `${copy.lastIssueLabel}: ${display.lastIssue || copy.none}`
+    `${copy.lastIssueLabel}: ${display.lastIssue || copy.none}`,
+    `Ack target: ${ackTarget.role ?? "current"} (#${ackTarget.tabId ?? "N/A"}, ${ackTarget.source})`
   ];
 
-  if (ackDebug) {
+  if (ackDebug && ackDebug.ok === false && ackDebug.error) {
+    lines.push("", "Ack Debug:", `  Error: ${ackDebug.error}`);
+  } else if (ackDebug) {
+    const response = ackDebug.response ?? {};
+    const evidence = response.dispatchEvidence ?? {};
     lines.push(
       "",
       "Ack Debug:",
-      `  Timestamp: ${new Date(ackDebug.timestamp).toISOString()}`,
-      `  Expected (hash): ${ackDebug?.baseline?.expectedHash || 'N/A'}`,
+      `  Timestamp: ${formatTimestamp(ackDebug.timestamp)}`,
+      `  Outcome: ${ackDebug.outcome || "unknown"}`,
+      `  Reason: ${ackDebug.reason || "none"}`,
+      `  Accepted: ${response.dispatchAccepted ?? response.ok ?? "N/A"}`,
+      `  Mode: ${response.applyMode || "unknown"}:${response.mode || "unknown"}`,
+      `  Signal: ${response.dispatchSignal || evidence.ackSignal || "none"}`,
+      `  Error code: ${response.dispatchErrorCode || "none"}`,
+      `  Error: ${response.error || "none"}`,
+      `  Expected (hash): ${ackDebug?.baseline?.expectedHash || evidence.expectedHash || "N/A"}`,
       `  Baseline:`,
-      `    userHash: ${ackDebug?.baseline?.userHash || 'N/A'}`,
-      `    composerText: ${ackDebug?.baseline?.composerText ? ackDebug.baseline.composerText.substring(0, 60) + (ackDebug.baseline.composerText.length > 60 ? '...' : '') : 'N/A'}`,
-      `    generating: ${ackDebug?.baseline?.generating ?? 'N/A'}`,
-      `  After:`,
-      `    latestUserHash: ${ackDebug?.after?.latestUserHash || 'N/A'}`,
-      `    composerText: ${ackDebug?.after?.composerText ? ackDebug.after.composerText.substring(0, 60) + (ackDebug.after.composerText.length > 60 ? '...' : '') : 'N/A'}`,
-      `    generating: ${ackDebug?.after?.generating ?? 'N/A'}`,
-      `  Signal: ${ackDebug?.signal || 'none'}`,
-      `  Timed out: ${ackDebug?.timedOut ?? false}`,
-      `  Error: ${ackDebug?.error || 'none'}`
+      `    userHash: ${ackDebug?.baseline?.userHash || evidence.baselineUserHash || "N/A"}`,
+      `    composerText: ${preview(ackDebug?.baseline?.composerText ?? evidence.baselineComposerPreview)}`,
+      `    generating: ${ackDebug?.baseline?.generating ?? evidence.baselineGenerating ?? "N/A"}`,
+      `  Evidence:`,
+      `    currentUserHash: ${evidence.currentUserHash || "N/A"}`,
+      `    currentGenerating: ${evidence.currentGenerating ?? "N/A"}`,
+      `    payloadReleased: ${evidence.payloadReleased ?? "N/A"}`,
+      `    textChanged: ${evidence.textChanged ?? "N/A"}`,
+      `    buttonStateChanged: ${evidence.buttonStateChanged ?? "N/A"}`,
+      `    attempts: ${evidence.attempts ?? "N/A"}`,
+      `    latestUser: ${preview(evidence.latestUserPreview)}`
     );
   }
 
   return lines.join("\n");
+}
+
+function resolveAckDebugTarget(
+  model: PopupModel,
+  fallbackTabId: number | null
+): { role: BridgeRole | null; tabId: number | null; source: string } {
+  const { state } = model;
+  const role =
+    state.activeHop?.targetRole ??
+    state.runtimeActivity.targetRole ??
+    model.currentTab?.assignedRole ??
+    null;
+  const tabId =
+    state.activeHop?.targetTabId ??
+    (role ? state.bindings[role]?.tabId ?? null : null) ??
+    fallbackTabId;
+
+  return {
+    role,
+    tabId,
+    source: state.activeHop?.targetTabId
+      ? "active-hop"
+      : role && state.bindings[role]?.tabId
+        ? "runtime-target-role"
+        : "active-tab"
+  };
+}
+
+function formatTimestamp(value: unknown): string {
+  if (!value) {
+    return "N/A";
+  }
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function preview(value: unknown): string {
+  const text = String(value ?? "");
+  if (!text) {
+    return "N/A";
+  }
+  return text.length > 80 ? `${text.slice(0, 80)}...` : text;
 }
 
 function summarizeBinding(copy: PopupCopy, binding: RuntimeState["bindings"][BridgeRole]): string {
@@ -473,6 +566,34 @@ function summarizeBinding(copy: PopupCopy, binding: RuntimeState["bindings"][Bri
 
   const label = binding.urlInfo?.kind === "project" ? copy.projectThreadLabel : copy.threadLabel;
   return `${binding.title || label} (#${binding.tabId})`;
+}
+
+async function updateMaxRounds(value: number): Promise<void> {
+  const maxRounds = clampMaxRounds(value);
+  setMaxRoundsControl(maxRounds);
+  await perform({
+    type: MESSAGE_TYPES.SET_RUNTIME_SETTINGS,
+    settings: {
+      maxRounds
+    }
+  });
+}
+
+function setMaxRoundsControl(value: number): void {
+  const maxRounds = clampMaxRounds(value);
+  elements.maxRoundsRange.value = String(maxRounds);
+  renderMaxRoundsValue(maxRounds);
+}
+
+function renderMaxRoundsValue(value: number): void {
+  elements.maxRoundsValue.textContent = String(clampMaxRounds(value));
+}
+
+function clampMaxRounds(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 8;
+  }
+  return Math.min(MAX_MAX_ROUNDS, Math.max(MIN_MAX_ROUNDS, Math.round(value)));
 }
 
 async function sendMessage<T extends PopupMessage>(message: T): Promise<PopupMessageResult<T>> {

@@ -420,6 +420,7 @@ var MESSAGE_TYPES = Object.freeze({
   SET_BINDING: "SET_BINDING",
   CLEAR_BINDING: "CLEAR_BINDING",
   SET_STARTER: "SET_STARTER",
+  SET_RUNTIME_SETTINGS: "SET_RUNTIME_SETTINGS",
   START_SESSION: "START_SESSION",
   PAUSE_SESSION: "PAUSE_SESSION",
   RESUME_SESSION: "RESUME_SESSION",
@@ -498,6 +499,11 @@ var zhCN = {
     sectionDebug: "\u8C03\u8BD5",
     debugSummary: "\u8C03\u8BD5\u4FE1\u606F",
     labelStarter: "\u8D77\u59CB\u4FA7",
+    labelMaxRounds: "\u6865\u63A5\u8F6E\u6570",
+    maxRoundsHelp: "\u62D6\u52A8\u6ED1\u6746\u6216\u7528 +/- \u5FAE\u8C03\uFF1B\u5230\u8FBE\u76EE\u6807\u8F6E\u6570\u540E\u81EA\u52A8\u505C\u6B62\u3002",
+    maxRoundsDecrease: "\u51CF\u5C11\u6865\u63A5\u8F6E\u6570",
+    maxRoundsIncrease: "\u589E\u52A0\u6865\u63A5\u8F6E\u6570",
+    roundUnit: "\u8F6E",
     labelOverride: "\u6682\u505C\u65F6\u4E0B\u4E00\u8DF3\u8986\u76D6",
     labelEnableOverlay: "\u542F\u7528\u60AC\u6D6E\u7A97",
     labelDefaultExpanded: "\u9ED8\u8BA4\u5C55\u5F00\u60AC\u6D6E\u7A97",
@@ -591,6 +597,11 @@ var en = {
     sectionDebug: "Debug",
     debugSummary: "Debug info",
     labelStarter: "Starter side",
+    labelMaxRounds: "Bridge rounds",
+    maxRoundsHelp: "Drag the slider or use +/-; stops after the selected round count.",
+    maxRoundsDecrease: "Decrease bridge rounds",
+    maxRoundsIncrease: "Increase bridge rounds",
+    roundUnit: "rounds",
     labelOverride: "Paused next hop override",
     labelEnableOverlay: "Enable overlay",
     labelDefaultExpanded: "Default expanded overlay",
@@ -708,7 +719,8 @@ var defaultControls = {
   canStop: false,
   canClearTerminal: false,
   canSetStarter: false,
-  canSetOverride: false
+  canSetOverride: false,
+  canSetSettings: false
 };
 var defaultDisplay = {
   nextHop: "A -> B",
@@ -721,6 +733,7 @@ var defaultDisplay = {
 var overlaySnapshot = {
   phase: "idle",
   round: 0,
+  maxRounds: 8,
   nextHop: "A -> B",
   assignedRole: null,
   requiresTerminalClear: false,
@@ -1029,7 +1042,7 @@ function renderOverlay() {
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
   const overlayRoot = overlay;
   overlayRoot.dataset.tabId = overlaySnapshot.currentTabId !== null ? String(overlaySnapshot.currentTabId) : "";
-  requireOverlayElement("[data-slot='role']").textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
+  setOverlaySlotText("role", formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole));
   const roleDot = requireOverlayElement("[data-slot='role-dot']");
   if (overlaySnapshot.assignedRole) {
     roleDot.dataset.role = overlaySnapshot.assignedRole;
@@ -1041,9 +1054,9 @@ function renderOverlay() {
   const phaseBadge = requireOverlayElement("[data-slot='phase-badge']");
   phaseBadge.textContent = formatPhase(overlayLocale, overlaySnapshot.phase);
   phaseBadge.dataset.phase = overlaySnapshot.phase;
-  requireOverlayElement("[data-slot='round']").textContent = String(overlaySnapshot.round);
-  requireOverlayElement("[data-slot='next-hop']").textContent = overlaySnapshot.nextHop;
-  requireOverlayElement("[data-slot='step']").textContent = display?.currentStep || c.idle;
+  setOverlaySlotText("round", `${overlaySnapshot.round} / ${overlaySnapshot.maxRounds}`);
+  setOverlaySlotText("next-hop", overlaySnapshot.nextHop);
+  setOverlaySlotText("step", display?.currentStep || c.idle);
   const issueRow = requireOverlayElement("[data-slot='issue-row']");
   const issueText = display?.lastIssue;
   if (!issueText || issueText === "None") {
@@ -1056,6 +1069,7 @@ function renderOverlay() {
   starterBtns.forEach((btn) => {
     const isActive = btn.dataset.starter === overlaySnapshot.starter;
     btn.dataset.active = String(isActive);
+    btn.disabled = !controls?.canSetStarter;
   });
   const slider = requireOverlayElement(".chatgpt-bridge-overlay__starter-slider");
   slider.dataset.pos = overlaySnapshot.starter;
@@ -1103,8 +1117,13 @@ function renderOverlay() {
   requireOverlayElement("[data-bind-role='B']").disabled = !canChangeBindings;
   const collapsedRole = overlay.querySelector("[data-slot='collapsed-role']");
   if (collapsedRole) {
-    collapsedRole.textContent = overlaySnapshot.assignedRole ? `Bound as ${overlaySnapshot.assignedRole}` : c.roleUnbound;
+    collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+function setOverlaySlotText(slot, text) {
+  overlay.querySelectorAll(`[data-slot='${slot}']`).forEach((node) => {
+    node.textContent = text;
+  });
 }
 function applyOverlayPosition(position) {
   if (!position) {

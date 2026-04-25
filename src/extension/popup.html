@@ -66,11 +66,22 @@
 
       <section class="popup__section">
         <p class="popup__section-label" data-copy="sectionSettings">设置</p>
-        <label class="popup__label" for="localeSelect">语言</label>
+        <label class="popup__label" for="localeSelect" data-copy="localeLabel">语言</label>
         <select class="popup__select" id="localeSelect">
-          <option value="zh-CN">中文</option>
-          <option value="en">English</option>
+          <option value="zh-CN" data-copy="localeZh">中文</option>
+          <option value="en" data-copy="localeEn">English</option>
         </select>
+        <label class="popup__label" for="maxRoundsRange" data-copy="labelMaxRounds">桥接轮数</label>
+        <div class="popup__round-control">
+          <button type="button" class="popup__round-stepper" id="decreaseMaxRoundsButton" aria-label="减少桥接轮数">−</button>
+          <input type="range" class="popup__range" id="maxRoundsRange" min="1" max="50" step="1" value="8" />
+          <button type="button" class="popup__round-stepper" id="increaseMaxRoundsButton" aria-label="增加桥接轮数">+</button>
+          <div class="popup__round-value">
+            <strong id="maxRoundsValue">8</strong>
+            <span data-copy="roundUnit">轮</span>
+          </div>
+        </div>
+        <p class="popup__hint" data-copy="maxRoundsHelp">到达目标轮数后自动停止。</p>
         <div class="popup__toggle-row">
           <span data-copy="labelEnableOverlay">启用悬浮窗</span>
           <label class="popup__toggle" data-checked="true">
@@ -118,7 +129,7 @@
         </div>
       </section>
 
-      <details class="popup__details" open>
+      <details class="popup__details">
         <summary class="popup__details-summary">
           <span data-copy="sectionDebug">调试</span>
         </summary>

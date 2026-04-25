@@ -21,7 +21,8 @@ export function deriveControls(state: RuntimeState, readiness: ExecutionReadines
     canStop: state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED,
     canClearTerminal: state.phase === PHASES.STOPPED || state.phase === PHASES.ERROR,
     canSetStarter: (state.phase === PHASES.IDLE || state.phase === PHASES.READY) && !readiness.preflightPending,
-    canSetOverride: canWriteOverride(state) && !readiness.preflightPending
+    canSetOverride: canWriteOverride(state) && !readiness.preflightPending,
+    canSetSettings: state.phase !== PHASES.RUNNING && state.phase !== PHASES.PAUSED
   };
 }
 

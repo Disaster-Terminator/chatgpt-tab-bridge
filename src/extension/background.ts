@@ -426,6 +426,9 @@ async function handleMessage(
     case MESSAGE_TYPES.SET_STARTER:
       return updateState({ type: "set_starter", role: message.role });
 
+    case MESSAGE_TYPES.SET_RUNTIME_SETTINGS:
+      return updateState({ type: "set_runtime_settings", settings: message.settings });
+
     case MESSAGE_TYPES.SET_NEXT_HOP_OVERRIDE:
       return updateState({ type: "set_next_hop_override", role: message.role });
 
@@ -2022,6 +2025,7 @@ async function buildOverlaySnapshot(
   return {
     phase: state.phase,
     round: state.round,
+    maxRounds: state.settings.maxRounds,
     nextHop: formatNextHop(state.activeHop?.sourceRole ?? state.nextHopOverride ?? state.nextHopSource),
     requiresTerminalClear: state.requiresTerminalClear,
     assignedRole: findRoleByTabId(state, tabId),

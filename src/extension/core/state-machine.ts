@@ -13,6 +13,7 @@ import type {
   RuntimeHopTruth,
   RuntimeActivity,
   RuntimeBinding,
+  RuntimeSettings,
   RuntimePhase,
   RuntimeState,
   StopReason
@@ -36,6 +37,11 @@ interface ClearTerminalEvent {
 interface SetStarterEvent {
   type: "set_starter";
   role: BridgeRole;
+}
+
+interface SetRuntimeSettingsEvent {
+  type: "set_runtime_settings";
+  settings: Partial<RuntimeSettings>;
 }
 
 interface StartEvent {
@@ -98,6 +104,7 @@ export type RuntimeStateEvent =
   | InvalidateBindingEvent
   | ClearTerminalEvent
   | SetStarterEvent
+  | SetRuntimeSettingsEvent
   | StartEvent
   | PauseEvent
   | ResumeEvent
@@ -168,6 +175,8 @@ export function reduceState(
       return reduceClearTerminal(state);
     case "set_starter":
       return reduceSetStarter(state, event);
+    case "set_runtime_settings":
+      return reduceSetRuntimeSettings(state, event);
     case "start":
       return reduceStart(state);
     case "pause":
@@ -274,6 +283,20 @@ function reduceSetStarter(state: RuntimeState, event: SetStarterEvent): RuntimeS
     state.nextHopSource = state.starter;
   }
 
+  return state;
+}
+
+function reduceSetRuntimeSettings(state: RuntimeState, event: SetRuntimeSettingsEvent): RuntimeState {
+  if (state.phase === PHASES.RUNNING || state.phase === PHASES.PAUSED) {
+    return state;
+  }
+
+  const maxRounds = normalizeMaxRounds(event.settings.maxRounds);
+  state.settings = {
+    ...state.settings,
+    ...event.settings,
+    maxRounds
+  };
   return state;
 }
 
@@ -540,6 +563,14 @@ function isBridgeRole(value: unknown): value is BridgeRole {
 
 function isTabId(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizeMaxRounds(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_SETTINGS.maxRounds;
+  }
+  return Math.min(50, Math.max(1, Math.round(numeric)));
 }
 
 function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): RuntimeBinding | null {

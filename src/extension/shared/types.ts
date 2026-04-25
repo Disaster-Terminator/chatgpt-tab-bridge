@@ -36,6 +36,7 @@ export type MessageType =
   | "SET_BINDING"
   | "CLEAR_BINDING"
   | "SET_STARTER"
+  | "SET_RUNTIME_SETTINGS"
   | "START_SESSION"
   | "PAUSE_SESSION"
   | "RESUME_SESSION"
@@ -215,6 +216,7 @@ export interface PopupControls {
   canClearTerminal: boolean;
   canSetStarter: boolean;
   canSetOverride: boolean;
+  canSetSettings: boolean;
 }
 
 export interface RuntimeDisplay {
@@ -246,6 +248,7 @@ export interface PopupModel {
 export interface OverlayModel {
   phase: RuntimePhase;
   round: number;
+  maxRounds: number;
   nextHop: string;
   requiresTerminalClear: boolean;
   assignedRole: BridgeRole | null;
@@ -404,6 +407,11 @@ export interface SetStarterMessage extends MessageBase {
   role: BridgeRole;
 }
 
+export interface SetRuntimeSettingsMessage extends MessageBase {
+  type: "SET_RUNTIME_SETTINGS";
+  settings: Partial<RuntimeSettings>;
+}
+
 export interface StartSessionMessage extends MessageBase {
   type: "START_SESSION";
 }
@@ -503,6 +511,7 @@ export type RuntimeMessage =
   | SetBindingMessage
   | ClearBindingMessage
   | SetStarterMessage
+  | SetRuntimeSettingsMessage
   | StartSessionMessage
   | PauseSessionMessage
   | ResumeSessionMessage
