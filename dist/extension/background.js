@@ -608,30 +608,39 @@ function hashText(value) {
   return `h${(hash >>> 0).toString(16)}`;
 }
 function buildRelayEnvelope({
-  sourceRole,
-  round,
+  sourceRole: _sourceRole,
+  round: _round,
   message,
   hopId = null,
   continueMarker = DEFAULT_SETTINGS.continueMarker,
-  bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
+  bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix,
+  instructionLocale = "zh-CN"
 }) {
-  const headerLines = [
-    "[BRIDGE_CONTEXT]",
-    `source: ${sourceRole}`,
-    `round: ${round}`,
-    ...hopId ? [`hop: ${hopId}`] : [],
-    ""
+  const metadataLines = [
+    ...hopId ? [`[BRIDGE_META hop=${hopId}]`, ""] : []
   ];
-  return [
-    ...headerLines,
-    normalizeAssistantText(message),
-    "",
+  void _sourceRole;
+  void _round;
+  const instructionLines = instructionLocale === "en" ? [
     "[BRIDGE_INSTRUCTION]",
     "Continue the discussion from the bridged content above.",
     "End your reply with exactly one final line:",
     `${bridgeStatePrefix} ${continueMarker}`,
     "or",
     `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
+  ] : [
+    "[BRIDGE_INSTRUCTION]",
+    "\u7EE7\u7EED\u4E0A\u65B9\u6865\u63A5\u5185\u5BB9\u7684\u8BA8\u8BBA\u3002",
+    "\u8BF7\u5728\u56DE\u590D\u6700\u540E\u5355\u72EC\u8F93\u51FA\u4E00\u884C\u72B6\u6001:",
+    `${bridgeStatePrefix} ${continueMarker}`,
+    "\u6216",
+    `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
+  ];
+  return [
+    normalizeAssistantText(message),
+    "",
+    ...metadataLines,
+    ...instructionLines
   ].join("\n");
 }
 function parseBridgeDirective(text, prefix = DEFAULT_SETTINGS.bridgeStatePrefix) {
@@ -720,7 +729,7 @@ function formatNextHop(sourceRole) {
   return `${sourceRole} -> ${otherRole(sourceRole)}`;
 }
 function containsBridgeEnvelope(text) {
-  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
+  return text.includes("[BRIDGE_META") || text.includes("[BRIDGE_CONTEXT]") || text.includes("[\u6765\u81EA");
 }
 function calculateTextOverlap(textA, textB) {
   if (!textA || !textB) {
@@ -742,8 +751,18 @@ function calculateTextOverlap(textA, textB) {
   return matchCount / Math.max(wordsA.length, wordsB.length);
 }
 function extractHopIdFromPayload(relayPayload) {
-  const match = normalizeAssistantText(relayPayload).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
-  return match?.[1] ?? null;
+  const normalized = normalizeAssistantText(relayPayload);
+  const metaMatch = normalized.match(/\[BRIDGE_META[^\]]*\bhop=([^\s\]]+)/i);
+  if (metaMatch?.[1]) {
+    return metaMatch[1];
+  }
+  const legacyMatch = normalized.match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return legacyMatch?.[1] ?? null;
+}
+function hasHopMarker(text, hopId) {
+  const normalized = normalizeAssistantText(text).toLowerCase();
+  const normalizedHopId = normalizeAssistantText(hopId).toLowerCase();
+  return normalized.includes(`[bridge_meta hop=${normalizedHopId}]`) || normalized.includes(`hop: ${normalizedHopId}`);
 }
 function analyzeHopBinding(latestUserText, relayPayload, expectedHopId) {
   if (!latestUserText) {
@@ -755,16 +774,12 @@ function analyzeHopBinding(latestUserText, relayPayload, expectedHopId) {
   const extractedHopId = extractHopIdFromPayload(normalizedPayload);
   const normalizedExpectedHopId = normalizeAssistantText(expectedHopId ?? "");
   if (normalizedExpectedHopId && extractedHopId) {
-    const latestLower = normalizedLatest.toLowerCase();
-    const expectedMarker = `hop: ${normalizedExpectedHopId}`.toLowerCase();
-    if (latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker)) {
+    if (containsBridgeContext && hasHopMarker(normalizedLatest, normalizedExpectedHopId)) {
       return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
     }
   }
   if (containsBridgeContext && extractedHopId) {
-    const latestLower = normalizedLatest.toLowerCase();
-    const payloadHopMarker = `hop: ${extractedHopId}`.toLowerCase();
-    if (latestLower.includes(payloadHopMarker)) {
+    if (hasHopMarker(normalizedLatest, extractedHopId)) {
       return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
     }
     return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
@@ -1125,6 +1140,11 @@ async function postLocalDebugEvent(event) {
 }
 function shouldPostLocalDebugEvents() {
   return typeof chrome !== "undefined" && typeof chrome.runtime?.id === "string" && chrome.runtime.id.length > 0;
+}
+function getInstructionLocale() {
+  const chromeI18n = typeof chrome !== "undefined" ? chrome.i18n : null;
+  const language = (typeof chromeI18n?.getUILanguage === "function" ? chromeI18n.getUILanguage() : globalThis.navigator?.language)?.toLowerCase() ?? "";
+  return language.startsWith("zh") ? "zh-CN" : "en";
 }
 function formatVerificationBaseline(baselineUserHash, baselineGenerating, baselineLatestUserText, hopId) {
   if (baselineLatestUserText) {
@@ -1849,7 +1869,8 @@ async function runRelayLoop(token, settings) {
       round: activeHop.round,
       message: sourceText,
       hopId: verificationHopId,
-      continueMarker: settings.continueMarker
+      continueMarker: settings.continueMarker,
+      instructionLocale: getInstructionLocale()
     });
     await updateState({
       type: "set_runtime_activity",

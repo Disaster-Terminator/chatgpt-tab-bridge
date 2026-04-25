@@ -60,7 +60,7 @@ function createObservationSample({
   };
 }
 
-test("buildRelayEnvelope includes bridge context, payload, and machine-readable tail instructions", () => {
+test("buildRelayEnvelope starts with payload, then keeps compact bridge metadata and machine-readable tail", () => {
   const hopId = "s1-r3-abc123";
   const envelope = buildRelayEnvelope({
     sourceRole: "A",
@@ -69,20 +69,62 @@ test("buildRelayEnvelope includes bridge context, payload, and machine-readable 
     hopId
   });
 
-  assert.ok(envelope.includes("[BRIDGE_CONTEXT]"));
-  assert.ok(envelope.includes("source: A"));
-  assert.ok(envelope.includes("round: 3"));
-  assert.ok(envelope.includes(`hop: ${hopId}`));
+  assert.ok(envelope.startsWith(`hello\n\n[BRIDGE_META hop=${hopId}]`));
+  assert.ok(envelope.includes(`[BRIDGE_META hop=${hopId}]`));
+  assert.equal(envelope.includes("[BRIDGE_CONTEXT]"), false);
+  assert.equal(envelope.includes("source: A"), false);
+  assert.equal(envelope.includes("round: 3"), false);
   assert.ok(envelope.includes("hello"));
   assert.ok(envelope.includes("[BRIDGE_INSTRUCTION]"));
   assert.ok(envelope.includes("[BRIDGE_STATE] CONTINUE"));
   assert.ok(envelope.includes("[BRIDGE_STATE] FREEZE"));
 });
 
+test("buildRelayEnvelope localizes the natural-language tail instruction", () => {
+  const zhEnvelope = buildRelayEnvelope({
+    sourceRole: "B",
+    round: 1,
+    message: "继续讨论这个问题",
+    instructionLocale: "zh-CN"
+  });
+  const enEnvelope = buildRelayEnvelope({
+    sourceRole: "B",
+    round: 1,
+    message: "Continue this discussion",
+    instructionLocale: "en"
+  });
+
+  assert.ok(zhEnvelope.includes("继续上方桥接内容的讨论。"));
+  assert.ok(zhEnvelope.includes("请在回复最后单独输出一行状态:"));
+  assert.ok(enEnvelope.includes("Continue the discussion from the bridged content above."));
+  assert.ok(enEnvelope.includes("End your reply with exactly one final line:"));
+  assert.ok(zhEnvelope.includes("[BRIDGE_STATE] CONTINUE"));
+  assert.ok(enEnvelope.includes("[BRIDGE_STATE] CONTINUE"));
+});
+
 test("parseBridgeDirective reads the final machine-readable state line", () => {
   assert.equal(parseBridgeDirective("hello\n[BRIDGE_STATE] CONTINUE"), "CONTINUE");
   assert.equal(parseBridgeDirective("hello\n[BRIDGE_STATE] FREEZE"), "FREEZE");
   assert.equal(parseBridgeDirective("hello"), null);
+});
+
+test("evaluateSubmissionVerification accepts compact bridge meta hop binding", () => {
+  const hopId = "s7-r2-hop1";
+  const payload = `bridged content\n\n[BRIDGE_META hop=${hopId}]\n\n[BRIDGE_INSTRUCTION]`;
+  const result = evaluateSubmissionVerification({
+    baselineUserHash: "h1",
+    baselineGenerating: false,
+    baselineLatestUserText: "old baseline",
+    currentUserHash: "h2",
+    currentGenerating: false,
+    currentLatestUserText: payload,
+    relayPayloadText: payload,
+    expectedHopId: hopId
+  });
+
+  assert.equal(result.verified, true);
+  assert.equal(result.hopBindingStrength, "strong");
+  assert.equal(result.details.extractedHopId, hopId);
 });
 
 test("evaluatePreSendGuard stops on duplicate output", () => {

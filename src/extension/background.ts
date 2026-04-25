@@ -196,6 +196,16 @@ function shouldPostLocalDebugEvents(): boolean {
   return typeof chrome !== "undefined" && typeof chrome.runtime?.id === "string" && chrome.runtime.id.length > 0;
 }
 
+function getInstructionLocale(): "zh-CN" | "en" {
+  const chromeI18n = typeof chrome !== "undefined" ? (chrome as any).i18n : null;
+  const language = (
+    typeof chromeI18n?.getUILanguage === "function"
+      ? chromeI18n.getUILanguage()
+      : globalThis.navigator?.language
+  )?.toLowerCase() ?? "";
+  return language.startsWith("zh") ? "zh-CN" : "en";
+}
+
 function formatVerificationBaseline(
   baselineUserHash: string | null,
   baselineGenerating: boolean,
@@ -1105,7 +1115,8 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
       round: activeHop.round,
       message: sourceText,
       hopId: verificationHopId,
-      continueMarker: settings.continueMarker
+      continueMarker: settings.continueMarker,
+      instructionLocale: getInstructionLocale()
     });
 
     await updateState({

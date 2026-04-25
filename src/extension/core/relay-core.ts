@@ -15,6 +15,7 @@ interface RelayEnvelopeInput {
   hopId?: string | null;
   continueMarker?: string;
   bridgeStatePrefix?: string;
+  instructionLocale?: "zh-CN" | "en";
 }
 
 interface PreSendGuardInput {
@@ -52,31 +53,43 @@ export function hashText(value: unknown): string {
 }
 
 export function buildRelayEnvelope({
-  sourceRole,
-  round,
+  sourceRole: _sourceRole,
+  round: _round,
   message,
   hopId = null,
   continueMarker = DEFAULT_SETTINGS.continueMarker,
-  bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix
+  bridgeStatePrefix = DEFAULT_SETTINGS.bridgeStatePrefix,
+  instructionLocale = "zh-CN"
 }: RelayEnvelopeInput): string {
-  const headerLines = [
-    "[BRIDGE_CONTEXT]",
-    `source: ${sourceRole}`,
-    `round: ${round}`,
-    ...(hopId ? [`hop: ${hopId}`] : []),
-    ""
+  const metadataLines = [
+    ...(hopId ? [`[BRIDGE_META hop=${hopId}]`, ""] : [])
   ];
+  void _sourceRole;
+  void _round;
+  const instructionLines =
+    instructionLocale === "en"
+      ? [
+          "[BRIDGE_INSTRUCTION]",
+          "Continue the discussion from the bridged content above.",
+          "End your reply with exactly one final line:",
+          `${bridgeStatePrefix} ${continueMarker}`,
+          "or",
+          `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
+        ]
+      : [
+          "[BRIDGE_INSTRUCTION]",
+          "继续上方桥接内容的讨论。",
+          "请在回复最后单独输出一行状态:",
+          `${bridgeStatePrefix} ${continueMarker}`,
+          "或",
+          `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
+        ];
 
   return [
-    ...headerLines,
     normalizeAssistantText(message),
     "",
-    "[BRIDGE_INSTRUCTION]",
-    "Continue the discussion from the bridged content above.",
-    "End your reply with exactly one final line:",
-    `${bridgeStatePrefix} ${continueMarker}`,
-    "or",
-    `${bridgeStatePrefix} ${DEFAULT_SETTINGS.stopMarker}`
+    ...metadataLines,
+    ...instructionLines
   ].join("\n");
 }
 
@@ -237,7 +250,7 @@ export interface SubmissionAcceptanceGateResult {
 }
 
 function containsBridgeEnvelope(text: string): boolean {
-  return text.includes("[BRIDGE_CONTEXT]") || text.includes("[来自");
+  return text.includes("[BRIDGE_META") || text.includes("[BRIDGE_CONTEXT]") || text.includes("[来自");
 }
 
 function calculateTextOverlap(textA: string, textB: string): number {
@@ -266,8 +279,23 @@ function calculateTextOverlap(textA: string, textB: string): number {
 }
 
 function extractHopIdFromPayload(relayPayload: string): string | null {
-  const match = normalizeAssistantText(relayPayload).match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
-  return match?.[1] ?? null;
+  const normalized = normalizeAssistantText(relayPayload);
+  const metaMatch = normalized.match(/\[BRIDGE_META[^\]]*\bhop=([^\s\]]+)/i);
+  if (metaMatch?.[1]) {
+    return metaMatch[1];
+  }
+
+  const legacyMatch = normalized.match(/(?:^|\n)hop:\s*([^\s\n]+)/i);
+  return legacyMatch?.[1] ?? null;
+}
+
+function hasHopMarker(text: string, hopId: string): boolean {
+  const normalized = normalizeAssistantText(text).toLowerCase();
+  const normalizedHopId = normalizeAssistantText(hopId).toLowerCase();
+  return (
+    normalized.includes(`[bridge_meta hop=${normalizedHopId}]`) ||
+    normalized.includes(`hop: ${normalizedHopId}`)
+  );
 }
 
 function analyzeHopBinding(
@@ -290,17 +318,13 @@ function analyzeHopBinding(
   const normalizedExpectedHopId = normalizeAssistantText(expectedHopId ?? "");
 
   if (normalizedExpectedHopId && extractedHopId) {
-    const latestLower = normalizedLatest.toLowerCase();
-    const expectedMarker = `hop: ${normalizedExpectedHopId}`.toLowerCase();
-    if (latestLower.includes("[bridge_context]") && latestLower.includes(expectedMarker)) {
+    if (containsBridgeContext && hasHopMarker(normalizedLatest, normalizedExpectedHopId)) {
       return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
     }
   }
 
   if (containsBridgeContext && extractedHopId) {
-    const latestLower = normalizedLatest.toLowerCase();
-    const payloadHopMarker = `hop: ${extractedHopId}`.toLowerCase();
-    if (latestLower.includes(payloadHopMarker)) {
+    if (hasHopMarker(normalizedLatest, extractedHopId)) {
       return { hopBindingStrength: "strong", containsBridgeContext: true, extractedHopId };
     }
     return { hopBindingStrength: "weak", containsBridgeContext: true, extractedHopId };
