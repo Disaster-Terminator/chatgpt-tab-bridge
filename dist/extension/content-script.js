@@ -873,6 +873,7 @@ bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
 startOverlayRefreshLoop();
+observeOverlayAttachment();
 observeRuntimeStorageChanges();
 function connectKeepAlivePort() {
   const port = chrome.runtime.connect({
@@ -1124,6 +1125,7 @@ function createOverlay() {
   return node;
 }
 function renderOverlay() {
+  ensureOverlayAttached();
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
@@ -1210,6 +1212,20 @@ function renderOverlay() {
   if (collapsedRole) {
     collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+function ensureOverlayAttached() {
+  if (overlay.isConnected) {
+    return;
+  }
+  document.documentElement.appendChild(overlay);
+}
+function observeOverlayAttachment() {
+  const observer = new MutationObserver(() => {
+    ensureOverlayAttached();
+  });
+  observer.observe(document.documentElement, {
+    childList: true
+  });
 }
 function formatRoundProgress(model) {
   return `${model.round} / ${model.maxRoundsEnabled ? model.maxRounds : "\u221E"}`;

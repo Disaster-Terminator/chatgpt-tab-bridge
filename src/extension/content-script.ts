@@ -158,6 +158,7 @@ bindOverlayEvents();
 renderOverlay();
 void refreshOverlayModel();
 startOverlayRefreshLoop();
+observeOverlayAttachment();
 observeRuntimeStorageChanges();
 
 function connectKeepAlivePort(): ChromePort {
@@ -443,6 +444,7 @@ function createOverlay(): HTMLElement {
 }
 
 function renderOverlay(): void {
+  ensureOverlayAttached();
   const c = getOverlayCopy(overlayLocale);
   const { controls, display, overlaySettings } = overlaySnapshot;
   const canChangeBindings = overlaySnapshot.phase !== "running" && overlaySnapshot.phase !== "paused";
@@ -556,6 +558,24 @@ function renderOverlay(): void {
   if (collapsedRole) {
     collapsedRole.textContent = formatRoleStatus(overlayLocale, overlaySnapshot.assignedRole);
   }
+}
+
+function ensureOverlayAttached(): void {
+  if (overlay.isConnected) {
+    return;
+  }
+
+  document.documentElement.appendChild(overlay);
+}
+
+function observeOverlayAttachment(): void {
+  const observer = new MutationObserver(() => {
+    ensureOverlayAttached();
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true
+  });
 }
 
 function formatRoundProgress(model: OverlayModel): string {
