@@ -2230,6 +2230,7 @@ export async function waitForSettledReply({
   let lastObservedAssistantHash: string | null = baselineHash;
   let stableCount = 0;
   let pendingObservationFailure: ReplyObservationFailureReason | null = null;
+  let pendingReplyStallReason: StopReason | null = null;
 
   while (true) {
     const now = Date.now();
@@ -2276,6 +2277,7 @@ export async function waitForSettledReply({
     const latestAssistant = observation.sample.latestAssistant;
     if (!latestAssistant.present || !latestAssistant.text || !latestAssistant.hash) {
       pendingObservationFailure = STOP_REASONS.REPLY_OBSERVATION_MISSING;
+      pendingReplyStallReason = null;
       stableHash = null;
       stableCount = 0;
       addRuntimeEvent({
@@ -2305,6 +2307,7 @@ export async function waitForSettledReply({
     const currentHash = latestAssistant.hash;
     if (currentHash && currentHash !== baselineHash && currentHash !== lastObservedAssistantHash) {
       lastObservedAssistantHash = currentHash;
+      pendingReplyStallReason = null;
       lastProgressAt = Date.now();
       idleMs = 0;
     }
@@ -2313,6 +2316,10 @@ export async function waitForSettledReply({
       stableHash = null;
       stableCount = 0;
       idleMs = Date.now() - lastProgressAt;
+      pendingReplyStallReason = classifyReplyStallReason({
+        observation,
+        tabLifecycle
+      });
 
       addRuntimeEvent({
         phaseStep: "reply_poll",
@@ -2385,13 +2392,44 @@ export async function waitForSettledReply({
     sendTriggerMode: "observation",
     verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
     verificationPollSample: `elapsed_ms:${elapsedMs}|idle_ms:${idleMs}|stable_hash:${stableHash ?? "null"}|stable_count:${stableCount}`,
-    verificationVerdict: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
+    verificationVerdict: pendingObservationFailure ?? pendingReplyStallReason ?? STOP_REASONS.HOP_TIMEOUT
   });
 
   return {
     ok: false,
-    reason: pendingObservationFailure ?? STOP_REASONS.HOP_TIMEOUT
+    reason: pendingObservationFailure ?? pendingReplyStallReason ?? STOP_REASONS.HOP_TIMEOUT
   };
+}
+
+function classifyReplyStallReason({
+  observation,
+  tabLifecycle
+}: {
+  observation: Extract<ClassifiedTargetObservation, { classification: "correct_target" }>;
+  tabLifecycle: TabLifecycleFacts;
+}): StopReason | null {
+  const page = observation.sample.page;
+  const pageHidden = page?.hidden === true || page?.visibilityState === "hidden";
+  const pageInactive = page?.focused === false || tabLifecycle.active === false;
+  const targetAvailable = tabLifecycle.available === true;
+  const targetNotDiscarded = tabLifecycle.discarded !== true && page?.wasDiscarded !== true;
+  const targetNotFrozen = tabLifecycle.frozen !== true && page?.prerendering !== true;
+  const noGenerationStarted = observation.sample.generating === false;
+  const submittedTurnPending = observation.sample.replyPending === true;
+
+  if (
+    submittedTurnPending &&
+    noGenerationStarted &&
+    pageHidden &&
+    pageInactive &&
+    targetAvailable &&
+    targetNotDiscarded &&
+    targetNotFrozen
+  ) {
+    return STOP_REASONS.TARGET_HIDDEN_NO_GENERATION;
+  }
+
+  return null;
 }
 
 function formatReplyPollSample({

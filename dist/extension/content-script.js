@@ -430,6 +430,7 @@ var STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
+  TARGET_HIDDEN_NO_GENERATION: "target_hidden_no_generation",
   REPLY_OBSERVATION_MISSING: "reply_observation_missing",
   WRONG_TARGET: "wrong_target",
   STALE_TARGET: "stale_target",

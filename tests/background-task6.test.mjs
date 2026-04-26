@@ -832,7 +832,7 @@ test("waitForSettledReply keeps hop_timeout for correct-target observations that
   }
 });
 
-test("waitForSettledReply does not let idle replyPending observations suppress hop_timeout", async () => {
+test("waitForSettledReply classifies hidden inactive target that accepts a turn without generation", async () => {
   const originalDateNow = Date.now;
   let tick = 0;
   Date.now = () => tick++;
@@ -848,7 +848,14 @@ test("waitForSettledReply does not let idle replyPending observations suppress h
           latestUserText: "submitted bridge payload",
           latestAssistantText: "baseline assistant",
           generating: false,
-          replyPending: true
+          replyPending: true,
+          page: {
+            hidden: true,
+            visibilityState: "hidden",
+            focused: false,
+            wasDiscarded: false,
+            prerendering: false
+          }
         }),
         generating: false,
         latestAssistantHash: hashText("baseline assistant"),
@@ -877,6 +884,65 @@ test("waitForSettledReply does not let idle replyPending observations suppress h
         stopMarker: "[BRIDGE_STATE] FREEZE"
       },
       token: 78
+    });
+
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, STOP_REASONS.TARGET_HIDDEN_NO_GENERATION);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("waitForSettledReply keeps hop_timeout for visible idle replyPending observations", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestUserText: "submitted bridge payload",
+          latestAssistantText: "baseline assistant",
+          generating: false,
+          replyPending: true,
+          page: {
+            hidden: false,
+            visibilityState: "visible",
+            focused: true
+          }
+        }),
+        generating: false,
+        latestAssistantHash: hashText("baseline assistant"),
+        latestUserHash: hashText("submitted bridge payload"),
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(77);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 3,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 77
     });
 
     assert.equal(settled.ok, false);

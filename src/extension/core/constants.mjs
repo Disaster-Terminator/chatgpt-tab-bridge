@@ -20,6 +20,7 @@ export const STOP_REASONS = Object.freeze({
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
   HOP_TIMEOUT: "hop_timeout",
+  TARGET_HIDDEN_NO_GENERATION: "target_hidden_no_generation",
   BINDING_INVALID: "binding_invalid",
   STARTER_SETTLE_TIMEOUT: "starter_settle_timeout"
 });

@@ -8,6 +8,7 @@ export type StopReason =
   | "max_rounds_reached"
   | "duplicate_output"
   | "hop_timeout"
+  | "target_hidden_no_generation"
   | "reply_observation_missing"
   | "wrong_target"
   | "stale_target"
