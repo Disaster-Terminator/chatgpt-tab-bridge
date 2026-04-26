@@ -591,6 +591,7 @@ var zhCN = {
     readinessLabel: "\u65E0\u6CD5\u542F\u52A8:",
     blockReasons: {
       starter_generating: "\u8D77\u59CB\u4FA7\u6B63\u5728\u751F\u6210\u4E2D",
+      starter_empty: "\u8D77\u59CB\u4FA7\u6CA1\u6709\u53EF\u8F6C\u53D1\u56DE\u590D",
       clear_terminal_required: "\u9700\u8981\u6E05\u7A7A\u7EC8\u7AEF",
       missing_binding: "\u7F3A\u5C11\u7ED1\u5B9A",
       preflight_pending: "\u7B49\u5F85\u8D77\u59CB\u4FA7\u5C31\u7EEA"
@@ -694,6 +695,7 @@ var en = {
     readinessLabel: "Cannot start:",
     blockReasons: {
       starter_generating: "Starter is still generating",
+      starter_empty: "Starter has no reply to forward",
       clear_terminal_required: "Terminal must be cleared",
       missing_binding: "Missing binding",
       preflight_pending: "Waiting for starter to settle"

@@ -227,8 +227,26 @@ test("starterReady is true when source is not generating", () => {
     starter: "A"
   });
 
-  const readiness = computeReadiness(state, { generating: false });
+  const readiness = computeReadiness(state, {
+    generating: false,
+    latestAssistantHash: "h1"
+  });
   assert.equal(readiness.starterReady, true);
+});
+
+test("computeReadiness blocks start when starter thread has no assistant reply", () => {
+  const state = createTestState({
+    phase: PHASES.READY,
+    starter: "A"
+  });
+
+  const readiness = computeReadiness(state, {
+    generating: false,
+    latestAssistantHash: null
+  });
+
+  assert.equal(readiness.starterReady, false);
+  assert.equal(readiness.blockReason, "starter_empty");
 });
 
 // =============================================================================

@@ -33,15 +33,17 @@ export function computeReadiness(
   const sourceRole = resolveDisplayedSourceRole(state);
   
   const isGenerating = sourceThreadActivity?.generating ?? false;
+  const sourceAssistantKnownEmpty =
+    sourceThreadActivity !== null && sourceThreadActivity.latestAssistantHash === null;
   
-  const starterReady = !isGenerating;
+  const starterReady = !isGenerating && !sourceAssistantKnownEmpty;
   
   let blockReason: BlockReason | null = null;
   
   if (state.phase === PHASES.RUNNING && state.runtimeActivity.step.startsWith("waiting starter")) {
     blockReason = "preflight_pending";
   } else if (!starterReady) {
-    blockReason = "starter_generating";
+    blockReason = isGenerating ? "starter_generating" : "starter_empty";
   } else if (state.requiresTerminalClear) {
     blockReason = "clear_terminal_required";
   } else if (!hasValidBindings(state)) {

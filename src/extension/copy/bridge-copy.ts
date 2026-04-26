@@ -199,6 +199,7 @@ const zhCN: { overlay: OverlayCopy; popup: PopupCopy } = {
     readinessLabel: "无法启动:",
     blockReasons: {
       starter_generating: "起始侧正在生成中",
+      starter_empty: "起始侧没有可转发回复",
       clear_terminal_required: "需要清空终端",
       missing_binding: "缺少绑定",
       preflight_pending: "等待起始侧就绪"
@@ -303,6 +304,7 @@ const en: { overlay: OverlayCopy; popup: PopupCopy } = {
     readinessLabel: "Cannot start:",
     blockReasons: {
       starter_generating: "Starter is still generating",
+      starter_empty: "Starter has no reply to forward",
       clear_terminal_required: "Terminal must be cleared",
       missing_binding: "Missing binding",
       preflight_pending: "Waiting for starter to settle"

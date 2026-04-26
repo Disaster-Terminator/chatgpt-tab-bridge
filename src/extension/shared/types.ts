@@ -332,6 +332,7 @@ export type ThreadActivityResponse =
 
 export type BlockReason =
   | "starter_generating"
+  | "starter_empty"
   | "clear_terminal_required"
   | "missing_binding"
   | "preflight_pending";
