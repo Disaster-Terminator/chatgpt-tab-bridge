@@ -952,6 +952,66 @@ test("waitForSettledReply keeps hop_timeout for visible idle replyPending observ
   }
 });
 
+test("waitForSettledReply does not classify hidden target as no-generation after generation was observed", async () => {
+  const originalDateNow = Date.now;
+  let tick = 0;
+  Date.now = () => tick++;
+
+  chromeEnvironment.setSendMessageHandler(async (tabId, message) => {
+    assert.equal(message.type, "GET_THREAD_ACTIVITY");
+    assert.equal(tabId, 2);
+    return {
+      ok: true,
+      result: {
+        sample: createObservationSample({
+          url: "https://chatgpt.com/c/thread-b",
+          latestUserText: "submitted bridge payload",
+          latestAssistantText: "baseline assistant",
+          generating: false,
+          replyPending: true,
+          page: {
+            hidden: true,
+            visibilityState: "hidden",
+            focused: false
+          }
+        }),
+        generating: false,
+        latestAssistantHash: hashText("baseline assistant"),
+        latestUserHash: hashText("submitted bridge payload"),
+        composerText: "",
+        sendButtonReady: true,
+        composerAvailable: true
+      }
+    };
+  });
+
+  try {
+    setActiveLoopTokenForTest(76);
+    const settled = await waitForSettledReply({
+      tabId: 2,
+      canonicalTargetTabId: 2,
+      baselineHash: hashText("baseline assistant"),
+      expectedTargetIdentity: { normalizedUrl: "https://chatgpt.com/c/thread-b" },
+      generationObservedAfterDispatch: true,
+      settings: {
+        maxRounds: 1,
+        hopTimeoutMs: 3,
+        pollIntervalMs: 0,
+        settleSamplesRequired: 2,
+        bridgeStatePrefix: "[BRIDGE_STATE]",
+        continueMarker: "[BRIDGE_STATE] CONTINUE",
+        stopMarker: "[BRIDGE_STATE] FREEZE"
+      },
+      token: 76
+    });
+
+    assert.equal(settled.ok, false);
+    assert.equal(settled.reason, STOP_REASONS.HOP_TIMEOUT);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("waitForSettledReply does not let unchanged generating observations suppress hop_timeout", async () => {
   const originalDateNow = Date.now;
   let tick = 0;

@@ -2128,6 +2128,7 @@ async function runRelayLoop(token, settings) {
         baselineGenerating,
         baselineLatestUserText,
         baselineAssistantHash: baselineTarget.ok ? baselineTarget.result.hash : null,
+        generationObservedAfterDispatch: sendResult.dispatchEvidence?.currentGenerating === true,
         verificationBaselineSummary,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode,
@@ -2476,6 +2477,7 @@ async function verifySubmittedHop({
   const verificationPollIntervalMs = 500;
   const verificationStartTime = Date.now();
   let acceptanceEstablished = false;
+  let generationObservedAfterDispatch = progress.generationObservedAfterDispatch === true;
   let lastVerificationPollSample = progress.lastVerificationPollSample ?? "no_poll_sample";
   let lastAcceptanceGateReason = "acceptance_not_established_observation_window_only";
   while (Date.now() - verificationStartTime < verificationTimeoutMs) {
@@ -2509,6 +2511,7 @@ async function verifySubmittedHop({
       });
       continue;
     }
+    generationObservedAfterDispatch = generationObservedAfterDispatch || observation.sample.generating === true;
     const verificationResult = evaluateSubmissionVerification({
       baselineUserHash: progress.baselineUserHash,
       baselineGenerating: progress.baselineGenerating,
@@ -2604,6 +2607,7 @@ async function verifySubmittedHop({
   }
   const nextProgress = {
     ...progress,
+    generationObservedAfterDispatch,
     lastVerificationPollSample
   };
   await updateState({
@@ -2663,6 +2667,7 @@ async function waitForHopReply({
     canonicalTargetTabId: activeHop.targetTabId,
     baselineHash: progress.baselineAssistantHash,
     expectedTargetIdentity: progress.targetIdentity ?? null,
+    generationObservedAfterDispatch: progress.generationObservedAfterDispatch === true,
     settings,
     token,
     sourceRole,
@@ -2754,6 +2759,7 @@ async function waitForSettledReply({
   canonicalTargetTabId,
   baselineHash,
   expectedTargetIdentity,
+  generationObservedAfterDispatch = false,
   settings,
   token,
   sourceRole = null,
@@ -2848,7 +2854,8 @@ async function waitForSettledReply({
       idleMs = Date.now() - lastProgressAt;
       pendingReplyStallReason = classifyReplyStallReason({
         observation,
-        tabLifecycle
+        tabLifecycle,
+        generationObservedAfterDispatch
       });
       addRuntimeEvent({
         phaseStep: "reply_poll",
@@ -2926,7 +2933,8 @@ async function waitForSettledReply({
 }
 function classifyReplyStallReason({
   observation,
-  tabLifecycle
+  tabLifecycle,
+  generationObservedAfterDispatch
 }) {
   const page = observation.sample.page;
   const pageHidden = page?.hidden === true || page?.visibilityState === "hidden";
@@ -2936,7 +2944,7 @@ function classifyReplyStallReason({
   const targetNotFrozen = tabLifecycle.frozen !== true && page?.prerendering !== true;
   const noGenerationStarted = observation.sample.generating === false;
   const submittedTurnPending = observation.sample.replyPending === true;
-  if (submittedTurnPending && noGenerationStarted && pageHidden && pageInactive && targetAvailable && targetNotDiscarded && targetNotFrozen) {
+  if (!generationObservedAfterDispatch && submittedTurnPending && noGenerationStarted && pageHidden && pageInactive && targetAvailable && targetNotDiscarded && targetNotFrozen) {
     return STOP_REASONS.TARGET_HIDDEN_NO_GENERATION;
   }
   return null;

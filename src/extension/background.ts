@@ -99,6 +99,7 @@ interface WaitForSettledReplyInput {
   canonicalTargetTabId: number;
   baselineHash: string | null;
   expectedTargetIdentity: RuntimeHopTargetIdentity | null;
+  generationObservedAfterDispatch?: boolean;
   settings: RuntimeSettings;
   token: number;
   sourceRole?: BridgeRole | null;
@@ -1454,6 +1455,7 @@ export async function runRelayLoop(token: number, settings: RuntimeSettings): Pr
         baselineGenerating,
         baselineLatestUserText,
         baselineAssistantHash: baselineTarget.ok ? baselineTarget.result.hash : null,
+        generationObservedAfterDispatch: sendResult.dispatchEvidence?.currentGenerating === true,
         verificationBaselineSummary,
         dispatchReadbackSummary,
         sendTriggerMode: sendResult.mode,
@@ -1886,6 +1888,7 @@ async function verifySubmittedHop({
   const verificationPollIntervalMs = 500;
   const verificationStartTime = Date.now();
   let acceptanceEstablished = false;
+  let generationObservedAfterDispatch = progress.generationObservedAfterDispatch === true;
   let lastVerificationPollSample = progress.lastVerificationPollSample ?? "no_poll_sample";
   let lastAcceptanceGateReason: string | TargetObservationClassification =
     "acceptance_not_established_observation_window_only";
@@ -1925,6 +1928,9 @@ async function verifySubmittedHop({
       });
       continue;
     }
+
+    generationObservedAfterDispatch =
+      generationObservedAfterDispatch || observation.sample.generating === true;
 
     const verificationResult = evaluateSubmissionVerification({
       baselineUserHash: progress.baselineUserHash,
@@ -2029,6 +2035,7 @@ async function verifySubmittedHop({
 
   const nextProgress = {
     ...progress,
+    generationObservedAfterDispatch,
     lastVerificationPollSample
   };
 
@@ -2100,6 +2107,7 @@ async function waitForHopReply({
     canonicalTargetTabId: activeHop.targetTabId,
     baselineHash: progress.baselineAssistantHash,
     expectedTargetIdentity: progress.targetIdentity ?? null,
+    generationObservedAfterDispatch: progress.generationObservedAfterDispatch === true,
     settings,
     token,
     sourceRole,
@@ -2216,6 +2224,7 @@ export async function waitForSettledReply({
   canonicalTargetTabId,
   baselineHash,
   expectedTargetIdentity,
+  generationObservedAfterDispatch = false,
   settings,
   token,
   sourceRole = null,
@@ -2318,7 +2327,8 @@ export async function waitForSettledReply({
       idleMs = Date.now() - lastProgressAt;
       pendingReplyStallReason = classifyReplyStallReason({
         observation,
-        tabLifecycle
+        tabLifecycle,
+        generationObservedAfterDispatch
       });
 
       addRuntimeEvent({
@@ -2403,10 +2413,12 @@ export async function waitForSettledReply({
 
 function classifyReplyStallReason({
   observation,
-  tabLifecycle
+  tabLifecycle,
+  generationObservedAfterDispatch
 }: {
   observation: Extract<ClassifiedTargetObservation, { classification: "correct_target" }>;
   tabLifecycle: TabLifecycleFacts;
+  generationObservedAfterDispatch: boolean;
 }): StopReason | null {
   const page = observation.sample.page;
   const pageHidden = page?.hidden === true || page?.visibilityState === "hidden";
@@ -2418,6 +2430,7 @@ function classifyReplyStallReason({
   const submittedTurnPending = observation.sample.replyPending === true;
 
   if (
+    !generationObservedAfterDispatch &&
     submittedTurnPending &&
     noGenerationStarted &&
     pageHidden &&

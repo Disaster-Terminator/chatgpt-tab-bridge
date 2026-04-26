@@ -173,6 +173,7 @@ export interface RuntimeHopProgress {
   baselineGenerating: boolean;
   baselineLatestUserText: string | null;
   baselineAssistantHash: string | null;
+  generationObservedAfterDispatch: boolean;
   verificationBaselineSummary: string;
   dispatchReadbackSummary: string;
   sendTriggerMode: string;
