@@ -19,6 +19,7 @@ export const STOP_REASONS = Object.freeze({
   STOP_MARKER: "stop_marker",
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
+  STARTER_EMPTY: "starter_empty",
   HOP_TIMEOUT: "hop_timeout",
   TARGET_HIDDEN_NO_GENERATION: "target_hidden_no_generation",
   BINDING_INVALID: "binding_invalid",

@@ -604,6 +604,7 @@ function normalizeBinding(binding: Partial<RuntimeBinding> | null | undefined): 
     url: binding.url ?? "",
     urlInfo: binding.urlInfo ?? null,
     sessionIdentity: binding.sessionIdentity ?? null,
+    isEmptyThread: typeof binding.isEmptyThread === "boolean" ? binding.isEmptyThread : null,
     boundAt: binding.boundAt ?? new Date().toISOString()
   };
 }

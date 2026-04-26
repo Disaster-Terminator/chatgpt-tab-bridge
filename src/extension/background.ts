@@ -825,6 +825,8 @@ async function bindTabToRole(
 
   const tab = await chrome.tabs.get(tabId);
   const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
+  const activity = await requestThreadActivity(tab.id ?? tabId);
+  const isEmptyThread = activity.ok ? activity.result.latestAssistantHash === null : null;
 
   // P0-1: Allow binding without URL - live session can work without persistent URL
   // URL is no longer mandatory for binding - it's now optional enhancement
@@ -877,6 +879,7 @@ async function bindTabToRole(
       url: tab.url ?? "",
       urlInfo,
       sessionIdentity,
+      isEmptyThread,
       boundAt: new Date().toISOString()
     }
   });
@@ -931,6 +934,25 @@ async function runStarterPreflight(state: RuntimeState): Promise<boolean> {
   const threadActivity = await requestThreadActivity(sourceBinding.tabId);
   if (!threadActivity.ok) {
     return true;
+  }
+
+  if (!threadActivity.result.generating && threadActivity.result.latestAssistantHash === null) {
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${sourceRole} ready`,
+        sourceRole,
+        targetRole: otherRole(sourceRole),
+        pendingRound: state.round + 1,
+        transport: "preflight",
+        selector: STOP_REASONS.STARTER_EMPTY
+      }
+    });
+    await updateState({
+      type: "stop_condition",
+      reason: STOP_REASONS.STARTER_EMPTY
+    });
+    return false;
   }
 
   if (!threadActivity.result.generating) {

@@ -83,6 +83,7 @@ var STOP_REASONS = Object.freeze({
   STOP_MARKER: "stop_marker",
   MAX_ROUNDS: "max_rounds_reached",
   DUPLICATE_OUTPUT: "duplicate_output",
+  STARTER_EMPTY: "starter_empty",
   HOP_TIMEOUT: "hop_timeout",
   TARGET_HIDDEN_NO_GENERATION: "target_hidden_no_generation",
   REPLY_OBSERVATION_MISSING: "reply_observation_missing",
@@ -552,6 +553,7 @@ function normalizeBinding(binding) {
     url: binding.url ?? "",
     urlInfo: binding.urlInfo ?? null,
     sessionIdentity: binding.sessionIdentity ?? null,
+    isEmptyThread: typeof binding.isEmptyThread === "boolean" ? binding.isEmptyThread : null,
     boundAt: binding.boundAt ?? (/* @__PURE__ */ new Date()).toISOString()
   };
 }
@@ -1603,6 +1605,8 @@ async function bindTabToRole(role, tabId) {
   }
   const tab = await chrome.tabs.get(tabId);
   const urlInfo = parseChatGptThreadUrl(tab.url ?? "");
+  const activity = await requestThreadActivity(tab.id ?? tabId);
+  const isEmptyThread = activity.ok ? activity.result.latestAssistantHash === null : null;
   const sessionIdentity = urlInfo.supported ? {
     kind: "persistent_url",
     tabId: tab.id ?? tabId,
@@ -1645,6 +1649,7 @@ async function bindTabToRole(role, tabId) {
       url: tab.url ?? "",
       urlInfo,
       sessionIdentity,
+      isEmptyThread,
       boundAt: (/* @__PURE__ */ new Date()).toISOString()
     }
   });
@@ -1691,6 +1696,24 @@ async function runStarterPreflight(state) {
   const threadActivity = await requestThreadActivity(sourceBinding.tabId);
   if (!threadActivity.ok) {
     return true;
+  }
+  if (!threadActivity.result.generating && threadActivity.result.latestAssistantHash === null) {
+    await updateState({
+      type: "set_runtime_activity",
+      activity: {
+        step: `waiting ${sourceRole} ready`,
+        sourceRole,
+        targetRole: otherRole(sourceRole),
+        pendingRound: state.round + 1,
+        transport: "preflight",
+        selector: STOP_REASONS.STARTER_EMPTY
+      }
+    });
+    await updateState({
+      type: "stop_condition",
+      reason: STOP_REASONS.STARTER_EMPTY
+    });
+    return false;
   }
   if (!threadActivity.result.generating) {
     return true;

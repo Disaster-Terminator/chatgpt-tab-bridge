@@ -7,6 +7,7 @@ export type StopReason =
   | "stop_marker"
   | "max_rounds_reached"
   | "duplicate_output"
+  | "starter_empty"
   | "hop_timeout"
   | "target_hidden_no_generation"
   | "reply_observation_missing"
@@ -116,6 +117,7 @@ export interface RuntimeBinding {
   url: string;
   urlInfo: ChatGptUrlInfo | null;
   sessionIdentity: SessionIdentity | null;
+  isEmptyThread: boolean | null;
   boundAt: string;
 }
 
