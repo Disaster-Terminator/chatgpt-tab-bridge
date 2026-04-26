@@ -291,8 +291,17 @@ export interface TargetObservationComposerFacts {
   sendButtonReady: boolean;
 }
 
+export interface TargetObservationPageFacts {
+  hidden: boolean;
+  visibilityState: string;
+  focused: boolean;
+  wasDiscarded: boolean | null;
+  prerendering: boolean | null;
+}
+
 export interface TargetObservationSample {
   identity: TargetObservationIdentityFacts;
+  page: TargetObservationPageFacts;
   latestUser: TargetObservationMessageFacts;
   latestAssistant: TargetObservationMessageFacts;
   generating: boolean;

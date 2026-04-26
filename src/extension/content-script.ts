@@ -700,6 +700,13 @@ function readTargetObservationSample(): { ok: true; result: TargetObservationSam
         pathname: window.location.pathname,
         title: document.title
       },
+      page: {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        focused: document.hasFocus(),
+        wasDiscarded: typeof (document as any).wasDiscarded === "boolean" ? (document as any).wasDiscarded : null,
+        prerendering: typeof (document as any).prerendering === "boolean" ? (document as any).prerendering : null
+      },
       latestUser,
       latestAssistant,
       generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),

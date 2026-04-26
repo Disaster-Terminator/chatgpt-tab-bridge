@@ -135,6 +135,21 @@ type ClassifiedTargetObservation =
       error: string;
     };
 
+type TabLifecycleFacts = {
+  available: boolean;
+  active: boolean | null;
+  audible: boolean | null;
+  autoDiscardable: boolean | null;
+  discarded: boolean | null;
+  frozen: boolean | null;
+  highlighted: boolean | null;
+  pinned: boolean | null;
+  status: string | null;
+  windowId: number | null;
+  lastAccessed: number | null;
+  error: string | null;
+};
+
 type VerificationExecutionResult =
   | {
       ok: true;
@@ -2161,6 +2176,41 @@ async function sendTabMessageWithTimeout<T>(
   ]);
 }
 
+async function readTabLifecycleFacts(tabId: number): Promise<TabLifecycleFacts> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return {
+      available: true,
+      active: typeof tab.active === "boolean" ? tab.active : null,
+      audible: typeof tab.audible === "boolean" ? tab.audible : null,
+      autoDiscardable: typeof tab.autoDiscardable === "boolean" ? tab.autoDiscardable : null,
+      discarded: typeof tab.discarded === "boolean" ? tab.discarded : null,
+      frozen: typeof tab.frozen === "boolean" ? tab.frozen : null,
+      highlighted: typeof tab.highlighted === "boolean" ? tab.highlighted : null,
+      pinned: typeof tab.pinned === "boolean" ? tab.pinned : null,
+      status: typeof tab.status === "string" ? tab.status : null,
+      windowId: typeof tab.windowId === "number" ? tab.windowId : null,
+      lastAccessed: typeof tab.lastAccessed === "number" ? tab.lastAccessed : null,
+      error: null
+    };
+  } catch (error) {
+    return {
+      available: false,
+      active: null,
+      audible: null,
+      autoDiscardable: null,
+      discarded: null,
+      frozen: null,
+      highlighted: null,
+      pinned: null,
+      status: null,
+      windowId: null,
+      lastAccessed: null,
+      error: getErrorMessage(error)
+    };
+  }
+}
+
 export async function waitForSettledReply({
   tabId,
   canonicalTargetTabId,
@@ -2197,6 +2247,7 @@ export async function waitForSettledReply({
     }
 
     await sleep(settings.pollIntervalMs);
+    const tabLifecycle = await readTabLifecycleFacts(canonicalTargetTabId);
     const observation = classifyTargetObservation({
       requestedTabId: tabId,
       canonicalTargetTabId,
@@ -2213,7 +2264,7 @@ export async function waitForSettledReply({
         dispatchReadbackSummary: "reply_wait",
         sendTriggerMode: "observation",
         verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
-        verificationPollSample: `classification:${observation.classification}|elapsed_ms:${elapsedMs}`,
+        verificationPollSample: `classification:${observation.classification}|elapsed_ms:${elapsedMs}|${formatTabLifecycleFacts(tabLifecycle)}`,
         verificationVerdict: observation.classification
       });
       return {
@@ -2241,7 +2292,8 @@ export async function waitForSettledReply({
           stableHash,
           stableCount,
           elapsedMs,
-          idleMs
+          idleMs,
+          tabLifecycle
         }),
         verificationVerdict: STOP_REASONS.REPLY_OBSERVATION_MISSING
       });
@@ -2276,7 +2328,8 @@ export async function waitForSettledReply({
           stableHash,
           stableCount,
           elapsedMs,
-          idleMs
+          idleMs,
+          tabLifecycle
         }),
         verificationVerdict: "assistant_hash_unchanged"
       });
@@ -2305,7 +2358,8 @@ export async function waitForSettledReply({
         stableHash,
         stableCount,
         elapsedMs,
-        idleMs
+        idleMs,
+        tabLifecycle
       }),
       verificationVerdict: replySettleConfirmed ? "settle_candidate" : "still_generating"
     });
@@ -2346,7 +2400,8 @@ function formatReplyPollSample({
   stableHash,
   stableCount,
   elapsedMs,
-  idleMs
+  idleMs,
+  tabLifecycle
 }: {
   observation: Extract<ClassifiedTargetObservation, { classification: "correct_target" }>;
   baselineHash: string | null;
@@ -2354,12 +2409,20 @@ function formatReplyPollSample({
   stableCount: number;
   elapsedMs: number;
   idleMs: number;
+  tabLifecycle: TabLifecycleFacts;
 }): string {
   const assistant = observation.sample.latestAssistant;
+  const page = observation.sample.page;
   const preview = normalizeAssistantText(assistant.text).slice(0, 80).replace(/\s+/g, " ");
   return [
     `elapsed_ms:${elapsedMs}`,
     `idle_ms:${idleMs}`,
+    `page_hidden:${page?.hidden ?? "unknown"}`,
+    `page_visibility:${page?.visibilityState ?? "unknown"}`,
+    `page_focused:${page?.focused ?? "unknown"}`,
+    `page_was_discarded:${page?.wasDiscarded ?? "unknown"}`,
+    `page_prerendering:${page?.prerendering ?? "unknown"}`,
+    formatTabLifecycleFacts(tabLifecycle),
     `assistant_present:${assistant.present}`,
     `assistant_hash:${assistant.hash ?? "null"}`,
     `baseline_hash:${baselineHash ?? "null"}`,
@@ -2368,6 +2431,23 @@ function formatReplyPollSample({
     `generating:${observation.sample.generating}`,
     `reply_pending:${observation.sample.replyPending}`,
     `preview:${preview || "null"}`
+  ].join("|");
+}
+
+function formatTabLifecycleFacts(tab: TabLifecycleFacts): string {
+  return [
+    `tab_available:${tab.available}`,
+    `tab_active:${tab.active ?? "unknown"}`,
+    `tab_status:${tab.status ?? "unknown"}`,
+    `tab_discarded:${tab.discarded ?? "unknown"}`,
+    `tab_frozen:${tab.frozen ?? "unknown"}`,
+    `tab_auto_discardable:${tab.autoDiscardable ?? "unknown"}`,
+    `tab_audible:${tab.audible ?? "unknown"}`,
+    `tab_highlighted:${tab.highlighted ?? "unknown"}`,
+    `tab_pinned:${tab.pinned ?? "unknown"}`,
+    `tab_window:${tab.windowId ?? "unknown"}`,
+    `tab_last_accessed:${tab.lastAccessed ?? "unknown"}`,
+    `tab_error:${tab.error ?? "none"}`
   ].join("|");
 }
 

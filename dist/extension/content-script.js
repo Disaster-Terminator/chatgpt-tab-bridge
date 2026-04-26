@@ -1329,6 +1329,13 @@ function readTargetObservationSample() {
         pathname: window.location.pathname,
         title: document.title
       },
+      page: {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        focused: document.hasFocus(),
+        wasDiscarded: typeof document.wasDiscarded === "boolean" ? document.wasDiscarded : null,
+        prerendering: typeof document.prerendering === "boolean" ? document.prerendering : null
+      },
       latestUser,
       latestAssistant,
       generating: isReplyGenerationInProgressFromDoc(latestAssistant.text),

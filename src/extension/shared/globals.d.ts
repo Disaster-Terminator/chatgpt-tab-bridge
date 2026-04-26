@@ -110,6 +110,16 @@ export interface ChromeTab {
   id?: number;
   title?: string;
   url?: string;
+  active?: boolean;
+  audible?: boolean;
+  autoDiscardable?: boolean;
+  discarded?: boolean;
+  frozen?: boolean;
+  highlighted?: boolean;
+  lastAccessed?: number;
+  pinned?: boolean;
+  status?: string;
+  windowId?: number;
 }
 
 export interface ChromeEvent<TListener extends (...args: any[]) => any> {

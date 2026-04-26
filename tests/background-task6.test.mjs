@@ -119,13 +119,21 @@ function createObservationSample({
   latestUserText = null,
   latestAssistantText = null,
   generating = false,
-  replyPending = false
+  replyPending = false,
+  page = {}
 }) {
   return {
     identity: {
       url,
       pathname: new URL(url).pathname,
       title: "ChatGPT"
+    },
+    page: {
+      hidden: page.hidden ?? true,
+      visibilityState: page.visibilityState ?? "hidden",
+      focused: page.focused ?? false,
+      wasDiscarded: page.wasDiscarded ?? false,
+      prerendering: page.prerendering ?? false
     },
     latestUser: {
       present: latestUserText !== null,

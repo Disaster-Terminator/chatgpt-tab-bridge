@@ -34,13 +34,21 @@ function createObservationSample({
   generating = false,
   replyPending = false,
   composerAvailable = true,
-  sendButtonReady = true
+  sendButtonReady = true,
+  page = {}
 } = {}) {
   return {
     identity: {
       url: "https://chatgpt.com/c/test-thread",
       pathname: "/c/test-thread",
       title: "ChatGPT"
+    },
+    page: {
+      hidden: page.hidden ?? true,
+      visibilityState: page.visibilityState ?? "hidden",
+      focused: page.focused ?? false,
+      wasDiscarded: page.wasDiscarded ?? false,
+      prerendering: page.prerendering ?? false
     },
     latestUser: {
       present: latestUserText !== null,
