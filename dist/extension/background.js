@@ -1014,6 +1014,38 @@ function evaluateSubmissionVerification(input) {
   };
 }
 
+// core/reason-catalog.ts
+var REASON_CATALOG = {
+  [STOP_REASONS.HOP_TIMEOUT]: {
+    title: "Reply timed out",
+    summary: "The target tab did not produce a stable assistant reply before timeout.",
+    nextAction: "Check target tab visibility and response progress, then resume or restart."
+  },
+  [STOP_REASONS.TARGET_HIDDEN_NO_GENERATION]: {
+    title: "Target tab hidden",
+    summary: "The target tab stayed hidden and never entered generation.",
+    nextAction: "Bring the target tab to foreground and retry from the terminal state."
+  },
+  [STOP_REASONS.REPLY_OBSERVATION_MISSING]: {
+    title: "Reply observation missing",
+    summary: "Reply checks could not confirm a valid assistant observation.",
+    nextAction: "Verify the tab URL/binding pair and retry."
+  },
+  [ERROR_REASONS.SELECTOR_FAILURE]: {
+    title: "UI selector failed",
+    summary: "The extension could not find an expected ChatGPT UI element.",
+    nextAction: "Refresh the tab and rebind if layout changed."
+  }
+};
+var FALLBACK_ISSUE_ADVICE = {
+  title: "Bridge issue detected",
+  summary: "The session stopped with an unclassified reason.",
+  nextAction: "Use debug info and logs, then retry after checking both tabs."
+};
+function getIssueAdviceByReason(reason) {
+  return REASON_CATALOG[reason] ?? FALLBACK_ISSUE_ADVICE;
+}
+
 // core/popup-model.ts
 function resolveDisplayedSourceRole(state) {
   const activeHop = state.activeHop;
@@ -1067,13 +1099,19 @@ function buildDisplay(state) {
   ]);
   const isNormalStop = state.lastStopReason && normalStopReasons.has(state.lastStopReason);
   const displayStopReason = isNormalStop ? null : state.lastStopReason;
+  const issueCode = state.lastError || displayStopReason || null;
+  const issueAdvice = issueCode ? {
+    ...getIssueAdviceByReason(issueCode.split(":")[0] ?? issueCode),
+    diagnosticCode: issueCode
+  } : null;
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
     currentStep: state.runtimeActivity?.step ?? "idle",
     lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
     transport: state.runtimeActivity?.transport ?? null,
     selector: state.runtimeActivity?.selector ?? null,
-    lastIssue: state.lastError || displayStopReason || "None"
+    lastIssue: issueCode || "None",
+    issueAdvice
   };
 }
 

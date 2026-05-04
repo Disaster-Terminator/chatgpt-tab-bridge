@@ -390,6 +390,10 @@ var elements = {
   transportValue: requireElement("#transportValue"),
   selectorValue: requireElement("#selectorValue"),
   issueValue: requireElement("#issueValue"),
+  issueTitle: requireElement("#issueTitle"),
+  issueSummary: requireElement("#issueSummary"),
+  issueNextAction: requireElement("#issueNextAction"),
+  issueDiagnostic: requireElement("#issueDiagnostic"),
   issueValueDebug: requireElement("#issueValueDebug"),
   issueRow: requireElement("#issueRow"),
   copyFeedback: requireElement("#copyFeedback"),
@@ -579,6 +583,10 @@ function render(model) {
     elements.issueRow.hidden = false;
     elements.issueValue.textContent = display.lastIssue;
     elements.issueValueDebug.textContent = display.lastIssue;
+    elements.issueTitle.textContent = display.issueAdvice?.title ?? display.lastIssue;
+    elements.issueSummary.textContent = display.issueAdvice?.summary ?? copy.none;
+    elements.issueNextAction.textContent = display.issueAdvice?.nextAction ?? copy.none;
+    elements.issueDiagnostic.textContent = display.issueAdvice?.diagnosticCode ?? display.lastIssue;
   } else {
     elements.issueRow.hidden = true;
     elements.issueValueDebug.textContent = copy.none;

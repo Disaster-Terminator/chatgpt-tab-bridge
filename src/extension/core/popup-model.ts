@@ -1,4 +1,5 @@
 import { PHASES, STOP_REASONS } from "./constants.ts";
+import { getIssueAdviceByReason } from "./reason-catalog.ts";
 import { canWriteOverride, hasValidBindings } from "./state-machine.ts";
 import type { BlockReason, BridgeRole, ExecutionReadiness, PopupControls, RuntimeDisplay, RuntimeState, ThreadActivity } from "../shared/types.js";
 
@@ -72,6 +73,13 @@ export function buildDisplay(state: RuntimeState): RuntimeDisplay {
   ]);
   const isNormalStop = state.lastStopReason && normalStopReasons.has(state.lastStopReason as typeof normalStopReasons extends Set<infer T> ? T : never);
   const displayStopReason = isNormalStop ? null : state.lastStopReason;
+  const issueCode = state.lastError || displayStopReason || null;
+  const issueAdvice = issueCode
+    ? {
+        ...getIssueAdviceByReason(issueCode.split(":")[0] ?? issueCode),
+        diagnosticCode: issueCode
+      }
+    : null;
   
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
@@ -79,6 +87,7 @@ export function buildDisplay(state: RuntimeState): RuntimeDisplay {
     lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
     transport: state.runtimeActivity?.transport ?? null,
     selector: state.runtimeActivity?.selector ?? null,
-    lastIssue: state.lastError || displayStopReason || "None"
+    lastIssue: issueCode || "None",
+    issueAdvice
   };
 }

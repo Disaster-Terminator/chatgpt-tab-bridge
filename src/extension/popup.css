@@ -219,6 +219,28 @@ body {
   color: rgba(253, 224, 71, 0.9);
 }
 
+.popup__issue-title,
+.popup__issue-summary,
+.popup__issue-action,
+.popup__issue-diagnostic {
+  margin: 0;
+}
+
+.popup__issue-summary,
+.popup__issue-action {
+  margin-top: 3px;
+}
+
+.popup__issue-title {
+  font-weight: 600;
+}
+
+.popup__issue-diagnostic {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--popup-text-muted);
+}
+
 .popup__issue-row[hidden] {
   display: none;
 }

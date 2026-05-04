@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { importExtensionModule } from "./extension-test-harness.mjs";
 
-const { PHASES } = await importExtensionModule("core/constants");
+const { PHASES, STOP_REASONS } = await importExtensionModule("core/constants");
 const { buildDisplay, deriveControls, computeReadiness } = await importExtensionModule("core/popup-model");
 const { createInitialState } = await importExtensionModule("core/state-machine");
 const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
@@ -77,6 +77,47 @@ test("buildDisplay exposes runtime activity and last issue", () => {
   assert.equal(display.transport, "button");
   assert.equal(display.selector, "waiting_reply");
   assert.equal(display.lastIssue, "message_send_failed:send_button_disabled");
+  assert.equal(display.issueAdvice?.diagnosticCode, "message_send_failed:send_button_disabled");
+});
+
+test("normal stop reason does not show noisy issue advice", () => {
+  const state = bind(bind(createInitialState(), "A", 1), "B", 2);
+  state.phase = PHASES.STOPPED;
+  state.lastStopReason = STOP_REASONS.USER_STOP;
+
+  const display = buildDisplay(state);
+  assert.equal(display.lastIssue, "None");
+  assert.equal(display.issueAdvice, null);
+});
+
+test("hop_timeout shows actionable issue advice", () => {
+  const state = bind(bind(createInitialState(), "A", 1), "B", 2);
+  state.phase = PHASES.STOPPED;
+  state.lastStopReason = STOP_REASONS.HOP_TIMEOUT;
+
+  const display = buildDisplay(state);
+  assert.equal(display.lastIssue, STOP_REASONS.HOP_TIMEOUT);
+  assert.match(display.issueAdvice?.title ?? "", /timed out/i);
+});
+
+test("target_hidden_no_generation shows hidden-tab advice", () => {
+  const state = bind(bind(createInitialState(), "A", 1), "B", 2);
+  state.phase = PHASES.STOPPED;
+  state.lastStopReason = STOP_REASONS.TARGET_HIDDEN_NO_GENERATION;
+
+  const display = buildDisplay(state);
+  assert.equal(display.lastIssue, STOP_REASONS.TARGET_HIDDEN_NO_GENERATION);
+  assert.match(display.issueAdvice?.summary ?? "", /hidden/i);
+});
+
+test("unknown reason shows fallback advice", () => {
+  const state = bind(bind(createInitialState(), "A", 1), "B", 2);
+  state.phase = PHASES.ERROR;
+  state.lastError = "unexpected_new_reason";
+
+  const display = buildDisplay(state);
+  assert.equal(display.lastIssue, "unexpected_new_reason");
+  assert.equal(display.issueAdvice?.title, "Bridge issue detected");
 });
 
 // =============================================================================

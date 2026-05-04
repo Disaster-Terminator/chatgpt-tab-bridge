@@ -233,6 +233,12 @@ export interface RuntimeDisplay {
   transport: string | null;
   selector: string | null;
   lastIssue: string;
+  issueAdvice: {
+    title: string;
+    summary: string;
+    nextAction: string;
+    diagnosticCode: string;
+  } | null;
 }
 
 export interface PopupCurrentTab {

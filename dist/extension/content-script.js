@@ -780,7 +780,8 @@ var defaultDisplay = {
   lastActionAt: null,
   transport: null,
   selector: null,
-  lastIssue: "None"
+  lastIssue: "None",
+  issueAdvice: null
 };
 var overlaySnapshot = {
   phase: "idle",
