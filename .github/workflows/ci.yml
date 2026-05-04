@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify documented scripts
+        run: node scripts/ci/verify-documented-scripts.mjs
+
       - name: Typecheck
         run: pnpm run typecheck
 
