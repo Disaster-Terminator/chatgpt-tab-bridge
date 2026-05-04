@@ -1,0 +1,47 @@
+name: Package Extension
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  package-extension:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: pnpm run build
+
+      - name: Create packaged zip artifact
+        run: |
+          cd dist
+          zip -r ../chatgpt-tab-bridge-extension.zip extension
+
+      - name: Upload dist/extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-dist
+          path: dist/extension
+          if-no-files-found: error
+
+      - name: Upload zipped extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-tab-bridge-extension-zip
+          path: chatgpt-tab-bridge-extension.zip
+          if-no-files-found: error
