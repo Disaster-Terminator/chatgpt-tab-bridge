@@ -72,6 +72,9 @@ interface PopupElements {
   transportValue: HTMLElement;
   selectorValue: HTMLElement;
   issueValue: HTMLElement;
+  issueAdviceTitle: HTMLElement;
+  issueAdviceNext: HTMLElement;
+  issueAdviceDiagnostic: HTMLElement;
   issueValueDebug: HTMLElement;
   issueRow: HTMLElement;
   copyFeedback: HTMLElement;
@@ -142,6 +145,9 @@ const elements: PopupElements = {
   transportValue: requireElement<HTMLElement>("#transportValue"),
   selectorValue: requireElement<HTMLElement>("#selectorValue"),
   issueValue: requireElement<HTMLElement>("#issueValue"),
+  issueAdviceTitle: requireElement<HTMLElement>("#issueAdviceTitle"),
+  issueAdviceNext: requireElement<HTMLElement>("#issueAdviceNext"),
+  issueAdviceDiagnostic: requireElement<HTMLElement>("#issueAdviceDiagnostic"),
   issueValueDebug: requireElement<HTMLElement>("#issueValueDebug"),
   issueRow: requireElement<HTMLElement>("#issueRow"),
   copyFeedback: requireElement<HTMLElement>("#copyFeedback"),
@@ -362,7 +368,10 @@ function render(model: PopupModel): void {
 
   if (display.lastIssue && display.lastIssue !== "None") {
     elements.issueRow.hidden = false;
-    elements.issueValue.textContent = display.lastIssue;
+    elements.issueAdviceTitle.textContent = display.issueAdvice?.title ?? "Issue detected";
+    elements.issueValue.textContent = display.issueAdvice?.summary ?? display.lastIssue;
+    elements.issueAdviceNext.textContent = display.issueAdvice?.nextAction ?? "";
+    elements.issueAdviceDiagnostic.textContent = display.issueAdvice?.diagnostic ?? display.lastIssue;
     elements.issueValueDebug.textContent = display.lastIssue;
   } else {
     elements.issueRow.hidden = true;

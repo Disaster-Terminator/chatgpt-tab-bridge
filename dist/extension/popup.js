@@ -390,6 +390,9 @@ var elements = {
   transportValue: requireElement("#transportValue"),
   selectorValue: requireElement("#selectorValue"),
   issueValue: requireElement("#issueValue"),
+  issueAdviceTitle: requireElement("#issueAdviceTitle"),
+  issueAdviceNext: requireElement("#issueAdviceNext"),
+  issueAdviceDiagnostic: requireElement("#issueAdviceDiagnostic"),
   issueValueDebug: requireElement("#issueValueDebug"),
   issueRow: requireElement("#issueRow"),
   copyFeedback: requireElement("#copyFeedback"),
@@ -577,7 +580,10 @@ function render(model) {
   elements.selectorValue.textContent = display.selector || copy.none;
   if (display.lastIssue && display.lastIssue !== "None") {
     elements.issueRow.hidden = false;
-    elements.issueValue.textContent = display.lastIssue;
+    elements.issueAdviceTitle.textContent = display.issueAdvice?.title ?? "Issue detected";
+    elements.issueValue.textContent = display.issueAdvice?.summary ?? display.lastIssue;
+    elements.issueAdviceNext.textContent = display.issueAdvice?.nextAction ?? "";
+    elements.issueAdviceDiagnostic.textContent = display.issueAdvice?.diagnostic ?? display.lastIssue;
     elements.issueValueDebug.textContent = display.lastIssue;
   } else {
     elements.issueRow.hidden = true;

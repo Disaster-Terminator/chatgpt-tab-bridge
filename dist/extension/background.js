@@ -1014,6 +1014,35 @@ function evaluateSubmissionVerification(input) {
   };
 }
 
+// core/reason-catalog.ts
+var DEFAULT_ADVICE = {
+  title: "Bridge stopped with issue",
+  summary: "The relay halted before a normal completion condition.",
+  nextAction: "Review bindings and current tab state, then clear terminal and restart."
+};
+var CATALOG = {
+  hop_timeout: {
+    title: "Reply timeout",
+    summary: "No acceptable target reply arrived within the hop timeout window.",
+    nextAction: "Keep the target tab visible, verify it can generate, then retry."
+  },
+  target_hidden_no_generation: {
+    title: "Target tab hidden",
+    summary: "The target tab was hidden and no generation activity was detected.",
+    nextAction: "Bring the target tab to foreground and wait for generation before resuming."
+  }
+};
+function buildIssueAdvice(reason) {
+  const known = CATALOG[reason];
+  if (known) {
+    return { ...known, diagnostic: reason };
+  }
+  return {
+    ...DEFAULT_ADVICE,
+    diagnostic: reason
+  };
+}
+
 // core/popup-model.ts
 function resolveDisplayedSourceRole(state) {
   const activeHop = state.activeHop;
@@ -1067,13 +1096,15 @@ function buildDisplay(state) {
   ]);
   const isNormalStop = state.lastStopReason && normalStopReasons.has(state.lastStopReason);
   const displayStopReason = isNormalStop ? null : state.lastStopReason;
+  const reasonForAdvice = state.lastError || displayStopReason;
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
     currentStep: state.runtimeActivity?.step ?? "idle",
     lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
     transport: state.runtimeActivity?.transport ?? null,
     selector: state.runtimeActivity?.selector ?? null,
-    lastIssue: state.lastError || displayStopReason || "None"
+    lastIssue: state.lastError || displayStopReason || "None",
+    issueAdvice: reasonForAdvice ? buildIssueAdvice(reasonForAdvice) : null
   };
 }
 
