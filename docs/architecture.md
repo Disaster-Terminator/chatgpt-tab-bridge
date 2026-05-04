@@ -46,9 +46,10 @@ System behavior is reliability-first: no unbounded wait loops; prefer explicit c
 
 - **Unit**: deterministic logic and classification checks (`pnpm test`).
 - **Smoke**: environment/profile readiness (`pnpm run test:smoke`).
-- **Auth/profile checks**: persistent profile/session validity workflows.
-- **CDP-assisted checks**: browser lifecycle visibility and diagnostics.
+- **Auth/profile checks**: persistent profile/session validity workflows (`pnpm run auth:bootstrap-profile`, `pnpm run auth:verify`).
+- **CDP-assisted checks**: browser lifecycle visibility and diagnostics (`pnpm run browser:cdp-launch`, `pnpm run test:cdp-smoke`).
 - **Real-hop**: one live relay hop (`pnpm run test:real-hop`).
-- **E2E**: multi-hop/round-trip validation (`pnpm run check:e2e` or equivalent).
+- **Semi**: semi-automated overlay/bridge checks (`pnpm run test:semi`).
+- **E2E**: multi-hop/round-trip validation (`pnpm run test:e2e`).
 
 See `docs/regression-matrix.md` for P0 executable acceptance scenarios.
