@@ -2,11 +2,17 @@
 
 This document defines executable P0 acceptance gates for the ChatGPT Tab Bridge reliability path.
 
+This is the **v1 P0 matrix**. It intentionally covers the current main relay reliability path first; later matrices may split these into finer-grained gates such as stale-generating, debug-report export, and worker recovery sub-scenarios.
+
 ## Scope
 
 Main-path only:
 
 `A/B binding -> source snapshot -> payload build -> target dispatch -> dispatch verification -> reply observation -> next-hop transition -> bounded stop/recovery -> evidence export`
+
+## Command policy
+
+Only documented `package.json` scripts are used here. Do not reference future `check:*` wrappers until they exist in `package.json`.
 
 ---
 
@@ -52,7 +58,7 @@ Main-path only:
 - **Setup**:
   - A/B both bound and responsive.
   - Starter side selected.
-- **Command**: `pnpm run check:e2e`
+- **Command**: `pnpm run test:e2e`
 - **Expected result**:
   - One round includes both `A -> B` and `B -> A` hops.
   - `round` increments correctly.
@@ -86,7 +92,7 @@ Main-path only:
 - **Setup**:
   - Target tab is not foreground.
   - Dispatch accepted but generation may not start due to hidden/inactive constraints.
-- **Command**: `pnpm run check:e2e`
+- **Command**: `pnpm run test:e2e`
 - **Expected result**:
   - Classified as hidden/inactive-related reason when generation does not begin.
   - Must not stay in unbounded `waiting_reply`.
@@ -102,7 +108,7 @@ Main-path only:
 - **Setup**:
   - Relay is running.
   - Simulate or wait for worker suspend/wakeup conditions.
-- **Command**: `pnpm run check:e2e`
+- **Command**: `pnpm run test:e2e`
 - **Expected result**:
   - Watchdog resumes progress OR relay terminates with explicit reason.
   - No silent stall.
