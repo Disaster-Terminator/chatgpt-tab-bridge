@@ -74,6 +74,10 @@ interface PopupElements {
   issueValue: HTMLElement;
   issueValueDebug: HTMLElement;
   issueRow: HTMLElement;
+  issueAdviceBlock: HTMLElement;
+  issueTitle: HTMLElement;
+  issueExplanation: HTMLElement;
+  issueSuggestion: HTMLElement;
   copyFeedback: HTMLElement;
   readinessRow: HTMLElement;
   readinessReason: HTMLElement;
@@ -144,6 +148,10 @@ const elements: PopupElements = {
   issueValue: requireElement<HTMLElement>("#issueValue"),
   issueValueDebug: requireElement<HTMLElement>("#issueValueDebug"),
   issueRow: requireElement<HTMLElement>("#issueRow"),
+  issueAdviceBlock: requireElement<HTMLElement>("#issueAdviceBlock"),
+  issueTitle: requireElement<HTMLElement>("#issueTitle"),
+  issueExplanation: requireElement<HTMLElement>("#issueExplanation"),
+  issueSuggestion: requireElement<HTMLElement>("#issueSuggestion"),
   copyFeedback: requireElement<HTMLElement>("#copyFeedback"),
   readinessRow: requireElement<HTMLElement>("#readinessRow"),
   readinessReason: requireElement<HTMLElement>("#readinessReason")
@@ -367,6 +375,15 @@ function render(model: PopupModel): void {
   } else {
     elements.issueRow.hidden = true;
     elements.issueValueDebug.textContent = copy.none;
+  }
+
+  if (display.issueAdvice) {
+    elements.issueAdviceBlock.hidden = false;
+    elements.issueTitle.textContent = `Last issue: ${display.issueAdvice.title}`;
+    elements.issueExplanation.textContent = `Reason: ${display.issueAdvice.code} — ${display.issueAdvice.explanation}`;
+    elements.issueSuggestion.textContent = `Suggestion: ${display.issueAdvice.suggestedAction}`;
+  } else {
+    elements.issueAdviceBlock.hidden = true;
   }
 
   elements.starterSelect.value = state.starter;

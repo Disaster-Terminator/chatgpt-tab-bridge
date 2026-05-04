@@ -1,5 +1,6 @@
 import { PHASES, STOP_REASONS } from "./constants.ts";
 import { canWriteOverride, hasValidBindings } from "./state-machine.ts";
+import { describeRuntimeIssue } from "./reason-catalog.ts";
 import type { BlockReason, BridgeRole, ExecutionReadiness, PopupControls, RuntimeDisplay, RuntimeState, ThreadActivity } from "../shared/types.js";
 
 function resolveDisplayedSourceRole(state: RuntimeState): BridgeRole {
@@ -73,12 +74,14 @@ export function buildDisplay(state: RuntimeState): RuntimeDisplay {
   const isNormalStop = state.lastStopReason && normalStopReasons.has(state.lastStopReason as typeof normalStopReasons extends Set<infer T> ? T : never);
   const displayStopReason = isNormalStop ? null : state.lastStopReason;
   
+  const issueAdvice = describeRuntimeIssue({ stopReason: displayStopReason, errorReason: state.lastError });
   return {
     nextHop: `${sourceRole} -> ${sourceRole === "A" ? "B" : "A"}`,
     currentStep: state.runtimeActivity?.step ?? "idle",
     lastActionAt: state.runtimeActivity?.lastActionAt ?? null,
     transport: state.runtimeActivity?.transport ?? null,
     selector: state.runtimeActivity?.selector ?? null,
-    lastIssue: state.lastError || displayStopReason || "None"
+    lastIssue: state.lastError || displayStopReason || "None",
+    issueAdvice
   };
 }

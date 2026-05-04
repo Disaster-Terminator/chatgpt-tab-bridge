@@ -55,6 +55,7 @@ export type MessageType =
   | "GET_LAST_ACK_DEBUG"
   | "GET_LATEST_USER_TEXT"
   | "GET_RECENT_RUNTIME_EVENTS"
+  | "GET_DEBUG_REPORT"
   | "SEND_RELAY_MESSAGE"
   | "SYNC_OVERLAY_STATE"
   | "REQUEST_OPEN_POPUP";
@@ -226,6 +227,16 @@ export interface PopupControls {
   canSetSettings: boolean;
 }
 
+export type RuntimeIssueAdvice = {
+  code: string;
+  severity: "info" | "warning" | "error";
+  category: "user_action" | "browser_lifecycle" | "chatgpt_dom" | "binding" | "timeout" | "internal";
+  title: string;
+  explanation: string;
+  suggestedAction: string;
+  retryable: boolean;
+};
+
 export interface RuntimeDisplay {
   nextHop: string;
   currentStep: string;
@@ -233,6 +244,7 @@ export interface RuntimeDisplay {
   transport: string | null;
   selector: string | null;
   lastIssue: string;
+  issueAdvice: RuntimeIssueAdvice | null;
 }
 
 export interface PopupCurrentTab {
@@ -591,3 +603,20 @@ export interface ContentBridgeGlobal {
     error?: string;
   };
 }
+
+export type DebugBinding = { role: BridgeRole; tabId: number; normalizedUrl: string | null };
+export type DebugReport = {
+  schemaVersion: 1;
+  generatedAt: string;
+  phase: string;
+  round: number;
+  nextHopSource: string;
+  bindings: { A: DebugBinding | null; B: DebugBinding | null };
+  settings: RuntimeSettings;
+  overlaySettings: OverlaySettings;
+  lastStopReason: string | null;
+  lastError: string | null;
+  issueAdvice: RuntimeIssueAdvice | null;
+  activeHop: RuntimeHopTruth | null;
+  recentRuntimeEvents: RuntimeEvent[];
+};

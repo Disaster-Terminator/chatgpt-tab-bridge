@@ -34,6 +34,7 @@ import {
   normalizeAssistantText
 } from "./core/relay-core.ts";
 import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
+import { classifyReplyObservation } from "./core/reply-observation-classifier.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
@@ -2343,15 +2344,44 @@ export async function waitForSettledReply({
       idleMs = 0;
     }
 
+    const decision = classifyReplyObservation({
+      elapsedMs,
+      idleMs,
+      baselineHash,
+      currentHash,
+      generating: observation.sample.generating,
+      replyPending: observation.sample.replyPending,
+      pageVisibility: observation.sample.page?.visibilityState === "hidden" ? "hidden" : (observation.sample.page?.visibilityState === "visible" ? "visible" : "unknown"),
+      tabLifecycle: { active: tabLifecycle.active, discarded: tabLifecycle.discarded, frozen: tabLifecycle.frozen, status: tabLifecycle.status },
+      generationObservedAfterDispatch,
+      hopTimeoutMs: settings.hopTimeoutMs
+    });
+
+    addRuntimeEvent({
+      phaseStep: "reply_poll_classified",
+      sourceRole,
+      targetRole,
+      round,
+      dispatchReadbackSummary: "reply_wait",
+      sendTriggerMode: "observation",
+      verificationBaseline: `baseline_assistant:${baselineHash ?? "null"}`,
+      verificationPollSample: decision.reason,
+      verificationVerdict: decision.kind
+    });
+
+    if (decision.kind === "stop") {
+      return { ok: false, reason: decision.stopReason as StopReason };
+    }
+
+    if (decision.kind === "settled" && latestAssistant.text) {
+      return { ok: true, result: { text: latestAssistant.text, hash: decision.hash, sample: observation.sample } };
+    }
+
     if (!currentHash || currentHash === baselineHash) {
       stableHash = null;
       stableCount = 0;
       idleMs = Date.now() - lastProgressAt;
-      pendingReplyStallReason = classifyReplyStallReason({
-        observation,
-        tabLifecycle,
-        generationObservedAfterDispatch
-      });
+      pendingReplyStallReason = null;
 
       addRuntimeEvent({
         phaseStep: "reply_poll",
