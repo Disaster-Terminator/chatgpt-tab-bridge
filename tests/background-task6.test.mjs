@@ -86,11 +86,12 @@ const {
   runRelayLoop,
   setActiveLoopTokenForTest,
   shouldExposePendingHopBoundary,
-  waitForSettledReply
+  waitForSettledReply,
+  __testHandleMessage
 } = await importExtensionModule("background");
 const { createInitialState } = await importExtensionModule("core/state-machine");
 const { buildRelayEnvelope, hashText } = await importExtensionModule("core/relay-core");
-const { APP_STATE_KEY, PHASES, STOP_REASONS } = await importExtensionModule("core/constants");
+const { APP_STATE_KEY, OVERLAY_SETTINGS_KEY, PHASES, STOP_REASONS } = await importExtensionModule("core/constants");
 const { parseChatGptThreadUrl } = await importExtensionModule("core/chatgpt-url");
 
 function createBinding(role, tabId, threadId) {
@@ -1208,4 +1209,46 @@ test("waitForSettledReply does not treat unreachable_target observation as hop_t
   } finally {
     Date.now = originalDateNow;
   }
+});
+
+
+test("GET_DEBUG_REPORT returns schemaVersion 1 with state/settings summary and runtime events", async () => {
+  const state = createRunningState({
+    sourceRole: "A",
+    targetRole: "B",
+    targetTabId: 99,
+    round: 1,
+    hopId: "hop-1",
+    stage: "pending"
+  });
+  persistState(state);
+  chromeEnvironment.localStore[OVERLAY_SETTINGS_KEY] = { enabled: true, ambientEnabled: false, collapsed: true, position: null };
+
+  await __testHandleMessage({ type: "SET_STARTER", role: "B" }, { tab: { id: 1 } });
+
+  const report = await __testHandleMessage({ type: "GET_DEBUG_REPORT" }, { tab: { id: 1 } });
+  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.state.phase, PHASES.RUNNING);
+  assert.equal(report.overlaySettings.collapsed, true);
+  assert.match(report.bindingsSummary, /A:/);
+  assert.match(report.bindingsSummary, /B:/);
+  assert.ok(Array.isArray(report.runtimeEvents));
+  assert.ok(report.runtimeEvents.length > 0);
+});
+
+test("GET_DEBUG_REPORT includes issueAdvice when state has last stop reason or error", async () => {
+  const state = createRunningState(null);
+  state.phase = PHASES.STOPPED;
+  state.lastStopReason = STOP_REASONS.STOP_MARKER;
+  persistState(state);
+
+  const stopReport = await __testHandleMessage({ type: "GET_DEBUG_REPORT" }, { tab: { id: 1 } });
+  assert.ok(stopReport.issueAdvice);
+
+  state.lastStopReason = null;
+  state.lastError = "internal_error";
+  persistState(state);
+
+  const errorReport = await __testHandleMessage({ type: "GET_DEBUG_REPORT" }, { tab: { id: 1 } });
+  assert.ok(errorReport.issueAdvice);
 });

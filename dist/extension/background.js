@@ -126,6 +126,7 @@ var MESSAGE_TYPES = Object.freeze({
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   GET_LATEST_USER_TEXT: "GET_LATEST_USER_TEXT",
   GET_RECENT_RUNTIME_EVENTS: "GET_RECENT_RUNTIME_EVENTS",
+  GET_DEBUG_REPORT: "GET_DEBUG_REPORT",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -1077,6 +1078,35 @@ function buildDisplay(state) {
   };
 }
 
+// core/debug-report.ts
+function summarizeBindings(state) {
+  const parts = ["A", "B"].map((role) => {
+    const binding = state.bindings[role];
+    return binding ? `${role}:${binding.tabId}` : `${role}:unbound`;
+  });
+  return parts.join(", ");
+}
+function buildIssueAdvice(state) {
+  if (state.lastError) {
+    return `Runtime error recorded (${state.lastError}). Inspect recent runtime events for the failing phaseStep and verification verdict.`;
+  }
+  if (state.lastStopReason) {
+    return `Session stopped with reason (${state.lastStopReason}). Confirm this stop reason is expected for the current phase and bindings.`;
+  }
+  return null;
+}
+function buildDebugReport(input) {
+  return {
+    schemaVersion: 1,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    state: input.state,
+    overlaySettings: input.overlaySettings,
+    runtimeEvents: input.runtimeEvents,
+    bindingsSummary: summarizeBindings(input.state),
+    issueAdvice: buildIssueAdvice(input.state)
+  };
+}
+
 // core/overlay-settings.ts
 function normalizeOverlaySettings(input) {
   const position = normalizePosition(input?.position);
@@ -1168,6 +1198,10 @@ function inferRuntimeEventCategory(phaseStep) {
 }
 function getRecentRuntimeEvents() {
   return [...runtimeEvents];
+}
+async function getDebugReport() {
+  const [state, overlaySettings] = await Promise.all([getState(), getOverlaySettings()]);
+  return buildDebugReport({ state, overlaySettings, runtimeEvents: getRecentRuntimeEvents() });
 }
 async function postLocalDebugEvent(event) {
   try {
@@ -1438,6 +1472,8 @@ async function handleMessage(message, sender) {
       return clearTerminal();
     case MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS:
       return getRecentRuntimeEvents();
+    case MESSAGE_TYPES.GET_DEBUG_REPORT:
+      return getDebugReport();
     case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
       if (typeof chrome.action.openPopup === "function") {
         await chrome.action.openPopup();
@@ -3194,7 +3230,9 @@ async function shouldContinueRelayLoop(token) {
 function structuredCloneSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
+var __testHandleMessage = handleMessage;
 export {
+  __testHandleMessage,
   classifyTargetObservation,
   formatPendingBoundaryStep,
   getHopExecutionPlan,

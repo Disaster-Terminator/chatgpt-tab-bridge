@@ -34,6 +34,7 @@ import {
   normalizeAssistantText
 } from "./core/relay-core.ts";
 import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
+import { buildDebugReport } from "./core/debug-report.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
@@ -52,6 +53,7 @@ import type {
   PopupModel,
   RelayGuardReason,
   RelayMessageResponse,
+  DebugReport,
   RuntimeEvent,
   RuntimeHopTruth,
   RuntimeHopProgress,
@@ -86,7 +88,7 @@ type OverlaySettingsResult = {
   overlaySettings: OverlaySettings;
 };
 
-type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult | RuntimeEvent[];
+type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult | RuntimeEvent[] | DebugReport;
 
 type SettledReplyResult =
   | SettledReplySuccess
@@ -257,6 +259,11 @@ function inferRuntimeEventCategory(phaseStep: string): RuntimeEvent["category"] 
 
 function getRecentRuntimeEvents(): RuntimeEvent[] {
   return [...runtimeEvents];
+}
+
+async function getDebugReport(): Promise<DebugReport> {
+  const [state, overlaySettings] = await Promise.all([getState(), getOverlaySettings()]);
+  return buildDebugReport({ state, overlaySettings, runtimeEvents: getRecentRuntimeEvents() });
 }
 
 async function postLocalDebugEvent(event: RuntimeEvent): Promise<void> {
@@ -615,6 +622,9 @@ async function handleMessage(
 
     case MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS:
       return getRecentRuntimeEvents();
+
+    case MESSAGE_TYPES.GET_DEBUG_REPORT:
+      return getDebugReport();
 
     case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
       if (typeof chrome.action.openPopup === "function") {
@@ -2745,3 +2755,5 @@ async function shouldContinueRelayLoop(token: number): Promise<boolean> {
 function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
+
+export const __testHandleMessage = handleMessage;
