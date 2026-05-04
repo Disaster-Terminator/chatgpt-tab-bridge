@@ -1,6 +1,6 @@
 # ChatGPT Tab Bridge
 
-在两个已经打开的 ChatGPT 页面之间做消息中继的浏览器扩展。
+ChatGPT Tab Bridge is a reliability-focused MV3 extension and E2E harness for controlled relay between two ChatGPT Web sessions, with auditable state transitions, bounded failure modes, and reproducible browser-lifecycle diagnostics.
 
 > 当前阶段：**可运行原型（prototype）**，更适合实验、联调和工作流探索，不是面向大众用户的成品扩展。
 
