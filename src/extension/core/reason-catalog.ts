@@ -145,11 +145,22 @@ function describeReason(
   unknownReason: string,
   fallback: Omit<ReasonDescription, "reason">
 ): ReasonDescription {
-  if (!reason || !catalog[reason]) {
+  const normalizedReason = normalizeReason(reason);
+
+  if (!normalizedReason || !catalog[normalizedReason]) {
     return { ...fallback, reason: unknownReason };
   }
 
-  return { ...catalog[reason], reason };
+  return { ...catalog[normalizedReason], reason: normalizedReason };
+}
+
+function normalizeReason(reason: string | null | undefined): string | null {
+  if (typeof reason !== "string") {
+    return null;
+  }
+
+  const [baseReason] = reason.split(":", 1);
+  return baseReason?.trim() || null;
 }
 
 export function describeStopReason(reason: string | null | undefined): ReasonDescription {
@@ -171,7 +182,8 @@ export function describeErrorReason(reason: string | null | undefined): ReasonDe
 }
 
 export function describeIssueReason(reason: string | null | undefined): ReasonDescription {
-  return errorReasonDescriptions[String(reason)]
-    ? describeErrorReason(reason)
-    : describeStopReason(reason);
+  const normalizedReason = normalizeReason(reason);
+  return normalizedReason && errorReasonDescriptions[normalizedReason]
+    ? describeErrorReason(normalizedReason)
+    : describeStopReason(normalizedReason);
 }
