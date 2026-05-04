@@ -36,6 +36,9 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Verify documented scripts
+        run: node scripts/ci/verify-documented-scripts.mjs
+
       - name: Unit tests
         run: pnpm test
 
