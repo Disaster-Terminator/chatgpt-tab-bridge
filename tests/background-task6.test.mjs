@@ -86,6 +86,8 @@ const {
   runRelayLoop,
   setActiveLoopTokenForTest,
   shouldExposePendingHopBoundary,
+  handleMessageForTest,
+  addRuntimeEventForTest,
   waitForSettledReply
 } = await importExtensionModule("background");
 const { createInitialState } = await importExtensionModule("core/state-machine");
@@ -206,6 +208,46 @@ function getPersistedState() {
 test.beforeEach(() => {
   chromeEnvironment.reset();
   setActiveLoopTokenForTest(0);
+});
+
+test("GET_DEBUG_REPORT returns schema v1 with state/settings/bindings/events and issue advice", async () => {
+  const state = createInitialState();
+  state.phase = PHASES.PAUSED;
+  state.bindings.A = createBinding("A", 11, "thread-a");
+  state.bindings.B = createBinding("B", 22, "thread-b");
+  state.lastStopReason = "hop_timeout";
+  state.lastError = "dispatch_failed";
+  persistState(state);
+  chromeEnvironment.localStore.chatgptBridgeOverlaySettings = {
+    enabled: true,
+    ambientEnabled: false,
+    collapsed: true,
+    position: { x: 12, y: 34 }
+  };
+
+  addRuntimeEventForTest({
+    phaseStep: "state:stop_condition",
+    sourceRole: "A",
+    targetRole: "B",
+    round: 2,
+    dispatchReadbackSummary: "accepted",
+    sendTriggerMode: "button",
+    verificationBaseline: "baseline",
+    verificationPollSample: "poll",
+    verificationVerdict: "reply_observed"
+  });
+
+  const report = await handleMessageForTest({ type: "GET_DEBUG_REPORT" }, {});
+
+  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.state.phase, PHASES.PAUSED);
+  assert.equal(report.overlaySettings.collapsed, true);
+  assert.match(report.bindingsSummary.A, /A#11/);
+  assert.match(report.bindingsSummary.B, /B#22/);
+  assert.ok(Array.isArray(report.recentRuntimeEvents));
+  assert.ok(report.recentRuntimeEvents.length >= 1);
+  assert.ok(Array.isArray(report.issueAdvice));
+  assert.ok(report.issueAdvice.length >= 1);
 });
 
 test("getHopExecutionPlan maps pending/verifying/waiting_reply to the Task 6 execution stages", () => {

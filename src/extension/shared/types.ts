@@ -55,6 +55,7 @@ export type MessageType =
   | "GET_LAST_ACK_DEBUG"
   | "GET_LATEST_USER_TEXT"
   | "GET_RECENT_RUNTIME_EVENTS"
+  | "GET_DEBUG_REPORT"
   | "SEND_RELAY_MESSAGE"
   | "SYNC_OVERLAY_STATE"
   | "REQUEST_OPEN_POPUP";
@@ -500,6 +501,20 @@ export interface GetRecentRuntimeEventsMessage extends MessageBase {
   type: "GET_RECENT_RUNTIME_EVENTS";
 }
 
+export interface GetDebugReportMessage extends MessageBase {
+  type: "GET_DEBUG_REPORT";
+}
+
+export interface DebugReport {
+  schemaVersion: 1;
+  generatedAt: string;
+  state: RuntimeState;
+  overlaySettings: OverlaySettings;
+  bindingsSummary: Record<BridgeRole, string>;
+  recentRuntimeEvents: RuntimeEvent[];
+  issueAdvice?: string[];
+}
+
 export interface RuntimeEvent {
   id: string;
   level: "debug" | "info" | "warn" | "error";
@@ -554,6 +569,7 @@ export type RuntimeMessage =
   | GetLastAckDebugMessage
   | GetLatestUserTextMessage
   | GetRecentRuntimeEventsMessage
+  | GetDebugReportMessage
   | SendRelayMessageRequest
   | SyncOverlayStateMessage
   | RequestOpenPopupMessage;

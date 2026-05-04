@@ -34,6 +34,7 @@ import {
   normalizeAssistantText
 } from "./core/relay-core.ts";
 import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
+import { buildDebugReport } from "./core/debug-report.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
@@ -50,6 +51,7 @@ import type {
   OverlaySettings,
   PopupCurrentTab,
   PopupModel,
+  DebugReport,
   RelayGuardReason,
   RelayMessageResponse,
   RuntimeEvent,
@@ -86,7 +88,7 @@ type OverlaySettingsResult = {
   overlaySettings: OverlaySettings;
 };
 
-type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult | RuntimeEvent[];
+type BackgroundMessageResult = RuntimeState | PopupModel | OverlayModel | OverlaySettingsResult | RuntimeEvent[] | DebugReport;
 
 type SettledReplyResult =
   | SettledReplySuccess
@@ -257,6 +259,11 @@ function inferRuntimeEventCategory(phaseStep: string): RuntimeEvent["category"] 
 
 function getRecentRuntimeEvents(): RuntimeEvent[] {
   return [...runtimeEvents];
+}
+
+export function addRuntimeEventForTest(event: RuntimeEventInput): RuntimeEvent {
+  addRuntimeEvent(event);
+  return runtimeEvents[runtimeEvents.length - 1];
 }
 
 async function postLocalDebugEvent(event: RuntimeEvent): Promise<void> {
@@ -616,6 +623,13 @@ async function handleMessage(
     case MESSAGE_TYPES.GET_RECENT_RUNTIME_EVENTS:
       return getRecentRuntimeEvents();
 
+    case MESSAGE_TYPES.GET_DEBUG_REPORT:
+      return buildDebugReport({
+        state: await getState(),
+        overlaySettings: await getOverlaySettings(),
+        runtimeEvents: getRecentRuntimeEvents()
+      });
+
     case MESSAGE_TYPES.REQUEST_OPEN_POPUP:
       if (typeof chrome.action.openPopup === "function") {
         await chrome.action.openPopup();
@@ -625,6 +639,13 @@ async function handleMessage(
     default:
       return getState();
   }
+}
+
+export async function handleMessageForTest(
+  message: RuntimeMessage | null | undefined,
+  sender: ChromeMessageSender = {}
+): Promise<BackgroundMessageResult> {
+  return handleMessage(message, sender);
 }
 
 async function initializeState(): Promise<void> {
