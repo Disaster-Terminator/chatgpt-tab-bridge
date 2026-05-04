@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { ERROR_REASONS, STOP_REASONS } from "../src/extension/core/constants.ts";
 import {
+  describeIssueReason,
   describeErrorReason,
   describeStopReason
 } from "../src/extension/core/reason-catalog.ts";
@@ -71,4 +72,36 @@ test("normal stop reasons are not classified as error severity", () => {
     const description = describeStopReason(reason);
     assert.notEqual(description.severity, "error");
   }
+});
+
+test("colon-suffixed known error reason resolves to base error entry", () => {
+  const description = describeErrorReason("message_send_failed:send_button_disabled");
+
+  assert.equal(description.reason, ERROR_REASONS.MESSAGE_SEND_FAILED);
+  assert.equal(description.title, "Message send failed");
+  assert.equal(description.severity, "error");
+});
+
+test("colon-suffixed known stop reason resolves to base stop entry", () => {
+  const description = describeStopReason(`${STOP_REASONS.HOP_TIMEOUT}:target_not_ready`);
+
+  assert.equal(description.reason, STOP_REASONS.HOP_TIMEOUT);
+  assert.equal(description.title, "Hop timeout");
+  assert.equal(description.severity, "warning");
+});
+
+test("describeIssueReason prefers normalized error catalog matches", () => {
+  const description = describeIssueReason("message_send_failed:send_button_disabled");
+
+  assert.equal(description.reason, ERROR_REASONS.MESSAGE_SEND_FAILED);
+  assert.equal(description.severity, "error");
+  assert.equal(description.title, "Message send failed");
+});
+
+test("unknown colon-suffixed reason keeps stable unknown fallback", () => {
+  const unknownStop = describeStopReason("not_a_real_reason:details");
+  const unknownError = describeErrorReason("not_a_real_reason:details");
+
+  assert.equal(unknownStop.reason, "unknown_stop_reason");
+  assert.equal(unknownError.reason, "unknown_error_reason");
 });
