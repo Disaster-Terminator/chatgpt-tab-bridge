@@ -34,6 +34,8 @@ import {
   normalizeAssistantText
 } from "./core/relay-core.ts";
 import { buildDisplay, deriveControls, computeReadiness } from "./core/popup-model.ts";
+import { classifyReplyObservation } from "./core/reply-observation-classifier.ts";
+import { buildDebugReport } from "./core/debug-report.ts";
 import {
   mergeOverlaySettings,
   normalizeOverlaySettings
@@ -2289,7 +2291,7 @@ export async function waitForSettledReply({
 
     if (observation.classification !== "correct_target") {
       addRuntimeEvent({
-        phaseStep: "reply_poll",
+        phaseStep: "reply_poll_classified",
         sourceRole,
         targetRole,
         round,
@@ -2312,7 +2314,7 @@ export async function waitForSettledReply({
       stableHash = null;
       stableCount = 0;
       addRuntimeEvent({
-        phaseStep: "reply_poll",
+        phaseStep: "reply_poll_classified",
         sourceRole,
         targetRole,
         round,
@@ -2354,7 +2356,7 @@ export async function waitForSettledReply({
       });
 
       addRuntimeEvent({
-        phaseStep: "reply_poll",
+        phaseStep: "reply_poll_classified",
         sourceRole,
         targetRole,
         round,
@@ -2384,7 +2386,7 @@ export async function waitForSettledReply({
 
     const replySettleConfirmed = observation.sample.generating === false;
     addRuntimeEvent({
-      phaseStep: "reply_poll",
+      phaseStep: "reply_poll_classified",
       sourceRole,
       targetRole,
       round,

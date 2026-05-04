@@ -53,7 +53,8 @@ const defaultDisplay: RuntimeDisplay = {
   lastActionAt: null,
   transport: null,
   selector: null,
-  lastIssue: "None"
+  lastIssue: "None",
+  issueAdvice: null
 };
 let overlaySnapshot: OverlayModel = {
   phase: "idle",

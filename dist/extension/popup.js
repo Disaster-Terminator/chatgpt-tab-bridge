@@ -58,6 +58,7 @@ var MESSAGE_TYPES = Object.freeze({
   GET_LAST_ACK_DEBUG: "GET_LAST_ACK_DEBUG",
   GET_LATEST_USER_TEXT: "GET_LATEST_USER_TEXT",
   GET_RECENT_RUNTIME_EVENTS: "GET_RECENT_RUNTIME_EVENTS",
+  GET_DEBUG_REPORT: "GET_DEBUG_REPORT",
   SEND_RELAY_MESSAGE: "SEND_RELAY_MESSAGE",
   SYNC_OVERLAY_STATE: "SYNC_OVERLAY_STATE",
   REQUEST_OPEN_POPUP: "REQUEST_OPEN_POPUP"
@@ -392,6 +393,10 @@ var elements = {
   issueValue: requireElement("#issueValue"),
   issueValueDebug: requireElement("#issueValueDebug"),
   issueRow: requireElement("#issueRow"),
+  issueAdviceBlock: requireElement("#issueAdviceBlock"),
+  issueTitle: requireElement("#issueTitle"),
+  issueExplanation: requireElement("#issueExplanation"),
+  issueSuggestion: requireElement("#issueSuggestion"),
   copyFeedback: requireElement("#copyFeedback"),
   readinessRow: requireElement("#readinessRow"),
   readinessReason: requireElement("#readinessReason")
@@ -582,6 +587,14 @@ function render(model) {
   } else {
     elements.issueRow.hidden = true;
     elements.issueValueDebug.textContent = copy.none;
+  }
+  if (display.issueAdvice) {
+    elements.issueAdviceBlock.hidden = false;
+    elements.issueTitle.textContent = `Last issue: ${display.issueAdvice.title}`;
+    elements.issueExplanation.textContent = `Reason: ${display.issueAdvice.code} \u2014 ${display.issueAdvice.explanation}`;
+    elements.issueSuggestion.textContent = `Suggestion: ${display.issueAdvice.suggestedAction}`;
+  } else {
+    elements.issueAdviceBlock.hidden = true;
   }
   elements.starterSelect.value = state.starter;
   elements.overrideSelect.value = state.nextHopOverride ?? "";
