@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Bridge v1",
+  "name": "RelayKit for ChatGPT",
   "version": "0.1.0",
-  "description": "Popup-first Edge extension that relays between two open ChatGPT threads.",
+  "description": "Controlled relay workflow between two manually selected ChatGPT Web conversations.",
   "permissions": [
     "alarms",
     "storage",
@@ -17,7 +17,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ChatGPT Bridge"
+    "default_title": "RelayKit"
   },
   "content_scripts": [
     {
