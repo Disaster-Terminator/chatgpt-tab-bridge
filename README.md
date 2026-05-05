@@ -1,101 +1,114 @@
-# ChatGPT Tab Bridge
+# RelayKit for ChatGPT
 
-在两个已经打开的 ChatGPT 页面之间做消息中继的浏览器扩展。
+RelayKit for ChatGPT 是一个浏览器扩展，用来在两个你手动选定的 ChatGPT Web 会话之间建立可控、可观察、可暂停的中继流程。
 
-> 当前阶段：**可运行原型（prototype）**，更适合实验、联调和工作流探索，不是面向大众用户的成品扩展。
+它不是新的模型、不是 API 网关，也不是面向大众用户的一键自动化插件。它解决的是一个更具体的问题：当你已经打开两个 ChatGPT 页面，并希望它们围绕同一任务接力讨论时，如何让这个过程可启动、可暂停、可恢复、可观察，并尽量避免发错页面、重复发送、状态失真。
+
+当前阶段：**可运行原型**。适合工作流实验、真实页面联调和 relay 链路探索，不适合当作长期无人值守的生产自动化工具。
 
 ---
 
-## 它能做什么
+## 它是什么
 
-ChatGPT Tab Bridge 允许你把两个已经打开的 ChatGPT 页面分别绑定为 `A` 和 `B`，然后在它们之间自动接力：
+RelayKit 会把两个 ChatGPT 页面分别绑定为 `A` 和 `B`，然后按你选择的起始侧进行 relay：
 
-- 绑定两个页面为 `A / B`
-- 选择由哪一侧先开始
-- 读取一侧最新的 assistant 回复
-- 组合成 relay payload 后发送到另一侧
+1. 从当前源页面读取最新 assistant 回复；
+2. 生成带有中继指令和 hop 标记的 payload；
+3. 发送到目标页面；
+4. 等待目标页面生成回复；
+5. 再反向继续下一跳。
+
+整个过程不是盲目填框发送。扩展会维护运行状态、当前轮次、下一跳、最近错误和运行事件，并通过页内悬浮窗与 popup 展示出来。
+
+---
+
+## 适合什么场景
+
+适合：
+
+- 试验两个 ChatGPT 会话之间的接力工作流；
+- 做 tab-to-tab relay 原型；
+- 观察 ChatGPT Web 页面联调中的真实边界；
+- 调试“读取、发送、等待、确认、继续”这一类浏览器扩展控制链路；
+- 研究如何把现有网页会话纳入半自动工作流。
+
+不适合：
+
+- 普通用户一键安装即用；
+- 长时间无人值守运行；
+- 对稳定性要求很高的生产自动化；
+- 替代正式的 API agent runtime；
+- 处理敏感、私密或不可出错的会话内容。
+
+---
+
+## 核心能力
+
+- 手动绑定两个 ChatGPT 页面为 `A / B`
+- 选择 `A` 或 `B` 作为 starter
 - 支持 `Start / Pause / Resume / Stop / Clear`
-- 支持页内悬浮窗操作，也提供 popup 作为总览和设置入口
-
-一句话说，它是一个“让两个 ChatGPT 页面接力对话”的扩展原型。
-
----
-
-## 适合谁
-
-这个仓库更适合下面几类用户：
-
-- 想实验“双 ChatGPT 标签页接力”工作流的人
-- 想做 agent-to-agent / tab-to-tab relay 原型的人
-- 能接受手动加载浏览器扩展、自己构建和调试的人
-
-如果你想要的是：
-
-- 一键安装、即装即用的商店扩展
-- 面向普通用户的稳定成品
-- 长时间无人值守的高可靠自动化
-
-那这个仓库目前还不属于那一类。
+- 页内悬浮窗作为主要操作面
+- popup 作为状态总览、设置和调试入口
+- 显示 phase、round、next hop、current step、last issue
+- 支持普通 ChatGPT 线程页面
+- 支持项目内 ChatGPT 线程页面
+- 对 relay payload 注入紧凑的 hop metadata
+- 用 `[BRIDGE_STATE] CONTINUE` / `[BRIDGE_STATE] FREEZE` 控制继续或停止
+- 对重复输出、错误目标、陈旧页面、目标不可达等情况做防护
+- 提供本地开发、Playwright smoke、CDP attach 等测试辅助脚本
 
 ---
 
 ## 当前交互方式
 
-扩展目前有两个操作入口：
+### 页内悬浮窗
 
-### 1) 页内悬浮窗
-
-这是主操作面，适合日常使用。
-
-你可以直接在 ChatGPT 页面里完成：
+这是主要操作入口。在 ChatGPT 页面内，你可以直接完成：
 
 - 绑定当前页为 `A`
 - 绑定当前页为 `B`
-- 选择 starter（A 或 B）
-- `Start / Pause / Resume / Stop`
-- `Clear`
-- 查看当前 phase、round、next hop、step、last issue
-- 拖动悬浮窗、折叠悬浮窗
+- 选择 starter
+- 启动、暂停、恢复、停止 relay
+- 清空当前运行状态
+- 查看当前 phase、round、next hop、step 和 last issue
+- 拖动或折叠悬浮窗
 
-### 2) Popup
+### Popup
 
-Popup 更偏向总览、设置和调试，不是主要操作入口。
+Popup 更适合低频操作和调试：
 
-它负责：
-
-- 查看全局状态
-- 查看当前绑定
+- 查看全局运行状态
+- 查看当前绑定关系
 - 切换语言
-- 控制悬浮窗启用、默认展开、位置重置
-- 低频控制和调试信息查看
+- 控制悬浮窗显示
+- 重置悬浮窗位置
+- 查看调试信息和运行快照
 
 ---
 
 ## 支持的页面
 
-优先支持这两类 ChatGPT 页面：
+优先支持：
 
-- 普通线程页面  
-  `https://chatgpt.com/c/<conversation-id>`
-- 项目内线程页面  
-  `https://chatgpt.com/g/<project-id>/c/<conversation-id>`
+```text
+https://chatgpt.com/c/<conversation-id>
+https://chatgpt.com/g/<project-id>/c/<conversation-id>
+```
 
-另外，当前实现也支持把**部分尚未形成持久线程 URL 的 ChatGPT 页面**作为 live session 绑定使用。  
-但从实际使用角度，首次尝试时仍建议你：
+部分尚未形成持久线程 URL 的 ChatGPT 页面也可以作为 live session 绑定，但首次使用时更建议：
 
-1. 先把两个页面都正常打开
-2. 最好先让页面各自完成至少一轮正常对话
-3. 再进行绑定和 relay
+1. 先打开两个稳定的 ChatGPT 线程页面；
+2. 每个页面至少完成一轮正常对话；
+3. 再绑定为 `A / B`；
+4. 最后启动 relay。
 
-这样更稳定，也更符合当前原型阶段的预期使用方式。
+这样更符合当前原型阶段的稳定性预期。
 
 ---
 
 ## 快速开始
 
-### 1. 获取仓库
-
-克隆仓库后安装依赖：
+### 1. 安装依赖
 
 ```bash
 pnpm install
@@ -113,18 +126,16 @@ pnpm run build
 dist/extension
 ```
 
-### 3. 在浏览器中加载
+### 3. 加载扩展
 
-当前推荐使用 **Microsoft Edge** 以“已解压扩展”的方式加载。
-
-步骤：
+当前推荐使用 Microsoft Edge 以“已解压扩展”的方式加载。
 
 1. 打开 `edge://extensions`
 2. 开启“开发人员模式”
 3. 点击“加载已解压的扩展”
 4. 选择 `dist/extension`
 
-> 说明：这个仓库当前不是商店发布形态，默认使用本地加载方式。
+Chrome 或其他 Chromium 浏览器也可以作为后续兼容目标，但当前 README 以 Edge 本地加载为默认路径。
 
 ### 4. 打开两个 ChatGPT 页面
 
@@ -133,33 +144,24 @@ dist/extension
 建议：
 
 - 两个页面都属于 `chatgpt.com`
-- 两个页面不要绑定到同一个线程
-- 页面都处于可正常输入和发送的状态
+- 不要把 `A` 和 `B` 绑定到同一个线程
+- 页面处于可正常输入、发送和生成回复的状态
 
 ### 5. 绑定 A / B
 
-在两个页面里分别使用悬浮窗，把它们绑定成：
+在两个页面里分别使用悬浮窗，把它们绑定为 `A` 和 `B`。
 
-- 一个是 `A`
-- 另一个是 `B`
+### 6. 选择 starter 并启动
 
-### 6. 选择起始侧并启动
+选择 `A` 或 `B` 作为起始侧，然后点击 `Start`。
 
-选择 `A` 或 `B` 作为 starter，然后点击 `Start`。
-
-扩展会开始：
-
-1. 读取起始侧最新 assistant 回复
-2. 生成 relay payload
-3. 发送给目标侧
-4. 等待目标侧回复
-5. 再反向继续
+RelayKit 会从起始侧读取最新 assistant 回复，发送到另一侧，并在两侧之间持续接力，直到你暂停、停止，达到轮次限制，或模型输出停止标记。
 
 ---
 
-## 运行时你会看到什么
+## 运行状态
 
-运行时通常会看到这些状态变化：
+常见 phase：
 
 - `ready`
 - `running`
@@ -167,122 +169,149 @@ dist/extension
 - `stopped`
 - `error`
 
-以及类似这样的步骤提示：
+常见 step：
 
 - `reading A`
 - `sending A -> B`
+- `verifying A submission`
+- `waiting A reply`
+- `reading B`
+- `sending B -> A`
 - `waiting B reply`
 
-这类信息的价值在于：  
-它能让你知道当前 relay 卡在了哪一步，而不是只看到“扩展没反应”。
+这些状态的价值在于：当 relay 卡住时，你能知道它卡在读取、发送、确认、等待回复，还是目标页面识别上，而不是只能看到“扩展没反应”。
 
 ---
 
-## 当前限制
+## Relay 协议
 
-这个项目目前有几个必须提前说清楚的边界。
+RelayKit 会把源页面的最新 assistant 回复包装成 relay payload，并在其中加入少量机器可读信息。
 
-### 1) 它依赖 ChatGPT Web 页面结构
+典型结构类似：
 
-这是一个通过内容脚本与 ChatGPT 网页交互的扩展。  
-所以一旦 ChatGPT 前端结构、选择器、发送流程发生变化，扩展行为就可能受影响。
+```text
+<source assistant message>
 
-### 2) 它不是“完全无痕后台运行”
+[BRIDGE_META hop=<hop-id>]
 
-设计目标是不要求两个被控页面始终保持前台焦点。  
-但扩展在运行时仍会对页面做实际读写操作，例如：
+[BRIDGE_INSTRUCTION]
+继续上方桥接内容的讨论。
+请在回复最后单独输出一行状态:
+[BRIDGE_STATE] CONTINUE
+或
+[BRIDGE_STATE] FREEZE
+```
 
-- 读取消息内容
-- 填写输入框
-- 触发发送
+其中：
 
-因此它更接近：
+- `hop` 用来区分当前中继跳转，减少重复发送和错误页面判断；
+- `[BRIDGE_STATE] CONTINUE` 表示继续 relay；
+- `[BRIDGE_STATE] FREEZE` 表示停止 relay；
+- 自然语言指令可以本地化，但机器状态行保持稳定。
 
-- **后台自动运行**
+---
 
-而不是：
+## 当前边界
 
-- **前台完全无变化**
+RelayKit 通过浏览器内容脚本读取和操作 ChatGPT 网页。因此，如果 ChatGPT 前端结构、输入框行为、消息 DOM 或发送流程发生变化，扩展行为可能受到影响。
 
-### 3) 长时间运行仍可能受浏览器和页面状态影响
+扩展会对你绑定的页面做真实读写操作，包括读取页面消息、写入输入框、观察生成状态和判断最新回复。它更接近“受控的页面联调工具”，而不是不可见的后台 API 流程。
 
-比如：
+可能影响运行的因素包括：MV3 service worker 挂起、标签页被浏览器回收、ChatGPT 页面状态陈化、页面仍在生成、网络或登录状态变化。
 
-- MV3 service worker 挂起
-- 标签页被浏览器回收
-- ChatGPT 页面长时间打开后状态陈化
-- 页面正在生成、忙碌或 UI 异常时无法正确接力
+遇到异常时，优先尝试：
 
-如果遇到异常，最先应该尝试的是：
+1. 刷新相关 ChatGPT 页面；
+2. 重新绑定 `A / B`；
+3. 清空状态；
+4. 重新启动 relay。
 
-- 刷新相关 ChatGPT 页面
-- 重新绑定
-- 清空终端后重新开始
-
-### 4) 当前更像“面向会折腾用户的原型”
-
-这个仓库目前已经不是概念 demo，但也还不是稳定商用品。  
-它更适合：
-
-- 试验新工作流
-- 做 relay 原型
-- 进行真实页面联调
-
-而不是把它当成“长期稳定的生产力工具”直接依赖。
+当前默认路径是本地构建、本地加载、本地调试。如果你期待的是正式上架、自动更新、普通用户可直接使用的产品形态，这个项目还没有到那个阶段。
 
 ---
 
 ## 权限与隐私
 
-当前扩展权限比较收敛，核心只围绕这些能力工作：
+RelayKit 的核心行为发生在你明确绑定的 ChatGPT 页面里。
 
-- `storage`
-- `tabs`
-- `https://chatgpt.com/*`
+这意味着扩展会接触这些页面中的对话内容，并会把一侧的内容发送到另一侧。请不要把它用于你不愿意让扩展脚本读取、转发或处理的敏感会话。
 
-它的本质行为是：  
-在你明确绑定的 ChatGPT 页面里读取消息、写入输入框并触发发送，用来完成 relay。
+---
 
-也就是说，这个扩展天然会接触你绑定页面里的对话内容。  
-请不要把它用于你不愿意让扩展脚本参与处理的敏感会话。
+## 开发与测试
+
+常用命令：
+
+```bash
+pnpm run build
+pnpm run typecheck
+pnpm run test
+```
+
+浏览器认证和真实页面测试请看：
+
+```text
+docs/auth.md
+docs/testing.md
+```
+
+当前测试体系区分几类路径：
+
+- 基础单元测试；
+- popup / overlay / state machine 测试；
+- Playwright persistent profile smoke；
+- CDP attach smoke；
+- real-hop / semi / e2e 高层链路。
+
+真实 ChatGPT 页面联调受登录态、浏览器 profile 和 UI 变化影响较大，所以项目保留了多个测试 lane，但不把 `storageState` replay 当作唯一可信认证基线。
 
 ---
 
 ## 项目状态
 
-当前仓库重心是：
+当前重点不是扩展功能堆叠，而是把核心 relay 链路做稳：
 
-- 把“双标签页 relay”主链路做稳
-- 继续减少错误绑定、误判发送成功、错误观察目标页等问题
-- 让悬浮窗成为真正可日常使用的主操作面
-- 把开发文档、测试文档和用户文档彻底分开
-
-所以这个 README 只保留**用户需要知道的内容**，不再承载测试体系、内部验收策略、认证导出流程或实现细节。
-
----
-
-## 开发相关内容
-
-开发、测试、认证导出、回归分层、实现细节等内容不再放在首页 README。  
-这些内容应该单独整理到 `docs/` 目录，例如：
-
-- `docs/development.md`
-- `docs/testing.md`
-- `docs/architecture.md`
-- `docs/auth.md`
-
-README 只回答一个问题：
-
-> “作为用户，我该怎么理解、安装和使用这个项目？”
-
-开发与测试入口请看：
-
-- `docs/testing.md`
-- `docs/auth.md`
+- 减少错误绑定；
+- 减少误判发送成功；
+- 减少 stale target / wrong target；
+- 改善 verification 和 waiting reply 的状态推进；
+- 让悬浮窗成为真正可用的主操作面；
+- 让 popup 和 debug snapshot 能帮助定位问题；
+- 把用户文档、测试文档、认证文档和内部开发记录分离。
 
 ---
 
-## 免责声明
+## Roadmap
 
-本项目依赖 ChatGPT 网页界面行为，兼容性和稳定性会随着上游页面变化而变化。  
-请把它视为一个正在演进中的实验性工具，而不是稳定承诺明确的最终产品。
+短期优先级：
+
+- 稳定 `A -> B -> A` 主链路；
+- 改善 stuck verification 的诊断信息；
+- 优化 overlay 的状态呈现；
+- 继续压缩 relay metadata；
+- 完善 debug snapshot；
+- 明确哪些测试是 smoke，哪些测试是业务回归；
+- 准备更清晰的 architecture 文档。
+
+暂不优先：
+
+- 商店发布；
+- 大众用户安装体验；
+- 多标签页复杂编排；
+- 完全无人值守；
+- 跨站点通用自动化；
+- 替代 Codex、OpenCode、Claude Code 等成熟 agent runtime。
+
+---
+
+## English summary
+
+RelayKit for ChatGPT is a browser extension that creates a controlled relay workflow between two manually selected ChatGPT Web conversations.
+
+It is designed for workflow experiments, browser extension research, and tab-to-tab relay prototyping on top of existing ChatGPT Web sessions. It is not a production-grade unattended automation tool.
+
+---
+
+## License
+
+No license file is currently included in this repository.
